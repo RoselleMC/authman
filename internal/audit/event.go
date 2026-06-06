@@ -1,0 +1,46 @@
+package audit
+
+import "time"
+
+type ActorType string
+type TargetType string
+
+const (
+	ActorAdmin  ActorType = "admin"
+	ActorNode   ActorType = "node"
+	ActorPlayer ActorType = "player"
+	ActorSystem ActorType = "system"
+)
+
+const (
+	TargetPlayer           TargetType = "player"
+	TargetNode             TargetType = "node"
+	TargetDownstreamServer TargetType = "downstream_server"
+	TargetMojangProxy      TargetType = "mojang_proxy"
+	TargetPortalSession    TargetType = "portal_session"
+	TargetExtensionData    TargetType = "extension_data"
+	TargetSystem           TargetType = "system"
+)
+
+type Event struct {
+	ID        string
+	Occurred  time.Time
+	ActorType ActorType
+	ActorID   string
+	Target    TargetType
+	TargetID  string
+	Type      string
+	Details   map[string]any
+}
+
+func NewEvent(now time.Time, actorType ActorType, actorID string, target TargetType, targetID string, eventType string, details map[string]any) Event {
+	return Event{
+		Occurred:  now.UTC(),
+		ActorType: actorType,
+		ActorID:   actorID,
+		Target:    target,
+		TargetID:  targetID,
+		Type:      eventType,
+		Details:   details,
+	}
+}

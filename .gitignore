@@ -1,0 +1,28 @@
+.DS_Store
+
+# Go
+/authman
+/coverage.out
+
+# Gradle
+.gradle/
+build/
+**/.gradle/
+**/build/
+
+# Local regression/test scratch is also excluded through .git/info/exclude.
+/web/e2e/
+
+# Agent handoff and project notes are local-only.
+/AGENTS.md
+/CLAUDE.md
+/docs/
+/regress/
+
+# Test files and generated test artifacts are not committed for this project.
+*_test.go
+*.test.ts
+*.test.tsx
+/tests/
+/web/**/test-results/
+/web/**/playwright-report/

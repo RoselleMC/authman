@@ -1,0 +1,31 @@
+services:
+  authman:
+    build: .
+    environment:
+      AUTHMAN_HTTP_ADDR: ":8080"
+      AUTHMAN_DATABASE_URL: "postgres://authman:authman@postgres:5432/authman?sslmode=disable"
+      AUTHMAN_PUBLIC_BASE_URL: "http://localhost:8080"
+      AUTHMAN_ADMIN_USERNAME: "admin"
+      AUTHMAN_ADMIN_PASSWORD: "authman-admin-change-me"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: authman
+      POSTGRES_USER: authman
+      POSTGRES_PASSWORD: authman
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authman -d authman"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:

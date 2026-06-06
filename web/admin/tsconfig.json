@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["vite/client"],
+    "paths": {
+      "@authman/shared": ["../shared/src/index.ts"],
+      "@authman/shared/*": ["../shared/src/*"]
+    }
+  },
+  "include": ["src", "env.d.ts"]
+}

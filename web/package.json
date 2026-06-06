@@ -1,0 +1,23 @@
+{
+  "name": "authman-web",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "shared",
+    "admin",
+    "player",
+    "e2e"
+  ],
+  "scripts": {
+    "build:admin": "npm run build -w @authman/admin",
+    "build:player": "npm run build -w @authman/player",
+    "build": "npm run build:admin && npm run build:player",
+    "dev:admin": "npm run dev -w @authman/admin",
+    "dev:player": "npm run dev -w @authman/player",
+    "test:e2e": "npm run test -w @authman/e2e",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

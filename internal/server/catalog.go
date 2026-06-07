@@ -1,9 +1,12 @@
 package server
 
 import (
+	"context"
 	"time"
 
+	"github.com/RoselleMC/authman/internal/extensions"
 	"github.com/RoselleMC/authman/internal/identity"
+	"github.com/RoselleMC/authman/internal/store"
 )
 
 func portalPlayerData(player identity.Player) map[string]any {
@@ -74,93 +77,88 @@ func emptyStringNil(value string) any {
 	return value
 }
 
-func defaultPortalTheme() map[string]any {
+func portalServerListData(server store.DownstreamServer) map[string]any {
+	theme := server.PortalTheme
 	return map[string]any{
-		"id":                 "authman-default",
-		"name":               "Authman Default",
-		"color_scheme":       "green",
-		"supports_dark_mode": true,
-		"tokens": map[string]any{
-			"primary": "#16a34a",
-			"info":    "#2563eb",
-			"warning": "#d97706",
-			"danger":  "#dc2626",
-		},
+		"slug":              server.Slug,
+		"display_name":      server.DisplayName,
+		"description":       stringFromMap(theme, "description"),
+		"primary_color":     stringFromMap(theme, "primary_color"),
+		"accent_color":      stringFromMap(theme, "accent_color"),
+		"portal_message":    stringFromMap(theme, "portal_message"),
+		"registration_open": server.RegistrationOpen,
+		"prefer_dark":       boolFromMap(server.PortalConfig, "prefer_dark"),
 	}
 }
 
-func defaultDownstreamServers() []map[string]any {
-	return []map[string]any{
-		{
-			"id":           "default",
-			"slug":         "default",
-			"display_name": "Default Server",
-			"public":       true,
-			"registration": map[string]any{
-				"offline_enabled": true,
-				"strategy":        "open",
-			},
-			"theme": defaultPortalTheme(),
-		},
+func portalServerConfigData(server store.DownstreamServer) map[string]any {
+	data := portalServerListData(server)
+	data["current_context"] = true
+	data["portal_config"] = server.PortalConfig
+	data["extension_providers"] = server.ExtensionProviders
+	return data
+}
+
+func downstreamServerData(server store.DownstreamServer) map[string]any {
+	return map[string]any{
+		"id":                  server.ID,
+		"slug":                server.Slug,
+		"display_name":        server.DisplayName,
+		"status":              server.Status,
+		"registration_open":   server.RegistrationOpen,
+		"portal_theme":        server.PortalTheme,
+		"portal_config":       server.PortalConfig,
+		"extension_providers": server.ExtensionProviders,
+		"created_at":          server.CreatedAt,
+		"updated_at":          server.UpdatedAt,
 	}
 }
 
-func portalServersData() []map[string]any {
-	return []map[string]any{
-		{
-			"slug":              "default",
-			"display_name":      "Default Server",
-			"description":       "Default Authman downstream context",
-			"primary_color":     "#16a34a",
-			"accent_color":      "#2563eb",
-			"portal_message":    "Welcome to Authman",
-			"registration_open": true,
-			"prefer_dark":       false,
-		},
+func stringFromMap(values map[string]any, key string) string {
+	if value, ok := values[key].(string); ok {
+		return value
 	}
+	return ""
 }
 
-func portalServerData(slug string) (map[string]any, bool) {
-	for _, server := range portalServersData() {
-		if server["slug"] == slug {
-			server["current_context"] = true
-			return server, true
+func boolFromMap(values map[string]any, key string) bool {
+	if value, ok := values[key].(bool); ok {
+		return value
+	}
+	return false
+}
+
+func (s *Server) playerExtensionData(ctx context.Context, player identity.Player, serverSlug string, includePrivate bool) []extensions.PlayerData {
+	rows := s.extensions.PlayerData(ctx, player, serverSlug)
+	for _, row := range s.store.ListExtensionPlayerData(ctx, player.ID, serverSlug, includePrivate) {
+		serverDisplay := row.ServerID
+		serverSlug := row.ServerID
+		if server, err := s.store.GetDownstreamServer(ctx, row.ServerID); err == nil {
+			serverDisplay = server.DisplayName
+			serverSlug = server.Slug
 		}
+		rows = append(rows, extensions.PlayerData{
+			ServerSlug:        serverSlug,
+			ServerDisplayName: serverDisplay,
+			Provider:          row.Provider,
+			Schema:            row.Schema,
+			Values:            row.Values,
+			UpdatedAt:         row.UpdatedAt.Format(time.RFC3339),
+		})
 	}
-	return nil, false
+	return rows
 }
 
-func downstreamServerData() []map[string]any {
-	return []map[string]any{
-		{
-			"id":                "default",
-			"slug":              "default",
-			"display_name":      "Default Server",
-			"status":            "active",
-			"registration_open": true,
-			"portal_theme": map[string]any{
-				"primary_color":  "#16a34a",
-				"accent_color":   "#2563eb",
-				"portal_message": "Welcome to Authman",
-				"display_name":   "Default Server",
-				"description":    "Default Authman downstream context",
-			},
-			"portal_config": map[string]any{
-				"registration_strategy": "open",
-				"show_in_global":        true,
-			},
-			"extension_providers": []string{"authman.identity"},
-		},
-	}
+func credentialLocked(credential store.OfflineCredential, now time.Time) bool {
+	return credential.LockedUntil != nil && credential.LockedUntil.After(now.UTC())
 }
 
-func downstreamServerByID(id string) (map[string]any, bool) {
-	for _, server := range downstreamServerData() {
-		if server["id"] == id || server["slug"] == id {
-			return server, true
-		}
+func offlineCredentialData(credential store.OfflineCredential) map[string]any {
+	return map[string]any{
+		"password_updated_at": credential.PasswordUpdatedAt,
+		"failed_attempts":     credential.FailedAttempts,
+		"locked_until":        credential.LockedUntil,
 	}
-	return nil, false
 }
 
 func defaultExtensions() []map[string]any {

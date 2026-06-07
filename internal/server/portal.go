@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"strings"
@@ -47,7 +48,10 @@ func (s *Server) handleOfflineRegister(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.token_failed", "failed to create session"))
 		return
 	}
-	s.saveSession(sessionToken, session)
+	if err := s.saveSession(r.Context(), session); err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.session_failed", "failed to save session"))
+		return
+	}
 	setSessionCookie(w, r, playerSessionCookie, sessionToken, session.ExpiresAt)
 	api.WriteJSON(w, http.StatusCreated, map[string]any{
 		"player":     portalPlayerData(player),
@@ -73,17 +77,26 @@ func (s *Server) handlePortalLogin(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.invalid_credentials", "invalid username or password"))
 		return
 	}
+	if player.Locked || credentialLocked(credential, time.Now()) {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.account_locked", "account is locked"))
+		return
+	}
 	ok, err := auth.VerifyPassword(req.Password, credential.PasswordHash)
 	if err != nil || !ok {
+		_, _ = s.store.RecordOfflineLoginFailure(r.Context(), player.ID, time.Now())
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.invalid_credentials", "invalid username or password"))
 		return
 	}
+	_ = s.store.RecordOfflineLoginSuccess(r.Context(), player.ID)
 	session, sessionToken, csrfToken, err := auth.NewSession(auth.SessionPlayer, player.ID, 24*time.Hour, time.Now())
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.token_failed", "failed to create session"))
 		return
 	}
-	s.saveSession(sessionToken, session)
+	if err := s.saveSession(r.Context(), session); err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.session_failed", "failed to save session"))
+		return
+	}
 	setSessionCookie(w, r, playerSessionCookie, sessionToken, session.ExpiresAt)
 	s.audit(r, audit.ActorPlayer, player.ID, audit.TargetPortalSession, session.ID, "player.session.login", nil)
 	api.WriteJSON(w, http.StatusOK, map[string]any{
@@ -104,7 +117,7 @@ func (s *Server) handlePortalMe(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session player was not found"))
 		return
 	}
-	csrf, csrfErr := s.rotateCSRF(session)
+	csrf, csrfErr := s.rotateCSRF(r.Context(), session)
 	if csrfErr != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.token_failed", "failed to refresh CSRF token"))
 		return
@@ -115,7 +128,7 @@ func (s *Server) handlePortalMe(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePortalLogout(w http.ResponseWriter, r *http.Request) {
 	if session, err := s.requirePlayer(r, true); err == nil {
 		if cookie, cookieErr := r.Cookie(playerSessionCookie); cookieErr == nil {
-			s.deleteSession(cookie.Value)
+			s.deleteSession(r.Context(), cookie.Value)
 		}
 		s.audit(r, audit.ActorPlayer, session.SubjectID, audit.TargetPortalSession, session.ID, "player.session.logout", nil)
 	}
@@ -176,17 +189,27 @@ func (s *Server) handlePortalConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePortalServers(w http.ResponseWriter, r *http.Request) {
-	servers := portalServersData()
-	api.WriteJSON(w, http.StatusOK, servers, map[string]any{"count": len(servers)})
+	servers := s.store.ListDownstreamServers(r.Context())
+	data := make([]map[string]any, 0, len(servers))
+	for _, server := range servers {
+		if server.Status == "disabled" {
+			continue
+		}
+		if show, ok := server.PortalConfig["show_in_global"].(bool); ok && !show {
+			continue
+		}
+		data = append(data, portalServerListData(server))
+	}
+	api.WriteJSON(w, http.StatusOK, data, map[string]any{"count": len(data)})
 }
 
 func (s *Server) handlePortalServerConfig(w http.ResponseWriter, r *http.Request) {
-	server, ok := portalServerData(r.PathValue("slug"))
-	if !ok {
+	server, err := s.store.GetDownstreamServer(r.Context(), r.PathValue("slug"))
+	if err != nil || server.Status == "disabled" {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "server.not_found", "server not found"))
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, server, nil)
+	api.WriteJSON(w, http.StatusOK, portalServerConfigData(server), nil)
 }
 
 func (s *Server) handlePortalCheckName(w http.ResponseWriter, r *http.Request) {
@@ -221,7 +244,7 @@ func (s *Server) handlePortalExtensionData(w http.ResponseWriter, r *http.Reques
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session player was not found"))
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, s.extensions.PlayerData(r.Context(), player, r.PathValue("serverSlug")), nil)
+	api.WriteJSON(w, http.StatusOK, s.playerExtensionData(r.Context(), player, r.PathValue("serverSlug"), false), nil)
 }
 
 type portalLinkLoginRequest struct {
@@ -234,8 +257,8 @@ func (s *Server) handlePortalLinkLogin(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, err)
 		return
 	}
-	link, ok := s.getPortalLink(req.Token)
-	if !ok {
+	link, err := s.getPortalLink(r.Context(), req.Token)
+	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "portal_link.not_found", "portal link was not found"))
 		return
 	}
@@ -255,8 +278,14 @@ func (s *Server) handlePortalLinkLogin(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.token_failed", "failed to create session"))
 		return
 	}
-	s.saveSession(sessionToken, session)
-	s.markPortalLinkUsed(req.Token)
+	if err := s.saveSession(r.Context(), session); err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.session_failed", "failed to save session"))
+		return
+	}
+	if _, err := s.markPortalLinkUsed(r.Context(), req.Token); err != nil {
+		api.WriteError(w, api.NewError(http.StatusUnauthorized, "portal_link.not_found", "portal link cannot be used"))
+		return
+	}
 	setSessionCookie(w, r, playerSessionCookie, sessionToken, session.ExpiresAt)
 	s.audit(r, audit.ActorPlayer, player.ID, audit.TargetPortalSession, session.ID, "player.session.link_login", map[string]any{
 		"server_id": link.ServerID,
@@ -327,24 +356,12 @@ func (s *Server) handleAdminPlayers(w http.ResponseWriter, r *http.Request) {
 	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), len(filtered), params))
 }
 
-func (s *Server) getPortalLink(token string) (auth.PortalLink, bool) {
+func (s *Server) getPortalLink(ctx context.Context, token string) (auth.PortalLink, error) {
 	token = strings.TrimSpace(token)
-	s.portalLinksMu.RLock()
-	defer s.portalLinksMu.RUnlock()
-	link, ok := s.portalLinks[auth.HashToken("portal-link", token)]
-	return link, ok
+	return s.store.GetPortalLink(ctx, auth.HashToken("portal-link", token))
 }
 
-func (s *Server) markPortalLinkUsed(token string) {
+func (s *Server) markPortalLinkUsed(ctx context.Context, token string) (auth.PortalLink, error) {
 	key := auth.HashToken("portal-link", strings.TrimSpace(token))
-	s.portalLinksMu.Lock()
-	defer s.portalLinksMu.Unlock()
-	link, ok := s.portalLinks[key]
-	if !ok {
-		return
-	}
-	now := time.Now().UTC()
-	link.Status = auth.PortalLinkUsed
-	link.UsedAt = &now
-	s.portalLinks[key] = link
+	return s.store.MarkPortalLinkUsed(ctx, key, time.Now())
 }

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -14,28 +15,21 @@ const (
 	csrfHeader          = "X-CSRF-Token"
 )
 
-func (s *Server) saveSession(token string, session auth.Session) {
-	s.sessionsMu.Lock()
-	defer s.sessionsMu.Unlock()
-	s.sessions[session.ID] = session
+func (s *Server) saveSession(ctx context.Context, session auth.Session) error {
+	return s.store.SaveSession(ctx, session)
 }
 
-func (s *Server) deleteSession(token string) {
-	s.sessionsMu.Lock()
-	defer s.sessionsMu.Unlock()
-	delete(s.sessions, auth.HashToken("session", token))
+func (s *Server) deleteSession(ctx context.Context, token string) {
+	_ = s.store.DeleteSession(ctx, auth.HashToken("session", token))
 }
 
-func (s *Server) rotateCSRF(session auth.Session) (string, error) {
+func (s *Server) rotateCSRF(ctx context.Context, session auth.Session) (string, error) {
 	csrf, err := auth.NewOpaqueToken(32)
 	if err != nil {
 		return "", err
 	}
 	session.CSRFToken = auth.HashToken("csrf", csrf)
-	s.sessionsMu.Lock()
-	defer s.sessionsMu.Unlock()
-	s.sessions[session.ID] = session
-	return csrf, nil
+	return csrf, s.store.UpdateSession(ctx, session)
 }
 
 func (s *Server) requireSession(r *http.Request, cookieName string, kind auth.SessionKind, csrf bool) (auth.Session, *api.Error) {
@@ -44,10 +38,8 @@ func (s *Server) requireSession(r *http.Request, cookieName string, kind auth.Se
 		return auth.Session{}, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "missing session")
 	}
 	sessionID := auth.HashToken("session", cookie.Value)
-	s.sessionsMu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.sessionsMu.RUnlock()
-	if !ok || session.Kind != kind || session.Expired(time.Now()) {
+	session, storeErr := s.store.GetSession(r.Context(), sessionID)
+	if storeErr != nil || session.Kind != kind || session.Expired(time.Now()) {
 		return auth.Session{}, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session is invalid or expired")
 	}
 	if csrf && !session.VerifyCSRF(r.Header.Get(csrfHeader)) {

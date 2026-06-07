@@ -1,0 +1,34 @@
+api:
+  base-url: "http://127.0.0.1:8080"
+  node-token: ""
+  request-timeout-seconds: 8
+
+node:
+  name: "velocity"
+  server-id: "default"
+  heartbeat-interval-seconds: 60
+
+identity:
+  resolve-raw-offline-names: true
+
+auth:
+  max-password-attempts: 3
+  chat-cooldown-millis: 150
+  timeout-seconds: 90
+  completion-delay-seconds: 3
+
+servers:
+  default-target: ""
+  holding: ""
+
+email:
+  # disabled, optional, or required. Email flows are backed by Authman APIs.
+  verification-mode: "disabled"
+
+packets:
+  strip-offline-prefix:
+    enabled: true
+    player-info-packets: true
+    scoreboard-team-packets: true
+    # If Authman reports a premium player with the same name exists, keep #Name unless this is true.
+    strip-when-premium-name-exists: false

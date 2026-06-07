@@ -1,7 +1,9 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -10,12 +12,32 @@ import (
 	"github.com/RoselleMC/authman/internal/auth"
 	"github.com/RoselleMC/authman/internal/identity"
 	"github.com/RoselleMC/authman/internal/mojang"
+	"github.com/RoselleMC/authman/internal/store"
 )
 
 type adminLoginRequest struct {
 	Username string `json:"username"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
+}
+
+type mojangRouteRequest struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	URL      string `json:"url"`
+	Weight   int    `json:"weight"`
+	Disabled bool   `json:"disabled"`
+}
+
+type downstreamServerRequest struct {
+	ID                 string         `json:"id"`
+	Slug               string         `json:"slug"`
+	DisplayName        string         `json:"display_name"`
+	Status             string         `json:"status"`
+	RegistrationOpen   bool           `json:"registration_open"`
+	PortalTheme        map[string]any `json:"portal_theme"`
+	PortalConfig       map[string]any `json:"portal_config"`
+	ExtensionProviders []string       `json:"extension_providers"`
 }
 
 func (s *Server) handleAdminBootstrap(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +67,10 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.token_failed", "failed to create session"))
 		return
 	}
-	s.saveSession(sessionToken, session)
+	if err := s.saveSession(r.Context(), session); err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.session_failed", "failed to save session"))
+		return
+	}
 	setSessionCookie(w, r, adminSessionCookie, sessionToken, session.ExpiresAt)
 	s.audit(r, audit.ActorAdmin, "bootstrap-admin", audit.TargetPortalSession, session.ID, "admin.session.login", map[string]any{
 		"username": username,
@@ -65,7 +90,7 @@ func (s *Server) handleAdminMe(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, err)
 		return
 	}
-	csrf, csrfErr := s.rotateCSRF(session)
+	csrf, csrfErr := s.rotateCSRF(r.Context(), session)
 	if csrfErr != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.token_failed", "failed to refresh CSRF token"))
 		return
@@ -81,7 +106,7 @@ func (s *Server) handleAdminMe(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 	if session, err := s.requireAdmin(r, true); err == nil {
 		if cookie, cookieErr := r.Cookie(adminSessionCookie); cookieErr == nil {
-			s.deleteSession(cookie.Value)
+			s.deleteSession(r.Context(), cookie.Value)
 		}
 		s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPortalSession, session.ID, "admin.session.logout", nil)
 	}
@@ -105,7 +130,13 @@ func (s *Server) handleAdminPlayerDetail(w http.ResponseWriter, r *http.Request)
 		eventData = append(eventData, auditEventSummaryData(event))
 	}
 	data := playerDetailData(player, eventData)
-	data["extension_data"] = s.extensions.PlayerData(r.Context(), player, "")
+	if player.Kind == identity.PlayerKindOffline {
+		_, credential, err := s.store.GetOfflineCredential(r.Context(), player.RawOfflineName)
+		if err == nil {
+			data["offline_credentials"] = offlineCredentialData(credential)
+		}
+	}
+	data["extension_data"] = s.playerExtensionData(r.Context(), player, "", true)
 	api.WriteJSON(w, http.StatusOK, data, nil)
 }
 
@@ -284,7 +315,10 @@ func (s *Server) handleAdminMojangRoutes(w http.ResponseWriter, r *http.Request)
 			if route.CooldownUntil.After(now) {
 				cooldown = int64(route.CooldownUntil.Sub(now).Seconds())
 			}
-			if state == "healthy" || cooldown == 0 {
+			if route.Disabled {
+				state = string(mojang.RouteDisabled)
+			}
+			if !route.Disabled && (state == "healthy" || cooldown == 0) {
 				healthy++
 			}
 			routeData = append(routeData, map[string]any{
@@ -310,12 +344,68 @@ func (s *Server) handleAdminMojangRoutes(w http.ResponseWriter, r *http.Request)
 			overall = "mojang_unavailable"
 		}
 	}
+	events := []map[string]any{}
+	if s.mojangVerifier != nil {
+		for _, event := range s.mojangVerifier.EventsSnapshot() {
+			events = append(events, mojangEventData(event))
+		}
+	}
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"overall": overall,
 		"proxies": routeData,
 		"cache":   s.mojangCacheSnapshot(),
-		"events":  []map[string]any{},
+		"events":  events,
 	}, nil)
+}
+
+func (s *Server) handleAdminCreateMojangRoute(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	var req mojangRouteRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	route, err := routeFromRequest(req)
+	if err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	route, storeErr := s.store.UpsertMojangRoute(r.Context(), route)
+	if storeErr != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "mojang.route_save_failed", "failed to save Mojang route"))
+		return
+	}
+	s.reloadMojangRoutes(r.Context())
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetMojangProxy, route.ID, "mojang.route.upsert", map[string]any{
+		"kind":     route.Kind,
+		"weight":   route.Weight,
+		"disabled": route.Disabled,
+	})
+	api.WriteJSON(w, http.StatusCreated, mojangRouteData(route, time.Now().UTC()), nil)
+}
+
+func (s *Server) handleAdminDeleteMojangRoute(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" || id == "direct" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "mojang.route_invalid", "route cannot be deleted"))
+		return
+	}
+	if err := s.store.DeleteMojangRoute(r.Context(), id); err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "mojang.route_not_found", "Mojang route was not found"))
+		return
+	}
+	s.reloadMojangRoutes(r.Context())
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetMojangProxy, id, "mojang.route.delete", nil)
+	api.WriteJSON(w, http.StatusOK, map[string]any{"ok": true}, nil)
 }
 
 func (s *Server) mojangCacheSnapshot() map[string]int {
@@ -329,7 +419,119 @@ func maskRouteURL(route mojang.Route) string {
 	if route.URL == "" {
 		return "direct"
 	}
-	return "configured"
+	parsed, err := url.Parse(route.URL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "configured"
+	}
+	parsed.User = nil
+	return parsed.String()
+}
+
+func routeFromRequest(req mojangRouteRequest) (mojang.Route, *api.Error) {
+	kind := mojang.RouteKind(strings.ToLower(strings.TrimSpace(req.Kind)))
+	if kind != mojang.RouteHTTP && kind != mojang.RouteSOCKS5 {
+		return mojang.Route{}, api.NewError(http.StatusBadRequest, "mojang.route_invalid_kind", "route kind must be http or socks5")
+	}
+	routeURL := strings.TrimSpace(req.URL)
+	if routeURL == "" {
+		return mojang.Route{}, api.NewError(http.StatusBadRequest, "mojang.route_url_required", "route URL is required")
+	}
+	if err := validateRouteURL(kind, routeURL); err != nil {
+		return mojang.Route{}, err
+	}
+	weight := req.Weight
+	if weight <= 0 {
+		weight = 1
+	}
+	if weight > 100 {
+		weight = 100
+	}
+	id := sanitizeRouteID(req.ID)
+	if id == "" {
+		id = fmt.Sprintf("%s-%d", kind, time.Now().UTC().UnixNano())
+	}
+	return mojang.Route{
+		ID:       id,
+		Kind:     kind,
+		URL:      routeURL,
+		Weight:   weight,
+		Disabled: req.Disabled,
+	}, nil
+}
+
+func validateRouteURL(kind mojang.RouteKind, raw string) *api.Error {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return api.NewError(http.StatusBadRequest, "mojang.route_url_invalid", "route URL is invalid")
+	}
+	switch kind {
+	case mojang.RouteHTTP:
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return api.NewError(http.StatusBadRequest, "mojang.route_url_invalid", "HTTP proxy URL must use http or https")
+		}
+	case mojang.RouteSOCKS5:
+		if parsed.Scheme != "socks5" {
+			return api.NewError(http.StatusBadRequest, "mojang.route_url_invalid", "SOCKS5 proxy URL must use socks5")
+		}
+	}
+	return nil
+}
+
+func sanitizeRouteID(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range raw {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() > 64 {
+		return b.String()[:64]
+	}
+	return b.String()
+}
+
+func mojangRouteData(route mojang.Route, now time.Time) map[string]any {
+	state := string(route.State)
+	if state == "" {
+		state = "healthy"
+	}
+	if route.Disabled {
+		state = string(mojang.RouteDisabled)
+	}
+	cooldown := int64(0)
+	if route.CooldownUntil.After(now) {
+		cooldown = int64(route.CooldownUntil.Sub(now).Seconds())
+	}
+	return map[string]any{
+		"id":                         route.ID,
+		"kind":                       route.Kind,
+		"state":                      state,
+		"url_masked":                 maskRouteURL(route),
+		"weight":                     route.Weight,
+		"failure_count":              route.FailureCount,
+		"rate_limit_count":           route.RateLimitCount,
+		"cooldown_remaining_seconds": cooldown,
+		"last_error":                 route.LastFailureError,
+	}
+}
+
+func mojangEventData(event mojang.Event) map[string]any {
+	retryAfter := ""
+	if event.RetryAfter > 0 {
+		retryAfter = event.RetryAfter.String()
+	}
+	return map[string]any{
+		"id":          event.ID,
+		"proxy_id":    event.ProxyID,
+		"event_type":  event.EventType,
+		"retry_after": retryAfter,
+		"error":       event.Error,
+		"created_at":  event.CreatedAt,
+	}
 }
 
 func (s *Server) handleAdminDownstreamServers(w http.ResponseWriter, r *http.Request) {
@@ -337,8 +539,12 @@ func (s *Server) handleAdminDownstreamServers(w http.ResponseWriter, r *http.Req
 		api.WriteError(w, err)
 		return
 	}
-	servers := downstreamServerData()
-	api.WriteJSON(w, http.StatusOK, servers, map[string]any{"count": len(servers)})
+	servers := s.store.ListDownstreamServers(r.Context())
+	data := make([]map[string]any, 0, len(servers))
+	for _, server := range servers {
+		data = append(data, downstreamServerData(server))
+	}
+	api.WriteJSON(w, http.StatusOK, data, map[string]any{"count": len(data)})
 }
 
 func (s *Server) handleAdminDownstreamServerDetail(w http.ResponseWriter, r *http.Request) {
@@ -346,12 +552,133 @@ func (s *Server) handleAdminDownstreamServerDetail(w http.ResponseWriter, r *htt
 		api.WriteError(w, err)
 		return
 	}
-	server, ok := downstreamServerByID(r.PathValue("id"))
-	if !ok {
+	server, err := s.store.GetDownstreamServer(r.Context(), r.PathValue("id"))
+	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "server.not_found", "server not found"))
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, server, nil)
+	api.WriteJSON(w, http.StatusOK, downstreamServerData(server), nil)
+}
+
+func (s *Server) handleAdminCreateDownstreamServer(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	var req downstreamServerRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	server, apiErr := downstreamServerFromRequest(req)
+	if apiErr != nil {
+		api.WriteError(w, apiErr)
+		return
+	}
+	server, err := s.store.UpsertDownstreamServer(r.Context(), server)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.save_failed", err.Error()))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, server.ID, "server.upsert", map[string]any{"slug": server.Slug})
+	api.WriteJSON(w, http.StatusCreated, downstreamServerData(server), nil)
+}
+
+func (s *Server) handleAdminUpdateDownstreamServer(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if _, err := s.store.GetDownstreamServer(r.Context(), id); err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "server.not_found", "server not found"))
+		return
+	}
+	var req downstreamServerRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	req.ID = id
+	server, apiErr := downstreamServerFromRequest(req)
+	if apiErr != nil {
+		api.WriteError(w, apiErr)
+		return
+	}
+	server, err := s.store.UpsertDownstreamServer(r.Context(), server)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.save_failed", err.Error()))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, server.ID, "server.upsert", map[string]any{"slug": server.Slug})
+	api.WriteJSON(w, http.StatusOK, downstreamServerData(server), nil)
+}
+
+func (s *Server) handleAdminDeleteDownstreamServer(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" || id == "default" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.delete_default", "default server cannot be deleted"))
+		return
+	}
+	if err := s.store.DeleteDownstreamServer(r.Context(), id); err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "server.not_found", "server not found"))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, id, "server.delete", nil)
+	api.WriteJSON(w, http.StatusOK, map[string]any{"ok": true}, nil)
+}
+
+func downstreamServerFromRequest(req downstreamServerRequest) (store.DownstreamServer, *api.Error) {
+	slug := strings.ToLower(strings.TrimSpace(req.Slug))
+	if slug == "" {
+		return store.DownstreamServer{}, api.NewError(http.StatusBadRequest, "server.slug_required", "server slug is required")
+	}
+	if !validSlug(slug) {
+		return store.DownstreamServer{}, api.NewError(http.StatusBadRequest, "server.slug_invalid", "server slug is invalid")
+	}
+	name := strings.TrimSpace(req.DisplayName)
+	if name == "" {
+		return store.DownstreamServer{}, api.NewError(http.StatusBadRequest, "server.display_name_required", "display name is required")
+	}
+	status := strings.TrimSpace(req.Status)
+	if status == "" {
+		status = "active"
+	}
+	switch status {
+	case "active", "hidden", "disabled":
+	default:
+		return store.DownstreamServer{}, api.NewError(http.StatusBadRequest, "server.status_invalid", "server status is invalid")
+	}
+	return store.DownstreamServer{
+		ID:                 strings.TrimSpace(req.ID),
+		Slug:               slug,
+		DisplayName:        name,
+		Status:             status,
+		RegistrationOpen:   req.RegistrationOpen,
+		PortalTheme:        req.PortalTheme,
+		PortalConfig:       req.PortalConfig,
+		ExtensionProviders: req.ExtensionProviders,
+	}, nil
+}
+
+func validSlug(slug string) bool {
+	if len(slug) < 2 || len(slug) > 64 {
+		return false
+	}
+	for _, ch := range slug {
+		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleAdminExtensions(w http.ResponseWriter, r *http.Request) {

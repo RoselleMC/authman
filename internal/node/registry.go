@@ -10,13 +10,26 @@ import (
 )
 
 type Node struct {
-	ID               string
-	Name             string
-	TokenHash        string
-	TokenFingerprint string
-	Disabled         bool
-	CreatedAt        time.Time
-	LastHeartbeatAt  *time.Time
+	ID                  string
+	ServerID            string
+	Name                string
+	TokenHash           string
+	TokenFingerprint    string
+	InstanceFingerprint string
+	PluginVersion       string
+	VelocityVersion     string
+	Disabled            bool
+	CreatedAt           time.Time
+	LastHeartbeatAt     *time.Time
+}
+
+type Registration struct {
+	Name                string
+	ServerID            string
+	InstanceFingerprint string
+	AccessFingerprint   string
+	PluginVersion       string
+	VelocityVersion     string
 }
 
 type Registry struct {
@@ -42,6 +55,7 @@ func (r *Registry) Create(ctx context.Context, name string, now time.Time) (Node
 	r.nextID++
 	node := Node{
 		ID:               fmt.Sprintf("node-%d", r.nextID),
+		ServerID:         "default",
 		Name:             name,
 		TokenHash:        auth.HashToken("node", token),
 		TokenFingerprint: auth.TokenFingerprint(token),
@@ -95,6 +109,49 @@ func (r *Registry) Heartbeat(ctx context.Context, token string, now time.Time) (
 	return node, nil
 }
 
+func (r *Registry) Register(ctx context.Context, registration Registration, now time.Time) (Node, error) {
+	if registration.InstanceFingerprint == "" {
+		return Node{}, fmt.Errorf("instance fingerprint is required")
+	}
+	name := registration.Name
+	if name == "" {
+		name = "velocity-" + registration.InstanceFingerprint[:min(8, len(registration.InstanceFingerprint))]
+	}
+	serverID := registration.ServerID
+	if serverID == "" {
+		serverID = "default"
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now = now.UTC()
+	for id, node := range r.nodes {
+		if node.InstanceFingerprint == registration.InstanceFingerprint {
+			node.Name = name
+			node.ServerID = serverID
+			node.TokenFingerprint = registration.AccessFingerprint
+			node.PluginVersion = registration.PluginVersion
+			node.VelocityVersion = registration.VelocityVersion
+			node.LastHeartbeatAt = &now
+			r.nodes[id] = node
+			return node, nil
+		}
+	}
+	r.nextID++
+	node := Node{
+		ID:                  fmt.Sprintf("node-%d", r.nextID),
+		ServerID:            serverID,
+		Name:                name,
+		TokenFingerprint:    registration.AccessFingerprint,
+		InstanceFingerprint: registration.InstanceFingerprint,
+		PluginVersion:       registration.PluginVersion,
+		VelocityVersion:     registration.VelocityVersion,
+		CreatedAt:           now,
+		LastHeartbeatAt:     &now,
+	}
+	r.nodes[node.ID] = node
+	return node, nil
+}
+
 func (r *Registry) List(ctx context.Context) []Node {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -103,4 +160,21 @@ func (r *Registry) List(ctx context.Context) []Node {
 		nodes = append(nodes, node)
 	}
 	return nodes
+}
+
+func (r *Registry) Delete(ctx context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.nodes[id]; !ok {
+		return fmt.Errorf("node not found")
+	}
+	delete(r.nodes, id)
+	return nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

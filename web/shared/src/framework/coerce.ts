@@ -259,6 +259,9 @@ export interface SafeVelocityNode {
   status: "active" | "disabled" | "stale";
   last_seen_at: string | null;
   token_fingerprint: string;
+  instance_fingerprint: string;
+  plugin_version: string;
+  velocity_version: string;
   created_at: string | null;
 }
 
@@ -272,6 +275,9 @@ export function coerceVelocityNode(raw: unknown): SafeVelocityNode {
     status: mapEnum(r.status, ["active", "disabled", "stale"] as const, "stale"),
     last_seen_at: typeof r.last_seen_at === "string" ? r.last_seen_at : null,
     token_fingerprint: asString(firstDefined(r.token_fingerprint, r.fingerprint, r.token_hint), "—"),
+    instance_fingerprint: asString(r.instance_fingerprint, ""),
+    plugin_version: asString(r.plugin_version, ""),
+    velocity_version: asString(r.velocity_version, ""),
     created_at: typeof r.created_at === "string" ? r.created_at : null,
   };
 }

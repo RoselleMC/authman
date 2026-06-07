@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/RoselleMC/authman/internal/api"
@@ -33,6 +32,8 @@ type nodeStore interface {
 	Authenticate(ctx context.Context, token string) (node.Node, error)
 	Rotate(ctx context.Context, id string, now time.Time) (node.Node, string, error)
 	Heartbeat(ctx context.Context, token string, now time.Time) (node.Node, error)
+	Register(ctx context.Context, registration node.Registration, now time.Time) (node.Node, error)
+	Delete(ctx context.Context, id string) error
 	List(ctx context.Context) []node.Node
 }
 
@@ -45,10 +46,6 @@ type Server struct {
 	extensions     *extensions.Registry
 	passwordParams auth.Argon2idParams
 	mojangVerifier *mojang.SessionVerifier
-	sessionsMu     sync.RWMutex
-	sessions       map[string]auth.Session
-	portalLinksMu  sync.RWMutex
-	portalLinks    map[string]auth.PortalLink
 }
 
 func New(options Options) *Server {
@@ -65,8 +62,6 @@ func New(options Options) *Server {
 		extensions:     options.Extensions,
 		passwordParams: options.PasswordParams,
 		mojangVerifier: newMojangVerifier(options.Config),
-		sessions:       make(map[string]auth.Session),
-		portalLinks:    make(map[string]auth.PortalLink),
 	}
 	if s.store == nil {
 		s.store = store.NewMemory()
@@ -77,14 +72,12 @@ func New(options Options) *Server {
 	if s.extensions == nil {
 		s.extensions = extensions.DefaultRegistry()
 	}
+	s.reloadMojangRoutes(context.Background())
 	s.routes()
 	return s
 }
 
 func newMojangVerifier(cfg config.Config) *mojang.SessionVerifier {
-	if len(cfg.MojangRoutes) == 0 {
-		return nil
-	}
 	return &mojang.SessionVerifier{
 		Pool: &mojang.Pool{
 			Routes:          cfg.MojangRoutes,
@@ -94,6 +87,32 @@ func newMojangVerifier(cfg config.Config) *mojang.SessionVerifier {
 		Timeout: cfg.MojangTimeout,
 		Cache:   mojang.NewProfileCache(cfg.MojangCacheFresh, cfg.MojangCacheStale),
 	}
+}
+
+func (s *Server) configuredMojangRoutes(ctx context.Context) []mojang.Route {
+	routes := append([]mojang.Route(nil), s.cfg.MojangRoutes...)
+	custom := s.store.ListMojangRoutes(ctx)
+	seen := make(map[string]int, len(routes)+len(custom))
+	for i, route := range routes {
+		seen[route.ID] = i
+	}
+	for _, route := range custom {
+		if index, ok := seen[route.ID]; ok {
+			routes[index] = route
+			continue
+		}
+		seen[route.ID] = len(routes)
+		routes = append(routes, route)
+	}
+	return routes
+}
+
+func (s *Server) reloadMojangRoutes(ctx context.Context) {
+	routes := s.configuredMojangRoutes(ctx)
+	if s.mojangVerifier == nil {
+		s.mojangVerifier = newMojangVerifier(s.cfg)
+	}
+	s.mojangVerifier.SetRoutes(routes, s.cfg.MojangCooldown)
 }
 
 func (s *Server) Handler() http.Handler {
@@ -141,17 +160,24 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/admin/velocity/nodes", s.handleAdminListNodes)
 	s.mux.HandleFunc("POST /api/admin/velocity/nodes/{id}/rotate", s.handleAdminRotateNode)
 	s.mux.HandleFunc("POST /api/admin/velocity/nodes/{id}/disable", s.handleAdminDisableNode)
+	s.mux.HandleFunc("DELETE /api/admin/velocity/nodes/{id}", s.handleAdminDeleteNode)
 	s.mux.HandleFunc("GET /api/admin/audit-events", s.handleAdminAuditEvents)
 	s.mux.HandleFunc("GET /api/admin/mojang/routes", s.handleAdminMojangRoutes)
+	s.mux.HandleFunc("POST /api/admin/mojang/routes", s.handleAdminCreateMojangRoute)
+	s.mux.HandleFunc("DELETE /api/admin/mojang/routes/{id}", s.handleAdminDeleteMojangRoute)
 	s.mux.HandleFunc("GET /api/admin/mojang/upstream/status", s.handleAdminMojangRoutes)
 	s.mux.HandleFunc("GET /api/admin/downstream-servers", s.handleAdminDownstreamServers)
+	s.mux.HandleFunc("POST /api/admin/downstream-servers", s.handleAdminCreateDownstreamServer)
 	s.mux.HandleFunc("GET /api/admin/downstream-servers/{id}", s.handleAdminDownstreamServerDetail)
+	s.mux.HandleFunc("PUT /api/admin/downstream-servers/{id}", s.handleAdminUpdateDownstreamServer)
+	s.mux.HandleFunc("DELETE /api/admin/downstream-servers/{id}", s.handleAdminDeleteDownstreamServer)
 	s.mux.HandleFunc("GET /api/admin/extensions", s.handleAdminExtensions)
 	s.mux.HandleFunc("GET /api/admin/users", s.handleAdminUsers)
 	s.mux.HandleFunc("GET /api/admin/system/summary", s.handleAdminSystemSummary)
 	s.mux.HandleFunc("POST /api/node/heartbeat", s.handleNodeHeartbeat)
 	s.mux.HandleFunc("POST /api/node/players/resolve", s.handleNodeResolvePlayer)
 	s.mux.HandleFunc("POST /api/node/players/authenticate", s.handleNodeAuthenticatePlayer)
+	s.mux.HandleFunc("POST /api/node/players/extension-data", s.handleNodeUpsertExtensionData)
 	s.mux.HandleFunc("POST /api/node/portal-links", s.handleNodeCreatePortalLink)
 }
 

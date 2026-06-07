@@ -7,6 +7,7 @@ services:
       AUTHMAN_PUBLIC_BASE_URL: "http://localhost:8080"
       AUTHMAN_ADMIN_USERNAME: "admin"
       AUTHMAN_ADMIN_PASSWORD: "authman-admin-change-me"
+      AUTHMAN_NODE_ACCESS_TOKEN: "authman-node-change-me"
     ports:
       - "8080:8080"
     depends_on:

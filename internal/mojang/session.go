@@ -90,6 +90,29 @@ func (v *SessionVerifier) RoutesSnapshot() []Route {
 	return routes
 }
 
+func (v *SessionVerifier) EventsSnapshot() []Event {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.Pool == nil {
+		return nil
+	}
+	return v.Pool.EventsSnapshot()
+}
+
+func (v *SessionVerifier) SetRoutes(routes []Route, failureCooldown time.Duration) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.Pool == nil {
+		v.Pool = &Pool{}
+	}
+	events := v.Pool.EventsSnapshot()
+	nextEventID := v.Pool.nextEventID
+	v.Pool.Routes = append([]Route(nil), routes...)
+	v.Pool.FailureCooldown = failureCooldown
+	v.Pool.events = events
+	v.Pool.nextEventID = nextEventID
+}
+
 func (v *SessionVerifier) CacheSnapshot() map[string]int {
 	if v.Cache == nil {
 		return map[string]int{"fresh": 0, "stale": 0, "expired": 0}
@@ -166,10 +189,15 @@ func (v *SessionVerifier) client(route Route) (*http.Client, error) {
 		transport.Proxy = http.ProxyURL(proxyURL)
 	case RouteSOCKS5:
 		address := route.URL
+		var auth *proxy.Auth
 		if parsed, err := url.Parse(route.URL); err == nil && parsed.Scheme != "" {
 			address = parsed.Host
+			if parsed.User != nil {
+				auth = &proxy.Auth{User: parsed.User.Username()}
+				auth.Password, _ = parsed.User.Password()
+			}
 		}
-		dialer, err := proxy.SOCKS5("tcp", address, nil, proxy.Direct)
+		dialer, err := proxy.SOCKS5("tcp", address, auth, proxy.Direct)
 		if err != nil {
 			return nil, fmt.Errorf("%w: invalid socks5 proxy", ErrRouteUnavailable)
 		}

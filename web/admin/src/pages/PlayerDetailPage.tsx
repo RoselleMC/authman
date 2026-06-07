@@ -37,7 +37,7 @@ import { useSession } from "../auth/SessionContext";
 import { ErrorBlock } from "../components/ErrorBlock";
 
 type DialogKind = null | "lock" | "unlock" | "reset" | "link";
-type TabKey = "identity" | "sessions" | "extension" | "audit";
+type TabKey = "identity" | "sessions" | "extension";
 
 export function PlayerDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
@@ -104,13 +104,11 @@ export function PlayerDetailPage() {
   const canLink = hasPermission("players.portal_link.create");
 
   const sessions = p.sessions ?? [];
-  const auditEvents = p.audit_events ?? [];
 
   const tabs: TabItem<TabKey>[] = [
     { value: "identity", label: t("admin.player.identity"), icon: "user" },
     { value: "sessions", label: t("admin.player.history"), icon: "clock", count: sessions.length || undefined },
     { value: "extension", label: t("nav.player.extensions"), icon: "box" },
-    { value: "audit", label: t("admin.player.audit"), icon: "list", count: auditEvents.length || undefined },
   ];
 
   return (
@@ -196,7 +194,6 @@ export function PlayerDetailPage() {
             {tab === "identity" ? <IdentityPanel p={p} /> : null}
             {tab === "sessions" ? <SessionsPanel sessions={sessions} /> : null}
             {tab === "extension" ? <ExtensionPanel p={p} /> : null}
-            {tab === "audit" ? <AuditPanel events={auditEvents} /> : null}
           </div>
         </div>
       </div>
@@ -468,36 +465,6 @@ function ExtensionPanel({ p }: { p: PlayerDetail }) {
         </Card>
       ))}
     </div>
-  );
-}
-
-function AuditPanel({ events }: { events: PlayerDetail["audit_events"] }) {
-  const { t } = useI18n();
-  if (!events.length) {
-    return (
-      <Card>
-        <EmptyState icon="list" title={t("admin.audit.empty")} />
-      </Card>
-    );
-  }
-  return (
-    <Card title={t("admin.player.audit")} noBody>
-      <ul className="audit-list">
-        {events.map((ev) => (
-          <li key={ev.id} className="audit-item">
-            <span className="audit-dot" />
-            <div style={{ flex: 1 }}>
-              <div className="audit-event">
-                <code className="mono">{ev.event_type}</code>
-              </div>
-              <div className="audit-meta">
-                {ev.actor_label} · {formatAbsTime(ev.created_at)}
-              </div>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </Card>
   );
 }
 

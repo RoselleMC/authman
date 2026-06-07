@@ -174,6 +174,9 @@ export interface VelocityNode {
   status: "active" | "disabled" | "stale";
   last_seen_at: string | null;
   token_fingerprint: string;
+  instance_fingerprint: string;
+  plugin_version: string;
+  velocity_version: string;
   created_at: string;
 }
 
@@ -188,6 +191,9 @@ export async function rotateNodeToken(id: string): Promise<{ token_once: string;
 }
 export async function disableNode(id: string): Promise<void> {
   await apiFetch<null>(`/admin/velocity/nodes/${encodeURIComponent(id)}/disable`, { method: "POST" });
+}
+export async function deleteNode(id: string): Promise<void> {
+  await apiFetch<null>(`/admin/velocity/nodes/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 export async function createNode(input: { name: string; server_id: string }): Promise<{ token_once: string; token_fingerprint: string; node: VelocityNode }> {
   const res = await apiFetch<{ token_once: string; token_fingerprint: string; node: VelocityNode }>("/admin/velocity/nodes", { method: "POST", body: input });
@@ -241,6 +247,24 @@ export async function fetchMojang(): Promise<MojangStatus> {
   return res.data;
 }
 
+export interface CreateMojangRouteInput {
+  id?: string;
+  kind: "http" | "socks5";
+  url: string;
+  weight?: number;
+}
+
+export async function createMojangRoute(input: CreateMojangRouteInput): Promise<MojangProxy> {
+  const res = await apiFetch<MojangProxy>("/admin/mojang/routes", {
+    method: "POST",
+    body: input,
+  });
+  return res.data;
+}
+export async function deleteMojangRoute(id: string): Promise<void> {
+  await apiFetch<null>(`/admin/mojang/routes/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 export interface DownstreamServer {
   id: string;
   slug: string;
@@ -261,6 +285,16 @@ export interface DownstreamServer {
   extension_providers: string[];
 }
 
+export interface DownstreamServerInput {
+  slug: string;
+  display_name: string;
+  status: "active" | "hidden" | "disabled";
+  registration_open: boolean;
+  portal_theme: DownstreamServer["portal_theme"];
+  portal_config: DownstreamServer["portal_config"];
+  extension_providers: string[];
+}
+
 export async function fetchDownstreamServers(): Promise<DownstreamServer[]> {
   const res = await apiFetch<DownstreamServer[]>("/admin/downstream-servers");
   return res.data;
@@ -268,6 +302,17 @@ export async function fetchDownstreamServers(): Promise<DownstreamServer[]> {
 export async function fetchDownstreamServer(id: string): Promise<DownstreamServer> {
   const res = await apiFetch<DownstreamServer>(`/admin/downstream-servers/${encodeURIComponent(id)}`);
   return res.data;
+}
+export async function createDownstreamServer(input: DownstreamServerInput): Promise<DownstreamServer> {
+  const res = await apiFetch<DownstreamServer>("/admin/downstream-servers", { method: "POST", body: input });
+  return res.data;
+}
+export async function updateDownstreamServer(id: string, input: DownstreamServerInput): Promise<DownstreamServer> {
+  const res = await apiFetch<DownstreamServer>(`/admin/downstream-servers/${encodeURIComponent(id)}`, { method: "PUT", body: input });
+  return res.data;
+}
+export async function deleteDownstreamServer(id: string): Promise<void> {
+  await apiFetch<null>(`/admin/downstream-servers/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export interface ExtensionRegistryEntry {

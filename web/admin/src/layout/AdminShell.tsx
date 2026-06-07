@@ -4,6 +4,7 @@ import {
   BrandMark,
   IconButton,
   Icon,
+  LocaleSelect,
   ThemeToggle,
   cx,
   useI18n,
@@ -32,7 +33,7 @@ function titleFor(pathname: string, t: (k: string) => string): string {
 }
 
 export function AdminShell() {
-  const { t, locale, setLocale } = useI18n();
+  const { t } = useI18n();
   const { user, hasPermission, logout } = useSession();
   const [collapsed, setCollapsed] = useState(false);
   const toast = useToast();
@@ -94,17 +95,7 @@ export function AdminShell() {
             <span className="env-badge">
               <span className="env-dot" /> {(import.meta.env.MODE ?? "dev") === "production" ? "prod" : "dev"}
             </span>
-            <button
-              type="button"
-              className="iconbtn iconbtn--bordered"
-              onClick={() => setLocale(locale === "en" ? "zh" : "en")}
-              data-testid="locale-toggle"
-              aria-label={t("common.locale.toggle")}
-              title={t("common.locale.toggle")}
-              style={{ width: "auto", padding: "0 10px", fontSize: 12, fontWeight: 540 }}
-            >
-              {locale.toUpperCase()}
-            </button>
+            <LocaleSelect />
             <ThemeToggle />
             <div className="acct-menu">
               <div className="acct-avatar">{avatarInitial}</div>

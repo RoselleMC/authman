@@ -9,13 +9,10 @@ import {
   Dialog,
   EmptyState,
   ErrorState,
-  Field,
   Icon,
   IconButton,
-  Input,
   PageHeader,
   PageShell,
-  SecretReveal,
   coerceVelocityNode,
   formatRelativeTime,
   useI18n,
@@ -23,15 +20,7 @@ import {
   type DataColumn,
   type SafeVelocityNode,
 } from "@authman/shared";
-import {
-  createNode,
-  disableNode,
-  fetchNodes,
-  rotateNodeToken,
-} from "../api/admin";
-import { useSession } from "../auth/SessionContext";
-
-type DialogState = { kind: "create" | "rotate" | "disable"; node?: SafeVelocityNode } | null;
+import { deleteNode, fetchNodes } from "../api/admin";
 
 function NodeStatusBadge({ status }: { status: SafeVelocityNode["status"] }) {
   const { t } = useI18n();
@@ -41,13 +30,9 @@ function NodeStatusBadge({ status }: { status: SafeVelocityNode["status"] }) {
 
 export function NodesPage() {
   const { t, tError } = useI18n();
-  const { hasPermission } = useSession();
   const toast = useToast();
   const qc = useQueryClient();
-  const [dialog, setDialog] = useState<DialogState>(null);
-  const [secret, setSecret] = useState<string | null>(null);
-  const [newName, setNewName] = useState("");
-  const [newServer, setNewServer] = useState("srv-lobby");
+  const [deleteTarget, setDeleteTarget] = useState<SafeVelocityNode | null>(null);
 
   const q = useQuery({
     queryKey: ["admin.nodes"],
@@ -58,38 +43,15 @@ export function NodesPage() {
 
   const rows: SafeVelocityNode[] = (q.data ?? []).map(coerceVelocityNode);
 
-  const createMut = useMutation({
-    mutationFn: () => createNode({ name: newName, server_id: newServer }),
-    onSuccess: (res) => {
-      void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
-      setSecret(res.token_once);
-    },
-    onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
-  });
-  const rotateMut = useMutation({
-    mutationFn: (n: SafeVelocityNode) => rotateNodeToken(n.id),
-    onSuccess: (res) => {
-      void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
-      setSecret(res.token_once);
-    },
-    onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
-  });
-  const disableMut = useMutation({
-    mutationFn: (n: SafeVelocityNode) => disableNode(n.id),
+  const deleteMut = useMutation({
+    mutationFn: (n: SafeVelocityNode) => deleteNode(n.id),
     onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.nodes.delete.toast") });
+      setDeleteTarget(null);
       void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
-      setDialog(null);
-      toast.push({ tone: "success", title: t("admin.nodes.disabled.toast") });
     },
     onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
   });
-
-  function closeDialog() {
-    if (createMut.isPending || rotateMut.isPending || disableMut.isPending) return;
-    setDialog(null);
-    setSecret(null);
-    setNewName("");
-  }
 
   const columns: DataColumn<SafeVelocityNode>[] = [
     {
@@ -109,7 +71,16 @@ export function NodesPage() {
     {
       key: "fingerprint",
       header: t("admin.nodes.col.fingerprint"),
-      render: (n) => <code className="mono fingerprint" title={t("admin.nodes.fingerprint.title")}>{n.token_fingerprint}</code>,
+      render: (n) => <code className="mono fingerprint" title={t("admin.nodes.fingerprint.title")}>{n.instance_fingerprint || n.token_fingerprint}</code>,
+    },
+    {
+      key: "version",
+      header: t("admin.nodes.col.version"),
+      render: (n) => (
+        <span className="muted-cell">
+          {n.plugin_version || "—"}{n.velocity_version ? ` / ${n.velocity_version}` : ""}
+        </span>
+      ),
     },
     {
       key: "heartbeat",
@@ -122,22 +93,13 @@ export function NodesPage() {
       align: "right",
       render: (n) => (
         <div className="row-actions">
-          {hasPermission("nodes.rotate") ? (
-            <IconButton
-              name="rotate"
-              size={16}
-              label={t("admin.nodes.rotate")}
-              onClick={() => setDialog({ kind: "rotate", node: n })}
-              data-testid={`rotate-${n.id}`}
-            />
-          ) : null}
-          {hasPermission("nodes.disable") && n.status !== "disabled" ? (
+          {n.status !== "active" ? (
             <IconButton
               name="close"
               size={16}
-              label={t("admin.nodes.disable")}
-              onClick={() => setDialog({ kind: "disable", node: n })}
-              data-testid={`disable-${n.id}`}
+              label={t("admin.nodes.delete")}
+              onClick={() => setDeleteTarget(n)}
+              data-testid={`delete-${n.id}`}
             />
           ) : null}
         </div>
@@ -150,13 +112,6 @@ export function NodesPage() {
       <PageHeader
         title={t("admin.nodes.heading")}
         desc={t("admin.nodes.desc")}
-        action={
-          hasPermission("nodes.create") ? (
-            <Button variant="primary" icon="plus" onClick={() => setDialog({ kind: "create" })} data-testid="create-node">
-              {t("admin.nodes.create")}
-            </Button>
-          ) : null
-        }
       />
       {q.error ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : null}
       <Card noBody className="table-card">
@@ -179,139 +134,33 @@ export function NodesPage() {
           <Icon name="info" size={13} /> {t("admin.nodes.footnote")}
         </div>
       </Card>
-
       <Dialog
-        open={dialog?.kind === "create"}
-        onClose={closeDialog}
-        icon="server"
-        iconTone="primary"
-        title={secret ? t("admin.nodes.created") : t("admin.nodes.create")}
-        desc={secret ? t("admin.nodes.secret.body") : t("admin.nodes.generate.desc")}
-        testId="dialog-create-node"
-        footer={
-          secret ? (
-            <Button variant="primary" icon="check" onClick={closeDialog} data-testid="secret-close">
-              {t("admin.nodes.copiedDone")}
-            </Button>
-          ) : (
-            <>
-              <Button variant="ghost" onClick={closeDialog} disabled={createMut.isPending} data-testid="confirm-cancel">
-                {t("common.cancel")}
-              </Button>
-              <Button
-                variant="primary"
-                icon="plus"
-                loading={createMut.isPending}
-                onClick={() => createMut.mutate()}
-                data-testid="confirm-confirm"
-              >
-                {t("admin.nodes.create.submit")}
-              </Button>
-            </>
-          )
-        }
-      >
-        {secret ? (
-          <SecretReveal
-            value={secret}
-            valueTestId="node-secret"
-            warning={<p>{t("admin.nodes.secret.warning")}</p>}
-          />
-        ) : (
-          <>
-            <Field label={t("admin.nodes.field.name")} hint={t("admin.nodes.field.name.hint")}>
-              <Input
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="edge-eu-2"
-                mono
-                data-testid="create-node-name"
-              />
-            </Field>
-            <Field label={t("admin.nodes.field.serverId")} hint={t("admin.nodes.field.serverId.hint")}>
-              <Input
-                value={newServer}
-                onChange={(e) => setNewServer(e.target.value)}
-                placeholder="srv-lobby"
-                mono
-                data-testid="create-node-server"
-              />
-            </Field>
-          </>
-        )}
-      </Dialog>
-
-      <Dialog
-        open={dialog?.kind === "rotate"}
-        onClose={closeDialog}
-        icon="rotate"
-        iconTone="warning"
-        title={secret ? t("admin.nodes.newTokenIssued") : t("admin.nodes.rotate")}
-        desc={secret ? t("admin.nodes.secret.body") : t("admin.nodes.rotate.desc")}
-        testId="dialog-rotate"
-        footer={
-          secret ? (
-            <Button variant="primary" icon="check" onClick={closeDialog} data-testid="secret-close">
-              {t("admin.nodes.copiedDone")}
-            </Button>
-          ) : (
-            <>
-              <Button variant="ghost" onClick={closeDialog} disabled={rotateMut.isPending} data-testid="confirm-cancel">
-                {t("common.cancel")}
-              </Button>
-              <Button
-                variant="primary"
-                icon="rotate"
-                loading={rotateMut.isPending}
-                onClick={() => dialog?.node && rotateMut.mutate(dialog.node)}
-                data-testid="confirm-confirm"
-              >
-                {t("admin.nodes.rotate")}
-              </Button>
-            </>
-          )
-        }
-      >
-        {secret ? (
-          <SecretReveal
-            value={secret}
-            valueTestId="node-secret"
-            warning={<p>{t("admin.nodes.secret.warning")}</p>}
-          />
-        ) : (
-          <p className="dialog-note" style={{ marginTop: 0 }}>
-            {t("admin.nodes.nodeLabel")}: {dialog?.node?.name}
-          </p>
-        )}
-      </Dialog>
-
-      <Dialog
-        open={dialog?.kind === "disable"}
-        onClose={closeDialog}
+        open={!!deleteTarget}
+        onClose={() => !deleteMut.isPending && setDeleteTarget(null)}
         icon="close"
         iconTone="danger"
-        title={t("admin.nodes.disable")}
-        desc={t("admin.nodes.confirmDisable.body")}
-        testId="dialog-disable"
+        title={t("admin.nodes.delete")}
+        desc={t("admin.nodes.delete.desc")}
+        testId="dialog-delete-node"
         footer={
           <>
-            <Button variant="ghost" onClick={closeDialog} disabled={disableMut.isPending} data-testid="confirm-cancel">
+            <Button variant="ghost" onClick={() => setDeleteTarget(null)} disabled={deleteMut.isPending} data-testid="confirm-cancel">
               {t("common.cancel")}
             </Button>
             <Button
               variant="danger"
               icon="close"
-              loading={disableMut.isPending}
-              onClick={() => dialog?.node && disableMut.mutate(dialog.node)}
+              loading={deleteMut.isPending}
+              onClick={() => deleteTarget && deleteMut.mutate(deleteTarget)}
               data-testid="confirm-confirm"
             >
-              {t("admin.nodes.disable")}
+              {t("admin.nodes.delete")}
             </Button>
           </>
         }
       >
         <p className="dialog-note" style={{ marginTop: 0 }}>
-          {t("admin.nodes.nodeLabel")}: {dialog?.node?.name} · {dialog?.node?.server_label}
+          {deleteTarget?.name} · {deleteTarget?.instance_fingerprint || deleteTarget?.token_fingerprint}
         </p>
       </Dialog>
     </PageShell>

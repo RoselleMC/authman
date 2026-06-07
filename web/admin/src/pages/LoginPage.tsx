@@ -7,6 +7,7 @@ import {
   Button,
   Field,
   Input,
+  LocaleSelect,
   PasswordInput,
   ThemeToggle,
   useI18n,
@@ -15,7 +16,7 @@ import { adminBootstrapStatus } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
 export function LoginPage() {
-  const { t, locale, setLocale, tError } = useI18n();
+  const { t, tError } = useI18n();
   const { user, login } = useSession();
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
@@ -59,16 +60,7 @@ export function LoginPage() {
           <BrandMark sub={t("brand.adminSub")} />
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button
-            type="button"
-            className="iconbtn iconbtn--bordered"
-            onClick={() => setLocale(locale === "en" ? "zh" : "en")}
-            data-testid="locale-toggle"
-            aria-label={t("common.locale.toggle")}
-            style={{ width: "auto", padding: "0 10px", fontSize: 12, fontWeight: 540 }}
-          >
-            {locale.toUpperCase()}
-          </button>
+          <LocaleSelect />
           <ThemeToggle />
         </div>
       </div>

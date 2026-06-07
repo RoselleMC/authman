@@ -4,6 +4,11 @@
   "version": "0.1.0-dev",
   "main": "mc.roselle.authman.AuthmanPlugin",
   "description": "Authman Velocity integration plugin",
-  "authors": ["Score2"]
+  "authors": ["Score2"],
+  "dependencies": [
+    {
+      "id": "packetevents",
+      "optional": false
+    }
+  ]
 }
-

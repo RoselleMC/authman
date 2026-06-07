@@ -18,6 +18,7 @@ type Config struct {
 	AdminUsername      string
 	AdminPassword      string
 	AdminPasswordHash  string
+	NodeAccessToken    string
 	CORSAllowedOrigins []string
 	MojangSessionURL   string
 	MojangRoutes       []mojang.Route
@@ -37,6 +38,7 @@ func Load() (Config, error) {
 		AdminUsername:      envString("AUTHMAN_ADMIN_USERNAME", "admin"),
 		AdminPassword:      envString("AUTHMAN_ADMIN_PASSWORD", ""),
 		AdminPasswordHash:  envString("AUTHMAN_ADMIN_PASSWORD_HASH", ""),
+		NodeAccessToken:    envString("AUTHMAN_NODE_ACCESS_TOKEN", ""),
 		CORSAllowedOrigins: envCSV("AUTHMAN_CORS_ALLOWED_ORIGINS"),
 		MojangSessionURL:   envString("AUTHMAN_MOJANG_SESSION_URL", mojang.DefaultSessionServerURL),
 		MojangRoutes:       mojangRoutes(),

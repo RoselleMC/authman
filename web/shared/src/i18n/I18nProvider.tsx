@@ -3,40 +3,64 @@ import { STRING_TABLES, SUPPORTED_LOCALES, type Locale } from "./strings";
 
 const STORAGE_KEY = "authman.locale";
 
+export type LocalePreference = Locale | "system";
+
 interface I18nContextValue {
   locale: Locale;
+  localePreference: LocalePreference;
   setLocale: (l: Locale) => void;
+  setLocalePreference: (l: LocalePreference) => void;
   t: (key: string, fallback?: string) => string;
   tError: (code: string | undefined) => string;
 }
 
 const I18nContext = createContext<I18nContextValue | null>(null);
 
-function pickInitial(defaultLocale: string): Locale {
+function isLocale(value: string | null | undefined): value is Locale {
+  return !!value && (SUPPORTED_LOCALES as readonly string[]).includes(value);
+}
+
+function pickSystemLocale(defaultLocale: string): Locale {
   if (typeof window !== "undefined") {
-    const saved = window.localStorage.getItem(STORAGE_KEY);
-    if (saved && (SUPPORTED_LOCALES as readonly string[]).includes(saved)) return saved as Locale;
     const nav = window.navigator?.language?.slice(0, 2).toLowerCase();
-    if (nav && (SUPPORTED_LOCALES as readonly string[]).includes(nav)) return nav as Locale;
+    if (isLocale(nav)) return nav;
   }
-  return (SUPPORTED_LOCALES as readonly string[]).includes(defaultLocale)
-    ? (defaultLocale as Locale)
-    : "en";
+  return isLocale(defaultLocale) ? defaultLocale : "en";
+}
+
+function pickInitialPreference(): LocalePreference {
+  if (typeof window === "undefined") return "system";
+  const saved = window.localStorage.getItem(STORAGE_KEY);
+  if (saved === "system") return "system";
+  if (isLocale(saved)) return saved;
+  return "system";
 }
 
 export function I18nProvider({ defaultLocale, children }: { defaultLocale: string; children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(() => pickInitial(defaultLocale));
+  const [localePreference, setLocalePreferenceState] = useState<LocalePreference>(() => pickInitialPreference());
+  const [systemLocale, setSystemLocale] = useState<Locale>(() => pickSystemLocale(defaultLocale));
+  const locale = localePreference === "system" ? systemLocale : localePreference;
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(STORAGE_KEY, locale);
+      window.localStorage.setItem(STORAGE_KEY, localePreference);
     } catch {
       // ignore
     }
     document.documentElement.lang = locale;
-  }, [locale]);
+  }, [locale, localePreference]);
 
-  const setLocale = useCallback((l: Locale) => setLocaleState(l), []);
+  useEffect(() => {
+    function syncSystemLocale() {
+      setSystemLocale(pickSystemLocale(defaultLocale));
+    }
+    syncSystemLocale();
+    window.addEventListener("languagechange", syncSystemLocale);
+    return () => window.removeEventListener("languagechange", syncSystemLocale);
+  }, [defaultLocale]);
+
+  const setLocale = useCallback((l: Locale) => setLocalePreferenceState(l), []);
+  const setLocalePreference = useCallback((l: LocalePreference) => setLocalePreferenceState(l), []);
 
   const t = useCallback(
     (key: string, fallback?: string): string => {
@@ -63,7 +87,10 @@ export function I18nProvider({ defaultLocale, children }: { defaultLocale: strin
     [locale, t],
   );
 
-  const value = useMemo(() => ({ locale, setLocale, t, tError }), [locale, setLocale, t, tError]);
+  const value = useMemo(
+    () => ({ locale, localePreference, setLocale, setLocalePreference, t, tError }),
+    [locale, localePreference, setLocale, setLocalePreference, t, tError],
+  );
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
 

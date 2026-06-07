@@ -2,6 +2,7 @@ import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   BrandMark,
   IconButton,
+  LocaleSelect,
   ThemeToggle,
   cx,
   useI18n,
@@ -11,7 +12,7 @@ import { useSession } from "../auth/SessionContext";
 import { useServerContext } from "../server-context/ServerContextProvider";
 
 export function PlayerShell() {
-  const { t, locale, setLocale } = useI18n();
+  const { t } = useI18n();
   const { me, logout } = useSession();
   const { slug, server } = useServerContext();
   const toast = useToast();
@@ -88,16 +89,7 @@ export function PlayerShell() {
             <div style={{ flex: 1 }} />
           )}
           <div className="pnav-right">
-            <button
-              type="button"
-              className="iconbtn iconbtn--bordered"
-              onClick={() => setLocale(locale === "en" ? "zh" : "en")}
-              data-testid="locale-toggle"
-              aria-label={t("common.locale.toggle")}
-              style={{ width: "auto", padding: "0 10px", fontSize: 12, fontWeight: 540 }}
-            >
-              {locale.toUpperCase()}
-            </button>
+            <LocaleSelect />
             <ThemeToggle />
             {isAuthed ? (
               <div className="pnav-acct">

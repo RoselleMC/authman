@@ -40,6 +40,7 @@ export * from "./components/EmptyState";
 export * from "./components/Skeleton";
 export * from "./components/Toaster";
 export * from "./components/BrandMark";
+export * from "./components/PreferenceSelect";
 export * from "./components/ThemeToggle";
 
 export * from "./extensions/types";

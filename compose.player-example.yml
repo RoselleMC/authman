@@ -1,0 +1,11 @@
+services:
+  player-example-web:
+    build:
+      context: ./examples/player-panel
+      dockerfile: Dockerfile
+    environment:
+      AUTHMAN_CORE_URL: "${AUTHMAN_CORE_URL:-http://host.docker.internal:8080}"
+    ports:
+      - "${AUTHMAN_PLAYER_EXAMPLE_PORT:-18082}:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

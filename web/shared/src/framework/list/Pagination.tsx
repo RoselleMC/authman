@@ -1,4 +1,5 @@
 import { IconButton } from "../../components/IconButton";
+import { Select } from "../../components/Select";
 import { useI18n } from "../../i18n/I18nProvider";
 
 interface Props {
@@ -14,7 +15,7 @@ interface Props {
 /**
  * Bottom-bar pagination: page size on the left, "showing X–Y of Z" centered,
  * prev/next on the right. Keyboard accessible via the underlying IconButton
- * controls and the labelled <select>.
+ * controls and the custom labelled Select control.
  */
 export function Pagination({
   page,
@@ -34,25 +35,15 @@ export function Pagination({
   return (
     <div className="adv-list-pagination" data-testid={testId}>
       <div className="adv-list-pagination__size">
-        <label className="adv-list-pagination__size-label" htmlFor={`${testId ?? "list"}-page-size`}>
-          {t("list.rowsPerPage")}
-        </label>
-        <div className="select-box">
-          <select
-            id={`${testId ?? "list"}-page-size`}
-            className="select"
-            value={pageSize}
-            onChange={(e) => onPageSize(Number(e.target.value))}
-            data-testid={testId ? `${testId}-page-size` : "list-page-size"}
-            aria-label={t("list.rowsPerPage")}
-          >
-            {pageSizeOptions.map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ))}
-          </select>
-        </div>
+        <span className="adv-list-pagination__size-label">{t("list.rowsPerPage")}</span>
+        <Select
+          className="select-ui--compact"
+          value={String(pageSize)}
+          onChange={(next) => onPageSize(Number(next))}
+          options={pageSizeOptions.map((opt) => ({ value: String(opt), label: String(opt) }))}
+          ariaLabel={t("list.rowsPerPage")}
+          testId={testId ? `${testId}-page-size` : "list-page-size"}
+        />
       </div>
       <div
         className="adv-list-pagination__info"

@@ -1,5 +1,5 @@
 import { useMemo, type CSSProperties, type ReactNode } from "react";
-import { Icon } from "../../components/Icon";
+import { Select } from "../../components/Select";
 import { useI18n } from "../../i18n/I18nProvider";
 import { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
 import { Pagination } from "./Pagination";
@@ -252,22 +252,14 @@ function ColumnFilterControl<T>({
     );
   }
   return (
-    <div className="select-box adv-list-filter__select">
-      <select
-        className="select"
-        value={value}
-        aria-label={t("list.filter").replace("{column}", typeof column.header === "string" ? column.header : column.key)}
-        onChange={(e) => onChange(e.target.value)}
-        data-testid={testId}
-      >
-        {column.filter.options.map((opt) => (
-          <option key={opt.value || "__any"} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
-      <Icon name="chevronDown" size={14} className="select-chev" />
-    </div>
+    <Select
+      className="select-ui--compact adv-list-filter__select"
+      value={value}
+      ariaLabel={t("list.filter").replace("{column}", typeof column.header === "string" ? column.header : column.key)}
+      onChange={onChange}
+      options={column.filter.options.map((opt) => ({ value: opt.value, label: opt.label }))}
+      testId={testId}
+    />
   );
 }
 

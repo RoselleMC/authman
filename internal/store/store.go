@@ -10,6 +10,8 @@ import (
 	"github.com/RoselleMC/authman/internal/extensions"
 	"github.com/RoselleMC/authman/internal/identity"
 	"github.com/RoselleMC/authman/internal/mojang"
+	"github.com/RoselleMC/authman/internal/rbac"
+	"github.com/go-webauthn/webauthn/webauthn"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -48,6 +50,62 @@ type OfflineCredential struct {
 	LockedUntil       *time.Time
 }
 
+type AdminUser struct {
+	ID           string
+	Username     string
+	Email        string
+	PasswordHash string
+	Role         string
+	Status       string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+type AdminProfile struct {
+	AdminID   string
+	Username  string
+	Email     string
+	AvatarURL string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type AdminSecurity struct {
+	AdminID         string
+	TOTPEnabled     bool
+	TOTPSecret      string
+	MFARequirement  string
+	PreferredLocale string
+	PreferredTheme  string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type AdminPasskey struct {
+	ID         string
+	AdminID    string
+	Name       string
+	Credential webauthn.Credential
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+}
+
+type PendingAdminMFA struct {
+	ID                  string
+	AdminID             string
+	WebAuthnSessionJSON []byte
+	ExpiresAt           time.Time
+}
+
+type AdminTrustedDevice struct {
+	ID        string
+	AdminID   string
+	TokenHash string
+	UserAgent string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
 type PlayerStore interface {
 	CreateOfflinePlayer(ctx context.Context, rawName string, passwordHash string) (identity.Player, error)
 	GetOfflinePlayer(ctx context.Context, rawName string) (identity.Player, error)
@@ -77,4 +135,26 @@ type PlayerStore interface {
 	DeleteDownstreamServer(ctx context.Context, id string) error
 	ListExtensionPlayerData(ctx context.Context, playerID string, serverSlug string, includePrivate bool) []ExtensionPlayerData
 	UpsertExtensionPlayerData(ctx context.Context, data ExtensionPlayerData) (ExtensionPlayerData, error)
+	ListAdminUsers(ctx context.Context) []AdminUser
+	GetAdminUser(ctx context.Context, id string) (AdminUser, error)
+	FindAdminUserByIdentifier(ctx context.Context, identifier string) (AdminUser, error)
+	CreateAdminUser(ctx context.Context, user AdminUser) (AdminUser, error)
+	UpdateAdminUserProfile(ctx context.Context, id string, username string, email string) (AdminUser, error)
+	UpdateAdminUser(ctx context.Context, user AdminUser) (AdminUser, error)
+	GetAdminProfile(ctx context.Context, adminID string) (AdminProfile, error)
+	UpsertAdminProfile(ctx context.Context, profile AdminProfile) (AdminProfile, error)
+	ListAdminRoles(ctx context.Context) []rbac.Role
+	UpsertAdminRole(ctx context.Context, role rbac.Role) (rbac.Role, error)
+	DeleteAdminRole(ctx context.Context, id string) error
+	GetAdminSecurity(ctx context.Context, adminID string) (AdminSecurity, error)
+	UpsertAdminSecurity(ctx context.Context, security AdminSecurity) (AdminSecurity, error)
+	ListAdminPasskeys(ctx context.Context, adminID string) []AdminPasskey
+	CreateAdminPasskey(ctx context.Context, passkey AdminPasskey) (AdminPasskey, error)
+	UpdateAdminPasskeyCredential(ctx context.Context, id string, credential webauthn.Credential, lastUsedAt time.Time) error
+	DeleteAdminPasskey(ctx context.Context, adminID string, id string) error
+	SavePendingAdminMFA(ctx context.Context, pending PendingAdminMFA) (PendingAdminMFA, error)
+	GetPendingAdminMFA(ctx context.Context, id string) (PendingAdminMFA, error)
+	DeletePendingAdminMFA(ctx context.Context, id string) error
+	CreateAdminTrustedDevice(ctx context.Context, device AdminTrustedDevice) (AdminTrustedDevice, error)
+	GetAdminTrustedDevice(ctx context.Context, tokenHash string, now time.Time) (AdminTrustedDevice, error)
 }

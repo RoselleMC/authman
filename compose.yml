@@ -6,6 +6,7 @@ services:
       AUTHMAN_DATABASE_URL: "postgres://authman:authman@postgres:5432/authman?sslmode=disable"
       AUTHMAN_PUBLIC_BASE_URL: "http://localhost:8080"
       AUTHMAN_ADMIN_USERNAME: "admin"
+      AUTHMAN_ADMIN_EMAIL: "admin@authman.local"
       AUTHMAN_ADMIN_PASSWORD: "authman-admin-change-me"
       AUTHMAN_NODE_ACCESS_TOKEN: "authman-node-change-me"
     ports:
@@ -27,6 +28,18 @@ services:
       retries: 10
     volumes:
       - postgres-data:/var/lib/postgresql/data
+
+  core-web:
+    build:
+      context: ./web
+      dockerfile: core/Dockerfile
+    environment:
+      AUTHMAN_API_BASE: "/api"
+      AUTHMAN_DEFAULT_LOCALE: "zh"
+    ports:
+      - "18081:8080"
+    depends_on:
+      - authman
 
 volumes:
   postgres-data:

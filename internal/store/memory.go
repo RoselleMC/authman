@@ -12,6 +12,8 @@ import (
 	"github.com/RoselleMC/authman/internal/auth"
 	"github.com/RoselleMC/authman/internal/identity"
 	"github.com/RoselleMC/authman/internal/mojang"
+	"github.com/RoselleMC/authman/internal/rbac"
+	"github.com/go-webauthn/webauthn/webauthn"
 )
 
 type Memory struct {
@@ -27,6 +29,13 @@ type Memory struct {
 	mojangRoutes        map[string]mojang.Route
 	downstreamServers   map[string]DownstreamServer
 	extensionData       map[string]ExtensionPlayerData
+	adminRoles          map[string]rbac.Role
+	adminUsers          map[string]AdminUser
+	adminProfiles       map[string]AdminProfile
+	adminSecurity       map[string]AdminSecurity
+	adminPasskeys       map[string]AdminPasskey
+	pendingAdminMFAs    map[string]PendingAdminMFA
+	adminTrustedDevices map[string]AdminTrustedDevice
 }
 
 func NewMemory() *Memory {
@@ -39,6 +48,13 @@ func NewMemory() *Memory {
 		mojangRoutes:        make(map[string]mojang.Route),
 		downstreamServers:   make(map[string]DownstreamServer),
 		extensionData:       make(map[string]ExtensionPlayerData),
+		adminRoles:          make(map[string]rbac.Role),
+		adminUsers:          make(map[string]AdminUser),
+		adminProfiles:       make(map[string]AdminProfile),
+		adminSecurity:       make(map[string]AdminSecurity),
+		adminPasskeys:       make(map[string]AdminPasskey),
+		pendingAdminMFAs:    make(map[string]PendingAdminMFA),
+		adminTrustedDevices: make(map[string]AdminTrustedDevice),
 	}
 	server := defaultDownstreamServer(time.Now().UTC())
 	m.downstreamServers[server.ID] = server
@@ -403,4 +419,330 @@ func (m *Memory) UpsertExtensionPlayerData(ctx context.Context, data ExtensionPl
 	}
 	m.extensionData[data.ID] = data
 	return cloneExtensionPlayerData(data), nil
+}
+
+func (m *Memory) ListAdminRoles(ctx context.Context) []rbac.Role {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	roles := make([]rbac.Role, 0, len(m.adminRoles))
+	for _, role := range m.adminRoles {
+		roles = append(roles, cloneAdminRole(role))
+	}
+	return rbac.MergeDefaultRoles(roles)
+}
+
+func (m *Memory) ListAdminUsers(ctx context.Context) []AdminUser {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	users := make([]AdminUser, 0, len(m.adminUsers))
+	for _, user := range m.adminUsers {
+		user.PasswordHash = ""
+		users = append(users, user)
+	}
+	return users
+}
+
+func (m *Memory) GetAdminUser(ctx context.Context, id string) (AdminUser, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	user, ok := m.adminUsers[id]
+	if !ok {
+		return AdminUser{}, fmt.Errorf("admin user not found: %w", ErrNotFound)
+	}
+	return user, nil
+}
+
+func (m *Memory) FindAdminUserByIdentifier(ctx context.Context, identifier string) (AdminUser, error) {
+	identifier = strings.TrimSpace(identifier)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, user := range m.adminUsers {
+		if strings.EqualFold(user.Username, identifier) || (user.Email != "" && strings.EqualFold(user.Email, identifier)) {
+			return user, nil
+		}
+	}
+	return AdminUser{}, fmt.Errorf("admin user not found: %w", ErrNotFound)
+}
+
+func (m *Memory) CreateAdminUser(ctx context.Context, user AdminUser) (AdminUser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.adminUsers {
+		if strings.EqualFold(existing.Username, user.Username) || (user.Email != "" && strings.EqualFold(existing.Email, user.Email)) {
+			return AdminUser{}, fmt.Errorf("admin user already exists")
+		}
+	}
+	m.nextID++
+	user.ID = "admin-" + strconv.Itoa(m.nextID)
+	now := time.Now().UTC()
+	user.CreatedAt = now
+	user.UpdatedAt = now
+	if user.Status == "" {
+		user.Status = "active"
+	}
+	m.adminUsers[user.ID] = user
+	user.PasswordHash = ""
+	return user, nil
+}
+
+func (m *Memory) UpdateAdminUserProfile(ctx context.Context, id string, username string, email string) (AdminUser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	user, ok := m.adminUsers[id]
+	if !ok {
+		return AdminUser{}, fmt.Errorf("admin user not found: %w", ErrNotFound)
+	}
+	for _, existing := range m.adminUsers {
+		if existing.ID == id {
+			continue
+		}
+		if strings.EqualFold(existing.Username, username) || (email != "" && strings.EqualFold(existing.Email, email)) {
+			return AdminUser{}, fmt.Errorf("admin user already exists")
+		}
+	}
+	user.Username = username
+	user.Email = email
+	user.UpdatedAt = time.Now().UTC()
+	m.adminUsers[id] = user
+	user.PasswordHash = ""
+	return user, nil
+}
+
+func (m *Memory) UpdateAdminUser(ctx context.Context, user AdminUser) (AdminUser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.adminUsers[user.ID]
+	if !ok {
+		return AdminUser{}, fmt.Errorf("admin user not found: %w", ErrNotFound)
+	}
+	for _, other := range m.adminUsers {
+		if other.ID == user.ID {
+			continue
+		}
+		if strings.EqualFold(other.Username, user.Username) || (user.Email != "" && strings.EqualFold(other.Email, user.Email)) {
+			return AdminUser{}, fmt.Errorf("admin user already exists")
+		}
+	}
+	existing.Username = user.Username
+	existing.Email = user.Email
+	existing.Role = user.Role
+	existing.Status = user.Status
+	existing.UpdatedAt = time.Now().UTC()
+	m.adminUsers[user.ID] = existing
+	existing.PasswordHash = ""
+	return existing, nil
+}
+
+func (m *Memory) GetAdminProfile(ctx context.Context, adminID string) (AdminProfile, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	profile, ok := m.adminProfiles[adminID]
+	if !ok {
+		return AdminProfile{}, fmt.Errorf("admin profile not found: %w", ErrNotFound)
+	}
+	return profile, nil
+}
+
+func (m *Memory) UpsertAdminProfile(ctx context.Context, profile AdminProfile) (AdminProfile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	if profile.AdminID == "" {
+		return AdminProfile{}, fmt.Errorf("admin id is required")
+	}
+	if existing, ok := m.adminProfiles[profile.AdminID]; ok && !existing.CreatedAt.IsZero() {
+		profile.CreatedAt = existing.CreatedAt
+	}
+	if profile.CreatedAt.IsZero() {
+		profile.CreatedAt = now
+	}
+	profile.UpdatedAt = now
+	m.adminProfiles[profile.AdminID] = profile
+	return profile, nil
+}
+
+func (m *Memory) UpsertAdminRole(ctx context.Context, role rbac.Role) (rbac.Role, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	if base, ok := rbac.DefaultRole(role.ID); ok {
+		if base.System {
+			return rbac.Role{}, fmt.Errorf("system role cannot be modified")
+		}
+		if role.Name == "" {
+			role.Name = base.Name
+		}
+		if role.Description == "" {
+			role.Description = base.Description
+		}
+	}
+	if existing, ok := m.adminRoles[role.ID]; ok && !existing.CreatedAt.IsZero() {
+		role.CreatedAt = existing.CreatedAt
+	}
+	if role.CreatedAt.IsZero() {
+		role.CreatedAt = now
+	}
+	role.UpdatedAt = now
+	role.System = false
+	role.Permissions = rbac.NormalizePermissions(role.Permissions)
+	m.adminRoles[role.ID] = cloneAdminRole(role)
+	return cloneAdminRole(role), nil
+}
+
+func (m *Memory) DeleteAdminRole(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id = rbac.RoleID(id)
+	if base, ok := rbac.DefaultRole(id); ok && base.System {
+		return fmt.Errorf("system role cannot be deleted")
+	}
+	if _, ok := m.adminRoles[id]; !ok {
+		return fmt.Errorf("role not found: %w", ErrNotFound)
+	}
+	for _, user := range m.adminUsers {
+		if user.Role == id {
+			return fmt.Errorf("role is still assigned")
+		}
+	}
+	delete(m.adminRoles, id)
+	return nil
+}
+
+func (m *Memory) GetAdminSecurity(ctx context.Context, adminID string) (AdminSecurity, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	security, ok := m.adminSecurity[adminID]
+	if !ok {
+		return defaultAdminSecurity(adminID), nil
+	}
+	return security, nil
+}
+
+func (m *Memory) UpsertAdminSecurity(ctx context.Context, security AdminSecurity) (AdminSecurity, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	if security.AdminID == "" {
+		return AdminSecurity{}, fmt.Errorf("admin id is required")
+	}
+	if existing, ok := m.adminSecurity[security.AdminID]; ok && !existing.CreatedAt.IsZero() {
+		security.CreatedAt = existing.CreatedAt
+	}
+	if security.CreatedAt.IsZero() {
+		security.CreatedAt = now
+	}
+	if security.MFARequirement == "" {
+		security.MFARequirement = "new_device"
+	}
+	security.UpdatedAt = now
+	m.adminSecurity[security.AdminID] = security
+	return security, nil
+}
+
+func (m *Memory) ListAdminPasskeys(ctx context.Context, adminID string) []AdminPasskey {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	passkeys := make([]AdminPasskey, 0)
+	for _, passkey := range m.adminPasskeys {
+		if passkey.AdminID == adminID {
+			passkeys = append(passkeys, passkey)
+		}
+	}
+	return passkeys
+}
+
+func (m *Memory) CreateAdminPasskey(ctx context.Context, passkey AdminPasskey) (AdminPasskey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	passkey.ID = "passkey-" + strconv.Itoa(m.nextID)
+	now := time.Now().UTC()
+	passkey.CreatedAt = now
+	m.adminPasskeys[passkey.ID] = passkey
+	return passkey, nil
+}
+
+func (m *Memory) UpdateAdminPasskeyCredential(ctx context.Context, id string, credential webauthn.Credential, lastUsedAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	passkey, ok := m.adminPasskeys[id]
+	if !ok {
+		return fmt.Errorf("passkey not found: %w", ErrNotFound)
+	}
+	passkey.Credential = credential
+	passkey.LastUsedAt = ptrTime(lastUsedAt.UTC())
+	m.adminPasskeys[id] = passkey
+	return nil
+}
+
+func (m *Memory) DeleteAdminPasskey(ctx context.Context, adminID string, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	passkey, ok := m.adminPasskeys[id]
+	if !ok || passkey.AdminID != adminID {
+		return fmt.Errorf("passkey not found: %w", ErrNotFound)
+	}
+	delete(m.adminPasskeys, id)
+	return nil
+}
+
+func (m *Memory) SavePendingAdminMFA(ctx context.Context, pending PendingAdminMFA) (PendingAdminMFA, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	pending.ID = "mfa-" + strconv.Itoa(m.nextID)
+	m.pendingAdminMFAs[pending.ID] = pending
+	return pending, nil
+}
+
+func (m *Memory) GetPendingAdminMFA(ctx context.Context, id string) (PendingAdminMFA, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	pending, ok := m.pendingAdminMFAs[id]
+	if !ok {
+		return PendingAdminMFA{}, fmt.Errorf("pending mfa not found: %w", ErrNotFound)
+	}
+	return pending, nil
+}
+
+func (m *Memory) DeletePendingAdminMFA(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.pendingAdminMFAs, id)
+	return nil
+}
+
+func (m *Memory) CreateAdminTrustedDevice(ctx context.Context, device AdminTrustedDevice) (AdminTrustedDevice, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	device.ID = "trusted-" + strconv.Itoa(m.nextID)
+	device.CreatedAt = time.Now().UTC()
+	m.adminTrustedDevices[device.ID] = device
+	return device, nil
+}
+
+func (m *Memory) GetAdminTrustedDevice(ctx context.Context, tokenHash string, now time.Time) (AdminTrustedDevice, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, device := range m.adminTrustedDevices {
+		if device.TokenHash == tokenHash && now.UTC().Before(device.ExpiresAt) {
+			return device, nil
+		}
+	}
+	return AdminTrustedDevice{}, fmt.Errorf("trusted device not found: %w", ErrNotFound)
+}
+
+func cloneAdminRole(role rbac.Role) rbac.Role {
+	role.Permissions = append([]string(nil), role.Permissions...)
+	return role
+}
+
+func defaultAdminSecurity(adminID string) AdminSecurity {
+	return AdminSecurity{
+		AdminID:         adminID,
+		MFARequirement:  "new_device",
+		PreferredLocale: "system",
+		PreferredTheme:  "system",
+	}
 }

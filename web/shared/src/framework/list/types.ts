@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 /**
  * Per-column filter declaration. `text` filters render as an input,
- * `select` filters render as a <select>. The framework keeps the filter
+ * `select` filters render as the shared custom Select. The framework keeps the filter
  * VALUE as a string regardless of the filter type so URL sync stays trivial.
  */
 export type ListColumnFilter =

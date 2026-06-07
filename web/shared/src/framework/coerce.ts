@@ -88,7 +88,7 @@ export function pick(record: unknown, key: string): unknown {
 /* --------------------------------------------------------------------------
  * Per-resource coercers.
  *
- * Each page in admin-web / player-web should consume the output of these,
+ * Each page in core-web should consume the output of these,
  * not the raw API type. The raw TypeScript type stays as documentation but
  * pages must treat fields as potentially missing.
  * -------------------------------------------------------------------------- */
@@ -232,22 +232,47 @@ export function coerceMojangStatus(raw: unknown): SafeMojangStatus {
 
 export interface SafeAdminUser {
   id: string;
+  username: string;
   email: string;
   display_name: string;
-  role: "owner" | "admin" | "auditor";
+  role: string;
+  role_alias: string;
   status: "active" | "disabled";
   created_at: string | null;
+  security: {
+    totp_enabled: boolean;
+    passkeys: Array<{
+      id: string;
+      name: string;
+      created_at: string | null;
+      last_used_at: string | null;
+    }>;
+  };
 }
 
 export function coerceAdminUser(raw: unknown): SafeAdminUser {
   const r = asRecord(raw);
   return {
     id: asString(r.id, ""),
+    username: asString(r.username, ""),
     email: asString(r.email, ""),
-    display_name: asString(firstDefined(r.display_name, r.name), asString(r.email, "—")),
-    role: mapEnum(r.role, ["owner", "admin", "auditor"] as const, "admin"),
+    display_name: asString(firstDefined(r.username, r.display_name, r.name), asString(r.email, "—")),
+    role: asString(firstDefined(r.role_id, r.role), "admin"),
+    role_alias: asString(firstDefined(r.role_alias, r.alias), ""),
     status: mapEnum(r.status, ["active", "disabled"] as const, "active"),
     created_at: typeof r.created_at === "string" ? r.created_at : null,
+    security: {
+      totp_enabled: asBoolean(asRecord(r.security).totp_enabled, false),
+      passkeys: asArray(asRecord(r.security).passkeys, (item) => {
+        const p = asRecord(item);
+        return {
+          id: asString(p.id, ""),
+          name: asString(p.name, "Passkey"),
+          created_at: typeof p.created_at === "string" ? p.created_at : null,
+          last_used_at: typeof p.last_used_at === "string" ? p.last_used_at : null,
+        };
+      }).filter((p) => p.id !== ""),
+    },
   };
 }
 

@@ -16,6 +16,7 @@ type Config struct {
 	DatabaseURL        string
 	PublicBaseURL      string
 	AdminUsername      string
+	AdminEmail         string
 	AdminPassword      string
 	AdminPasswordHash  string
 	NodeAccessToken    string
@@ -36,6 +37,7 @@ func Load() (Config, error) {
 		DatabaseURL:        envString("AUTHMAN_DATABASE_URL", ""),
 		PublicBaseURL:      envString("AUTHMAN_PUBLIC_BASE_URL", "http://localhost:8080"),
 		AdminUsername:      envString("AUTHMAN_ADMIN_USERNAME", "admin"),
+		AdminEmail:         envString("AUTHMAN_ADMIN_EMAIL", ""),
 		AdminPassword:      envString("AUTHMAN_ADMIN_PASSWORD", ""),
 		AdminPasswordHash:  envString("AUTHMAN_ADMIN_PASSWORD_HASH", ""),
 		NodeAccessToken:    envString("AUTHMAN_NODE_ACCESS_TOKEN", ""),

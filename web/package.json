@@ -4,16 +4,15 @@
   "version": "0.1.0",
   "workspaces": [
     "shared",
-    "admin",
-    "player",
+    "core",
     "e2e"
   ],
   "scripts": {
-    "build:admin": "npm run build -w @authman/admin",
-    "build:player": "npm run build -w @authman/player",
-    "build": "npm run build:admin && npm run build:player",
-    "dev:admin": "npm run dev -w @authman/admin",
-    "dev:player": "npm run dev -w @authman/player",
+    "build:core": "npm run build -w @authman/core",
+    "build:admin": "npm run build:core",
+    "build": "npm run build:core",
+    "dev:core": "npm run dev -w @authman/core",
+    "dev:admin": "npm run dev:core",
     "test:e2e": "npm run test -w @authman/e2e",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },

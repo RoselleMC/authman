@@ -19,6 +19,7 @@ export * from "./components/Button";
 export * from "./components/IconButton";
 export * from "./components/Field";
 export * from "./components/Input";
+export * from "./components/Select";
 export * from "./components/PasswordInput";
 export * from "./components/Badge";
 export * from "./components/StatusBadge";
@@ -42,6 +43,7 @@ export * from "./components/Toaster";
 export * from "./components/BrandMark";
 export * from "./components/PreferenceSelect";
 export * from "./components/ThemeToggle";
+export * from "./components/AccountMenu";
 
 export * from "./extensions/types";
 export * from "./extensions/SchemaRenderer";

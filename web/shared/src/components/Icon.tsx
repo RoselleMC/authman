@@ -32,6 +32,7 @@ const PATHS: Record<string, string> = {
   eyeOff:
     "M4 4l12 12 M8.2 8.3A2 2 0 0 0 10 12a2 2 0 0 0 1.8-1.2 M6.3 6.4C4 7.7 2.5 10 2.5 10S5.5 15 10 15c1 0 1.9-.2 2.7-.6 M9 5.1C9.3 5 9.6 5 10 5c4.5 0 7.5 5 7.5 5a13 13 0 0 1-1.7 2.2",
   plus: "M10 4v12 M4 10h12",
+  trash: "M7 5V3.5h6V5 M4.5 5h11 M6 7v10h8V7 M8.5 9v4.5 M11.5 9v4.5",
   filter: "M3.5 5h13l-5 6v4l-3 1.5V11L3.5 5Z",
   logout: "M12 6V4.5h-7v11h7V14 M8.5 10h8 M14 7.5l2.5 2.5L14 12.5",
   grid: "M4 4h5v5H4zM11 4h5v5h-5zM4 11h5v5H4zM11 11h5v5h-5z",

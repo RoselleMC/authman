@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/RoselleMC/authman/internal/audit"
@@ -16,6 +17,8 @@ import (
 	"github.com/RoselleMC/authman/internal/identity"
 	"github.com/RoselleMC/authman/internal/mojang"
 	"github.com/RoselleMC/authman/internal/node"
+	"github.com/RoselleMC/authman/internal/rbac"
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -701,6 +704,458 @@ func (p *Postgres) UpsertExtensionPlayerData(ctx context.Context, data Extension
 	return out, nil
 }
 
+func (p *Postgres) ListAdminRoles(ctx context.Context) []rbac.Role {
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, name, description, permissions, system, created_at, updated_at
+		FROM admin_roles
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		return rbac.DefaultRoles()
+	}
+	defer rows.Close()
+	roles := make([]rbac.Role, 0)
+	for rows.Next() {
+		var role rbac.Role
+		if err := rows.Scan(&role.ID, &role.Name, &role.Description, &role.Permissions, &role.System, &role.CreatedAt, &role.UpdatedAt); err == nil {
+			role.Permissions = rbac.NormalizePermissions(role.Permissions)
+			roles = append(roles, role)
+		}
+	}
+	return rbac.MergeDefaultRoles(roles)
+}
+
+func (p *Postgres) ListAdminUsers(ctx context.Context) []AdminUser {
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, username, coalesce(email, ''), password_hash, role_id, status, created_at, updated_at
+		FROM admin_users
+		ORDER BY username ASC
+	`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	users := make([]AdminUser, 0)
+	for rows.Next() {
+		user, err := scanAdminUserRow(rows)
+		if err == nil {
+			user.PasswordHash = ""
+			users = append(users, user)
+		}
+	}
+	return users
+}
+
+func (p *Postgres) GetAdminUser(ctx context.Context, id string) (AdminUser, error) {
+	user, err := scanAdminUserRow(p.pool.QueryRow(ctx, `
+		SELECT id, username, coalesce(email, ''), password_hash, role_id, status, created_at, updated_at
+		FROM admin_users
+		WHERE id = $1
+	`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AdminUser{}, fmt.Errorf("admin user not found: %w", ErrNotFound)
+	}
+	return user, err
+}
+
+func (p *Postgres) FindAdminUserByIdentifier(ctx context.Context, identifier string) (AdminUser, error) {
+	user, err := scanAdminUserRow(p.pool.QueryRow(ctx, `
+		SELECT id, username, coalesce(email, ''), password_hash, role_id, status, created_at, updated_at
+		FROM admin_users
+		WHERE lower(username) = lower($1) OR lower(coalesce(email, '')) = lower($1)
+	`, strings.TrimSpace(identifier)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AdminUser{}, fmt.Errorf("admin user not found: %w", ErrNotFound)
+	}
+	return user, err
+}
+
+func (p *Postgres) CreateAdminUser(ctx context.Context, user AdminUser) (AdminUser, error) {
+	id, err := randomID("admin")
+	if err != nil {
+		return AdminUser{}, err
+	}
+	user.ID = id
+	if user.Status == "" {
+		user.Status = "active"
+	}
+	email := any(nil)
+	if user.Email != "" {
+		email = user.Email
+	}
+	err = p.pool.QueryRow(ctx, `
+		INSERT INTO admin_users (id, username, email, password_hash, role_id, status)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, username, coalesce(email, ''), password_hash, role_id, status, created_at, updated_at
+	`, user.ID, user.Username, email, user.PasswordHash, user.Role, user.Status).Scan(
+		&user.ID,
+		&user.Username,
+		&user.Email,
+		&user.PasswordHash,
+		&user.Role,
+		&user.Status,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	if err != nil {
+		return AdminUser{}, err
+	}
+	user.PasswordHash = ""
+	return user, nil
+}
+
+func (p *Postgres) UpdateAdminUserProfile(ctx context.Context, id string, username string, email string) (AdminUser, error) {
+	emailValue := any(nil)
+	if email != "" {
+		emailValue = email
+	}
+	user, err := scanAdminUserRow(p.pool.QueryRow(ctx, `
+		UPDATE admin_users
+		SET username = $2, email = $3, updated_at = now()
+		WHERE id = $1
+		RETURNING id, username, coalesce(email, ''), password_hash, role_id, status, created_at, updated_at
+	`, id, username, emailValue))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AdminUser{}, fmt.Errorf("admin user not found: %w", ErrNotFound)
+	}
+	if err != nil {
+		return AdminUser{}, err
+	}
+	user.PasswordHash = ""
+	return user, nil
+}
+
+func (p *Postgres) UpdateAdminUser(ctx context.Context, user AdminUser) (AdminUser, error) {
+	emailValue := any(nil)
+	if user.Email != "" {
+		emailValue = user.Email
+	}
+	updated, err := scanAdminUserRow(p.pool.QueryRow(ctx, `
+		UPDATE admin_users
+		SET username = $2, email = $3, role_id = $4, status = $5, updated_at = now()
+		WHERE id = $1
+		RETURNING id, username, coalesce(email, ''), password_hash, role_id, status, created_at, updated_at
+	`, user.ID, user.Username, emailValue, user.Role, user.Status))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AdminUser{}, fmt.Errorf("admin user not found: %w", ErrNotFound)
+	}
+	if err != nil {
+		return AdminUser{}, err
+	}
+	updated.PasswordHash = ""
+	return updated, nil
+}
+
+func (p *Postgres) GetAdminProfile(ctx context.Context, adminID string) (AdminProfile, error) {
+	var profile AdminProfile
+	err := p.pool.QueryRow(ctx, `
+		SELECT admin_id, username, coalesce(email, ''), coalesce(avatar_url, ''), created_at, updated_at
+		FROM admin_profiles
+		WHERE admin_id = $1
+	`, adminID).Scan(
+		&profile.AdminID,
+		&profile.Username,
+		&profile.Email,
+		&profile.AvatarURL,
+		&profile.CreatedAt,
+		&profile.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AdminProfile{}, fmt.Errorf("admin profile not found: %w", ErrNotFound)
+	}
+	return profile, err
+}
+
+func (p *Postgres) UpsertAdminProfile(ctx context.Context, profile AdminProfile) (AdminProfile, error) {
+	emailValue := any(nil)
+	if profile.Email != "" {
+		emailValue = profile.Email
+	}
+	err := p.pool.QueryRow(ctx, `
+		INSERT INTO admin_profiles (admin_id, username, email, avatar_url)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (admin_id) DO UPDATE SET
+			username = EXCLUDED.username,
+			email = EXCLUDED.email,
+			avatar_url = EXCLUDED.avatar_url,
+			updated_at = now()
+		RETURNING admin_id, username, coalesce(email, ''), coalesce(avatar_url, ''), created_at, updated_at
+	`, profile.AdminID, profile.Username, emailValue, profile.AvatarURL).Scan(
+		&profile.AdminID,
+		&profile.Username,
+		&profile.Email,
+		&profile.AvatarURL,
+		&profile.CreatedAt,
+		&profile.UpdatedAt,
+	)
+	return profile, err
+}
+
+func (p *Postgres) UpsertAdminRole(ctx context.Context, role rbac.Role) (rbac.Role, error) {
+	if base, ok := rbac.DefaultRole(role.ID); ok {
+		if base.System {
+			return rbac.Role{}, fmt.Errorf("system role cannot be modified")
+		}
+		if role.Name == "" {
+			role.Name = base.Name
+		}
+		if role.Description == "" {
+			role.Description = base.Description
+		}
+	}
+	role.Permissions = rbac.NormalizePermissions(role.Permissions)
+	if role.ID == "" {
+		return rbac.Role{}, fmt.Errorf("role id is required")
+	}
+	err := p.pool.QueryRow(ctx, `
+		INSERT INTO admin_roles (id, name, description, permissions, system)
+		VALUES ($1, $2, $3, $4, false)
+		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
+			description = EXCLUDED.description,
+			permissions = EXCLUDED.permissions,
+			updated_at = now()
+		RETURNING id, name, description, permissions, system, created_at, updated_at
+	`, role.ID, role.Name, role.Description, role.Permissions).Scan(
+		&role.ID,
+		&role.Name,
+		&role.Description,
+		&role.Permissions,
+		&role.System,
+		&role.CreatedAt,
+		&role.UpdatedAt,
+	)
+	if err != nil {
+		return rbac.Role{}, err
+	}
+	role.Permissions = rbac.NormalizePermissions(role.Permissions)
+	return role, nil
+}
+
+func (p *Postgres) DeleteAdminRole(ctx context.Context, id string) error {
+	id = rbac.RoleID(id)
+	if base, ok := rbac.DefaultRole(id); ok && base.System {
+		return fmt.Errorf("system role cannot be deleted")
+	}
+	var assigned bool
+	if err := p.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM admin_users WHERE role_id = $1)`, id).Scan(&assigned); err != nil {
+		return err
+	}
+	if assigned {
+		return fmt.Errorf("role is still assigned")
+	}
+	tag, err := p.pool.Exec(ctx, `DELETE FROM admin_roles WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("role not found: %w", ErrNotFound)
+	}
+	return nil
+}
+
+func (p *Postgres) GetAdminSecurity(ctx context.Context, adminID string) (AdminSecurity, error) {
+	var security AdminSecurity
+	err := p.pool.QueryRow(ctx, `
+		SELECT admin_id, totp_enabled, coalesce(totp_secret, ''), mfa_requirement, preferred_locale, preferred_theme, created_at, updated_at
+		FROM admin_security
+		WHERE admin_id = $1
+	`, adminID).Scan(
+		&security.AdminID,
+		&security.TOTPEnabled,
+		&security.TOTPSecret,
+		&security.MFARequirement,
+		&security.PreferredLocale,
+		&security.PreferredTheme,
+		&security.CreatedAt,
+		&security.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return defaultAdminSecurity(adminID), nil
+	}
+	return security, err
+}
+
+func (p *Postgres) UpsertAdminSecurity(ctx context.Context, security AdminSecurity) (AdminSecurity, error) {
+	if security.MFARequirement == "" {
+		security.MFARequirement = "new_device"
+	}
+	if security.PreferredLocale == "" {
+		security.PreferredLocale = "system"
+	}
+	if security.PreferredTheme == "" {
+		security.PreferredTheme = "system"
+	}
+	err := p.pool.QueryRow(ctx, `
+		INSERT INTO admin_security (admin_id, totp_enabled, totp_secret, mfa_requirement, preferred_locale, preferred_theme)
+		VALUES ($1, $2, nullif($3, ''), $4, $5, $6)
+		ON CONFLICT (admin_id) DO UPDATE SET
+			totp_enabled = EXCLUDED.totp_enabled,
+			totp_secret = EXCLUDED.totp_secret,
+			mfa_requirement = EXCLUDED.mfa_requirement,
+			preferred_locale = EXCLUDED.preferred_locale,
+			preferred_theme = EXCLUDED.preferred_theme,
+			updated_at = now()
+		RETURNING admin_id, totp_enabled, coalesce(totp_secret, ''), mfa_requirement, preferred_locale, preferred_theme, created_at, updated_at
+	`, security.AdminID, security.TOTPEnabled, security.TOTPSecret, security.MFARequirement, security.PreferredLocale, security.PreferredTheme).Scan(
+		&security.AdminID,
+		&security.TOTPEnabled,
+		&security.TOTPSecret,
+		&security.MFARequirement,
+		&security.PreferredLocale,
+		&security.PreferredTheme,
+		&security.CreatedAt,
+		&security.UpdatedAt,
+	)
+	return security, err
+}
+
+func (p *Postgres) ListAdminPasskeys(ctx context.Context, adminID string) []AdminPasskey {
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, admin_id, name, credential_json, created_at, last_used_at
+		FROM admin_passkeys
+		WHERE admin_id = $1
+		ORDER BY created_at ASC
+	`, adminID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	passkeys := make([]AdminPasskey, 0)
+	for rows.Next() {
+		passkey, err := scanAdminPasskeyRow(rows)
+		if err == nil {
+			passkeys = append(passkeys, passkey)
+		}
+	}
+	return passkeys
+}
+
+func (p *Postgres) CreateAdminPasskey(ctx context.Context, passkey AdminPasskey) (AdminPasskey, error) {
+	id, err := randomID("passkey")
+	if err != nil {
+		return AdminPasskey{}, err
+	}
+	passkey.ID = id
+	credentialJSON, err := json.Marshal(passkey.Credential)
+	if err != nil {
+		return AdminPasskey{}, err
+	}
+	return scanAdminPasskeyRow(p.pool.QueryRow(ctx, `
+		INSERT INTO admin_passkeys (id, admin_id, name, credential_id, credential_json)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, admin_id, name, credential_json, created_at, last_used_at
+	`, passkey.ID, passkey.AdminID, passkey.Name, passkey.Credential.ID, credentialJSON))
+}
+
+func (p *Postgres) UpdateAdminPasskeyCredential(ctx context.Context, id string, credential webauthn.Credential, lastUsedAt time.Time) error {
+	credentialJSON, err := json.Marshal(credential)
+	if err != nil {
+		return err
+	}
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE admin_passkeys
+		SET credential_json = $2, last_used_at = $3
+		WHERE id = $1
+	`, id, credentialJSON, lastUsedAt.UTC())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("passkey not found: %w", ErrNotFound)
+	}
+	return nil
+}
+
+func (p *Postgres) DeleteAdminPasskey(ctx context.Context, adminID string, id string) error {
+	tag, err := p.pool.Exec(ctx, `DELETE FROM admin_passkeys WHERE admin_id = $1 AND id = $2`, adminID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("passkey not found: %w", ErrNotFound)
+	}
+	return nil
+}
+
+func (p *Postgres) SavePendingAdminMFA(ctx context.Context, pending PendingAdminMFA) (PendingAdminMFA, error) {
+	id, err := randomID("mfa")
+	if err != nil {
+		return PendingAdminMFA{}, err
+	}
+	pending.ID = id
+	err = p.pool.QueryRow(ctx, `
+		INSERT INTO pending_admin_mfa (id, admin_id, webauthn_session_json, expires_at)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, admin_id, coalesce(webauthn_session_json, '{}'::jsonb), expires_at
+	`, pending.ID, pending.AdminID, optionalJSON(pending.WebAuthnSessionJSON), pending.ExpiresAt).Scan(
+		&pending.ID,
+		&pending.AdminID,
+		&pending.WebAuthnSessionJSON,
+		&pending.ExpiresAt,
+	)
+	return pending, err
+}
+
+func (p *Postgres) GetPendingAdminMFA(ctx context.Context, id string) (PendingAdminMFA, error) {
+	var pending PendingAdminMFA
+	err := p.pool.QueryRow(ctx, `
+		SELECT id, admin_id, coalesce(webauthn_session_json, '{}'::jsonb), expires_at
+		FROM pending_admin_mfa
+		WHERE id = $1
+	`, id).Scan(&pending.ID, &pending.AdminID, &pending.WebAuthnSessionJSON, &pending.ExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PendingAdminMFA{}, fmt.Errorf("pending mfa not found: %w", ErrNotFound)
+	}
+	return pending, err
+}
+
+func (p *Postgres) DeletePendingAdminMFA(ctx context.Context, id string) error {
+	_, err := p.pool.Exec(ctx, `DELETE FROM pending_admin_mfa WHERE id = $1`, id)
+	return err
+}
+
+func (p *Postgres) CreateAdminTrustedDevice(ctx context.Context, device AdminTrustedDevice) (AdminTrustedDevice, error) {
+	id, err := randomID("trusted")
+	if err != nil {
+		return AdminTrustedDevice{}, err
+	}
+	device.ID = id
+	err = p.pool.QueryRow(ctx, `
+		INSERT INTO admin_trusted_devices (id, admin_id, token_hash, user_agent, expires_at)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, admin_id, token_hash, user_agent, created_at, expires_at
+	`, device.ID, device.AdminID, device.TokenHash, device.UserAgent, device.ExpiresAt).Scan(
+		&device.ID,
+		&device.AdminID,
+		&device.TokenHash,
+		&device.UserAgent,
+		&device.CreatedAt,
+		&device.ExpiresAt,
+	)
+	return device, err
+}
+
+func (p *Postgres) GetAdminTrustedDevice(ctx context.Context, tokenHash string, now time.Time) (AdminTrustedDevice, error) {
+	var device AdminTrustedDevice
+	err := p.pool.QueryRow(ctx, `
+		SELECT id, admin_id, token_hash, user_agent, created_at, expires_at
+		FROM admin_trusted_devices
+		WHERE token_hash = $1 AND expires_at > $2
+	`, tokenHash, now.UTC()).Scan(
+		&device.ID,
+		&device.AdminID,
+		&device.TokenHash,
+		&device.UserAgent,
+		&device.CreatedAt,
+		&device.ExpiresAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AdminTrustedDevice{}, fmt.Errorf("trusted device not found: %w", ErrNotFound)
+	}
+	return device, err
+}
+
 func (p *Postgres) scanPlayer(row pgx.Row) (identity.Player, error) {
 	player, err := scanPlayerRow(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -747,6 +1202,48 @@ func scanOfflineCredentialRow(row playerScanner, credential *OfflineCredential) 
 	credential.PasswordUpdatedAt = &updatedAt
 	credential.LockedUntil = lockedUntil
 	return nil
+}
+
+func scanAdminUserRow(row playerScanner) (AdminUser, error) {
+	var user AdminUser
+	err := row.Scan(
+		&user.ID,
+		&user.Username,
+		&user.Email,
+		&user.PasswordHash,
+		&user.Role,
+		&user.Status,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	return user, err
+}
+
+func scanAdminPasskeyRow(row playerScanner) (AdminPasskey, error) {
+	var passkey AdminPasskey
+	var credentialJSON []byte
+	err := row.Scan(
+		&passkey.ID,
+		&passkey.AdminID,
+		&passkey.Name,
+		&credentialJSON,
+		&passkey.CreatedAt,
+		&passkey.LastUsedAt,
+	)
+	if err != nil {
+		return AdminPasskey{}, err
+	}
+	if err := json.Unmarshal(credentialJSON, &passkey.Credential); err != nil {
+		return AdminPasskey{}, err
+	}
+	return passkey, nil
+}
+
+func optionalJSON(raw []byte) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return json.RawMessage(raw)
 }
 
 func randomID(prefix string) (string, error) {
@@ -953,6 +1450,81 @@ CREATE TABLE IF NOT EXISTS audit_events (
 	event_type text NOT NULL,
 	details jsonb NOT NULL DEFAULT '{}'::jsonb
 );
+
+CREATE TABLE IF NOT EXISTS admin_roles (
+	id text PRIMARY KEY,
+	name text NOT NULL,
+	description text NOT NULL DEFAULT '',
+	permissions text[] NOT NULL DEFAULT ARRAY[]::text[],
+	system boolean NOT NULL DEFAULT false,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS admin_users (
+	id text PRIMARY KEY,
+	username text NOT NULL UNIQUE,
+	email text UNIQUE,
+	password_hash text NOT NULL,
+	role_id text NOT NULL,
+	status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+	created_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS admin_profiles (
+	admin_id text PRIMARY KEY,
+	username text NOT NULL,
+	email text,
+	avatar_url text NOT NULL DEFAULT '',
+	created_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS admin_security (
+	admin_id text PRIMARY KEY,
+	totp_enabled boolean NOT NULL DEFAULT false,
+	totp_secret text,
+	mfa_requirement text NOT NULL DEFAULT 'new_device' CHECK (mfa_requirement IN ('new_device', 'always')),
+	preferred_locale text NOT NULL DEFAULT 'system',
+	preferred_theme text NOT NULL DEFAULT 'system',
+	created_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS admin_passkeys (
+	id text PRIMARY KEY,
+	admin_id text NOT NULL,
+	name text NOT NULL,
+	credential_id bytea NOT NULL UNIQUE,
+	credential_json jsonb NOT NULL,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	last_used_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS admin_passkeys_admin_id_idx ON admin_passkeys (admin_id);
+
+CREATE TABLE IF NOT EXISTS pending_admin_mfa (
+	id text PRIMARY KEY,
+	admin_id text NOT NULL,
+	webauthn_session_json jsonb,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	expires_at timestamptz NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS pending_admin_mfa_expires_at_idx ON pending_admin_mfa (expires_at);
+
+CREATE TABLE IF NOT EXISTS admin_trusted_devices (
+	id text PRIMARY KEY,
+	admin_id text NOT NULL,
+	token_hash text NOT NULL UNIQUE,
+	user_agent text NOT NULL DEFAULT '',
+	created_at timestamptz NOT NULL DEFAULT now(),
+	expires_at timestamptz NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS admin_trusted_devices_admin_id_idx ON admin_trusted_devices (admin_id);
+CREATE INDEX IF NOT EXISTS admin_trusted_devices_expires_at_idx ON admin_trusted_devices (expires_at);
 
 CREATE TABLE IF NOT EXISTS velocity_nodes (
 	id text PRIMARY KEY,

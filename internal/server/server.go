@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/RoselleMC/authman/internal/api"
@@ -16,6 +18,7 @@ import (
 	"github.com/RoselleMC/authman/internal/node"
 	"github.com/RoselleMC/authman/internal/store"
 	"github.com/RoselleMC/authman/internal/yggdrasil"
+	"github.com/go-webauthn/webauthn/webauthn"
 )
 
 type Options struct {
@@ -46,6 +49,7 @@ type Server struct {
 	extensions     *extensions.Registry
 	passwordParams auth.Argon2idParams
 	mojangVerifier *mojang.SessionVerifier
+	webAuthn       *webauthn.WebAuthn
 }
 
 func New(options Options) *Server {
@@ -63,6 +67,7 @@ func New(options Options) *Server {
 		passwordParams: options.PasswordParams,
 		mojangVerifier: newMojangVerifier(options.Config),
 	}
+	s.webAuthn = newWebAuthn(options.Config, logger)
 	if s.store == nil {
 		s.store = store.NewMemory()
 	}
@@ -75,6 +80,36 @@ func New(options Options) *Server {
 	s.reloadMojangRoutes(context.Background())
 	s.routes()
 	return s
+}
+
+func newWebAuthn(cfg config.Config, logger *slog.Logger) *webauthn.WebAuthn {
+	origins := make([]string, 0, len(cfg.CORSAllowedOrigins)+1)
+	if cfg.PublicBaseURL != "" {
+		origins = append(origins, strings.TrimRight(cfg.PublicBaseURL, "/"))
+	}
+	for _, origin := range cfg.CORSAllowedOrigins {
+		if origin != "" {
+			origins = append(origins, strings.TrimRight(origin, "/"))
+		}
+	}
+	rpID := "localhost"
+	for _, origin := range origins {
+		parsed, err := url.Parse(origin)
+		if err == nil && parsed.Hostname() != "" {
+			rpID = parsed.Hostname()
+			break
+		}
+	}
+	w, err := webauthn.New(&webauthn.Config{
+		RPID:          rpID,
+		RPDisplayName: "Authman",
+		RPOrigins:     origins,
+	})
+	if err != nil {
+		logger.Warn("webauthn disabled", "error", err)
+		return nil
+	}
+	return w
 }
 
 func newMojangVerifier(cfg config.Config) *mojang.SessionVerifier {
@@ -143,6 +178,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/admin/bootstrap", s.handleAdminBootstrap)
 	s.mux.HandleFunc("GET /api/admin/bootstrap/status", s.handleAdminBootstrap)
 	s.mux.HandleFunc("POST /api/admin/session/login", s.handleAdminLogin)
+	s.mux.HandleFunc("POST /api/admin/session/mfa/totp", s.handleAdminMFATOTP)
+	s.mux.HandleFunc("POST /api/admin/session/mfa/passkey/options", s.handleAdminMFAPasskeyOptions)
+	s.mux.HandleFunc("POST /api/admin/session/mfa/passkey/finish", s.handleAdminMFAPasskeyFinish)
 	s.mux.HandleFunc("GET /api/admin/me", s.handleAdminMe)
 	s.mux.HandleFunc("GET /api/admin/session/me", s.handleAdminMe)
 	s.mux.HandleFunc("POST /api/admin/session/logout", s.handleAdminLogout)
@@ -172,7 +210,25 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/admin/downstream-servers/{id}", s.handleAdminUpdateDownstreamServer)
 	s.mux.HandleFunc("DELETE /api/admin/downstream-servers/{id}", s.handleAdminDeleteDownstreamServer)
 	s.mux.HandleFunc("GET /api/admin/extensions", s.handleAdminExtensions)
+	s.mux.HandleFunc("GET /api/admin/account", s.handleAdminAccount)
+	s.mux.HandleFunc("PUT /api/admin/account/profile", s.handleAdminAccountProfile)
+	s.mux.HandleFunc("PUT /api/admin/account/preferences", s.handleAdminAccountPreferences)
+	s.mux.HandleFunc("POST /api/admin/account/totp/start", s.handleAdminTOTPStart)
+	s.mux.HandleFunc("POST /api/admin/account/totp/confirm", s.handleAdminTOTPConfirm)
+	s.mux.HandleFunc("POST /api/admin/account/totp/disable", s.handleAdminTOTPDisable)
+	s.mux.HandleFunc("POST /api/admin/account/passkeys/options", s.handleAdminPasskeyRegisterOptions)
+	s.mux.HandleFunc("POST /api/admin/account/passkeys/finish", s.handleAdminPasskeyRegisterFinish)
+	s.mux.HandleFunc("DELETE /api/admin/account/passkeys/{id}", s.handleAdminPasskeyDelete)
 	s.mux.HandleFunc("GET /api/admin/users", s.handleAdminUsers)
+	s.mux.HandleFunc("POST /api/admin/users", s.handleAdminCreateUser)
+	s.mux.HandleFunc("PUT /api/admin/users/{id}", s.handleAdminUpdateUser)
+	s.mux.HandleFunc("POST /api/admin/users/{id}/totp/disable", s.handleAdminDisableUserTOTP)
+	s.mux.HandleFunc("DELETE /api/admin/users/{id}/passkeys/{passkey_id}", s.handleAdminDeleteUserPasskey)
+	s.mux.HandleFunc("GET /api/admin/permissions", s.handleAdminPermissions)
+	s.mux.HandleFunc("GET /api/admin/roles", s.handleAdminRoles)
+	s.mux.HandleFunc("POST /api/admin/roles", s.handleAdminCreateRole)
+	s.mux.HandleFunc("PUT /api/admin/roles/{id}", s.handleAdminUpdateRole)
+	s.mux.HandleFunc("DELETE /api/admin/roles/{id}", s.handleAdminDeleteRole)
 	s.mux.HandleFunc("GET /api/admin/system/summary", s.handleAdminSystemSummary)
 	s.mux.HandleFunc("POST /api/node/heartbeat", s.handleNodeHeartbeat)
 	s.mux.HandleFunc("POST /api/node/players/resolve", s.handleNodeResolvePlayer)

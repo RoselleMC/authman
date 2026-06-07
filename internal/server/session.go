@@ -7,10 +7,13 @@ import (
 
 	"github.com/RoselleMC/authman/internal/api"
 	"github.com/RoselleMC/authman/internal/auth"
+	"github.com/RoselleMC/authman/internal/rbac"
 )
 
 const (
 	adminSessionCookie  = "authman_admin_session"
+	adminMFACookie      = "authman_admin_mfa"
+	adminTrustedCookie  = "authman_admin_trusted"
 	playerSessionCookie = "authman_player_session"
 	csrfHeader          = "X-CSRF-Token"
 )
@@ -50,6 +53,25 @@ func (s *Server) requireSession(r *http.Request, cookieName string, kind auth.Se
 
 func (s *Server) requireAdmin(r *http.Request, csrf bool) (auth.Session, *api.Error) {
 	return s.requireSession(r, adminSessionCookie, auth.SessionAdmin, csrf)
+}
+
+func (s *Server) requireAdminPermission(r *http.Request, csrf bool, permission string) (auth.Session, *api.Error) {
+	session, err := s.requireAdmin(r, csrf)
+	if err != nil {
+		return auth.Session{}, err
+	}
+	user, userErr := s.adminDataForSession(r.Context(), session.SubjectID)
+	if userErr != nil {
+		return auth.Session{}, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "admin user no longer exists")
+	}
+	grants, ok := user["permissions"].([]string)
+	if !ok {
+		return auth.Session{}, api.NewError(http.StatusForbidden, "auth.forbidden", "missing permission")
+	}
+	if !rbac.HasPermission(grants, permission) {
+		return auth.Session{}, api.NewError(http.StatusForbidden, "auth.forbidden", "missing permission")
+	}
+	return session, nil
 }
 
 func (s *Server) requirePlayer(r *http.Request, csrf bool) (auth.Session, *api.Error) {

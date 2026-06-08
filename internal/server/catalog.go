@@ -96,6 +96,7 @@ func portalServerConfigData(server store.DownstreamServer) map[string]any {
 	data["current_context"] = true
 	data["portal_config"] = server.PortalConfig
 	data["extension_providers"] = server.ExtensionProviders
+	data["target"] = store.DownstreamTargetData(store.DownstreamTargetFromServer(server))
 	return data
 }
 
@@ -108,6 +109,7 @@ func downstreamServerData(server store.DownstreamServer) map[string]any {
 		"registration_open":   server.RegistrationOpen,
 		"portal_theme":        server.PortalTheme,
 		"portal_config":       server.PortalConfig,
+		"target":              store.DownstreamTargetData(store.DownstreamTargetFromServer(server)),
 		"extension_providers": server.ExtensionProviders,
 		"created_at":          server.CreatedAt,
 		"updated_at":          server.UpdatedAt,

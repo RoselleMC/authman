@@ -6,7 +6,10 @@ import com.google.gson.JsonObject
 import com.velocitypowered.api.util.GameProfile
 import mc.roselle.authman.config.AuthmanConfig
 import mc.roselle.authman.model.AuthResult
+import mc.roselle.authman.model.DownstreamTarget
+import mc.roselle.authman.model.GateConsumeResult
 import mc.roselle.authman.model.ResolvedPlayer
+import mc.roselle.authman.model.TransferGrant
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
@@ -40,6 +43,20 @@ class AuthmanClient(
         )
     }
 
+    fun resolvePortalTarget(serverId: String, requestedHost: String): DownstreamTarget {
+        val response = post(
+            "/api/node/portal/targets/resolve",
+            mapOf(
+                "server_id" to serverId,
+                "requested_host" to requestedHost,
+            ),
+        )
+        if (!response.ok) {
+            throw AuthmanHttpException("resolve portal target", response)
+        }
+        return parseTarget(response.jsonData().obj("target"))
+    }
+
     fun authenticatePlayer(username: String, password: String): AuthResult {
         val response = post("/api/node/players/authenticate", mapOf("username" to username, "password" to password))
         if (response.ok) {
@@ -52,6 +69,54 @@ class AuthmanClient(
             return AuthResult(authenticated = false, locked = false, statusCode = response.statusCode)
         }
         throw AuthmanHttpException("authenticate", response)
+    }
+
+    fun createTransferGrant(username: String, serverId: String, requestedHost: String, source: String): TransferGrant {
+        val response = post(
+            "/api/node/portal/transfer-grants",
+            mapOf(
+                "username" to username,
+                "server_id" to serverId,
+                "requested_host" to requestedHost,
+                "source" to source,
+            ),
+        )
+        if (!response.ok) {
+            throw AuthmanHttpException("create transfer grant", response)
+        }
+        val data = response.jsonData()
+        return TransferGrant(
+            token = data.string("token"),
+            target = parseTarget(data.obj("target")),
+        )
+    }
+
+    fun consumeTransferGrant(token: String, serverId: String, uuid: String, protocolName: String, source: String): GateConsumeResult {
+        val response = post(
+            "/api/node/gate/transfer-grants/consume",
+            mapOf(
+                "token" to token,
+                "server_id" to serverId,
+                "uuid" to uuid,
+                "protocol_name" to protocolName,
+                "source" to source,
+            ),
+        )
+        if (!response.ok) {
+            throw AuthmanHttpException("consume transfer grant", response)
+        }
+        val player = response.jsonData().obj("player")
+        return GateConsumeResult(
+            allowed = true,
+            resolved = ResolvedPlayer(
+                uuid = UUID.fromString(player.string("uuid")),
+                protocolName = player.string("protocol_name"),
+                locked = player.boolean("locked"),
+                authRequired = false,
+                properties = parseProperties(player["properties"]),
+                stripOfflinePrefix = false,
+            ),
+        )
     }
 
     fun heartbeat(
@@ -73,7 +138,7 @@ class AuthmanClient(
         )
     }
 
-    private fun post(path: String, body: Map<String, String>, includeInstanceHeader: Boolean = true): AuthmanResponse {
+    private fun post(path: String, body: Map<String, Any?>, includeInstanceHeader: Boolean = true): AuthmanResponse {
         val builder = HttpRequest.newBuilder()
             .uri(config.apiBase.resolve(path))
             .timeout(config.requestTimeout)
@@ -86,6 +151,21 @@ class AuthmanClient(
         val response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString())
         return AuthmanResponse(response.statusCode(), response.body(), gson)
     }
+}
+
+private fun parseTarget(target: JsonObject): DownstreamTarget {
+    return DownstreamTarget(
+        serverId = target.string("server_id"),
+        slug = target.string("slug"),
+        displayName = target.string("display_name"),
+        host = target.string("host"),
+        port = target.int("port", 25565),
+        transferHost = target.string("transfer_host"),
+        transferPort = target.int("transfer_port", 25565),
+        motd = target.string("motd"),
+        gateEnabled = target.boolean("gate_enabled", true),
+        grantTtlSeconds = target.int("grant_ttl_seconds", 45),
+    )
 }
 
 data class AuthmanResponse(
@@ -112,6 +192,9 @@ private fun JsonObject.string(key: String): String =
 
 private fun JsonObject.boolean(key: String, fallback: Boolean = false): Boolean =
     get(key)?.takeIf { !it.isJsonNull }?.asBoolean ?: fallback
+
+private fun JsonObject.int(key: String, fallback: Int = 0): Int =
+    get(key)?.takeIf { !it.isJsonNull }?.asInt ?: fallback
 
 private fun parseProperties(element: JsonElement?): List<GameProfile.Property> {
     if (element == null || element.isJsonNull || !element.isJsonArray) {

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -170,6 +171,31 @@ type resolvePlayerRequest struct {
 	Username string `json:"username"`
 }
 
+type resolvePortalTargetRequest struct {
+	ServerID      string `json:"server_id"`
+	Slug          string `json:"slug"`
+	RequestedHost string `json:"requested_host"`
+}
+
+type createTransferGrantRequest struct {
+	PlayerID      string `json:"player_id"`
+	Username      string `json:"username"`
+	ServerID      string `json:"server_id"`
+	Slug          string `json:"slug"`
+	RequestedHost string `json:"requested_host"`
+	Source        string `json:"source"`
+	TTLSeconds    int    `json:"ttl_seconds"`
+}
+
+type consumeTransferGrantRequest struct {
+	Token        string `json:"token"`
+	TokenHash    string `json:"token_hash"`
+	ServerID     string `json:"server_id"`
+	UUID         string `json:"uuid"`
+	ProtocolName string `json:"protocol_name"`
+	Source       string `json:"source"`
+}
+
 func (s *Server) requireNode(r *http.Request) (node.Node, *api.Error) {
 	token, ok := bearerToken(r)
 	if !ok {
@@ -204,17 +230,25 @@ func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request)
 		api.WriteError(w, err)
 		return
 	}
-	player, err := s.store.GetOfflinePlayer(r.Context(), strings.TrimPrefix(req.Username, "#"))
+	player, err := s.store.GetOfflinePlayer(r.Context(), normalizeNodeUsername(req.Username))
 	if err != nil {
-		api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
-		return
+		player, err = s.store.GetPlayerByProtocolName(r.Context(), strings.TrimSpace(req.Username))
+		if err != nil {
+			api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
+			return
+		}
 	}
-	premiumNameExists := s.store.PremiumNameExists(r.Context(), player.RawOfflineName)
+	authRequired := player.Kind == identity.PlayerKindOffline && !player.Locked
+	authKind := "premium"
+	if player.Kind == identity.PlayerKindOffline {
+		authKind = "offline_password"
+	}
+	premiumNameExists := player.Kind == identity.PlayerKindOffline && s.store.PremiumNameExists(r.Context(), player.RawOfflineName)
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"player": playerData(player),
 		"auth": map[string]any{
-			"required": !player.Locked,
-			"kind":     "offline_password",
+			"required": authRequired,
+			"kind":     authKind,
 			"locked":   player.Locked,
 		},
 		"display": map[string]any{
@@ -250,7 +284,7 @@ func (s *Server) handleNodeAuthenticatePlayer(w http.ResponseWriter, r *http.Req
 		api.WriteError(w, err)
 		return
 	}
-	player, credential, err := s.store.GetOfflineCredential(r.Context(), strings.TrimPrefix(req.Username, "#"))
+	player, credential, err := s.store.GetOfflineCredential(r.Context(), normalizeNodeUsername(req.Username))
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
 		return
@@ -271,6 +305,176 @@ func (s *Server) handleNodeAuthenticatePlayer(w http.ResponseWriter, r *http.Req
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"authenticated": true,
 		"player":        playerData(player),
+	}, nil)
+}
+
+func (s *Server) handleNodeResolvePortalTarget(w http.ResponseWriter, r *http.Request) {
+	n, nodeErr := s.requireNode(r)
+	if nodeErr != nil {
+		api.WriteError(w, nodeErr)
+		return
+	}
+	var req resolvePortalTargetRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	server, target, apiErr := s.resolveDownstreamTarget(r.Context(), n, req.ServerID, req.Slug, req.RequestedHost)
+	if apiErr != nil {
+		api.WriteError(w, apiErr)
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, map[string]any{
+		"server": downstreamServerData(server),
+		"target": store.DownstreamTargetData(target),
+	}, nil)
+}
+
+func (s *Server) handleNodeCreateTransferGrant(w http.ResponseWriter, r *http.Request) {
+	n, nodeErr := s.requireNode(r)
+	if nodeErr != nil {
+		api.WriteError(w, nodeErr)
+		return
+	}
+	var req createTransferGrantRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	server, target, apiErr := s.resolveDownstreamTarget(r.Context(), n, req.ServerID, req.Slug, req.RequestedHost)
+	if apiErr != nil {
+		api.WriteError(w, apiErr)
+		return
+	}
+	if target.Status != "active" {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "server.unavailable", "downstream server is not active"))
+		return
+	}
+	player, apiErr := s.playerFromTransferGrantRequest(r.Context(), req)
+	if apiErr != nil {
+		api.WriteError(w, apiErr)
+		return
+	}
+	if player.Locked {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.account_locked", "account is locked"))
+		return
+	}
+	ttlSeconds := target.GrantTTLSeconds
+	if req.TTLSeconds > 0 && req.TTLSeconds < ttlSeconds {
+		ttlSeconds = req.TTLSeconds
+	}
+	if ttlSeconds < 5 {
+		ttlSeconds = 5
+	}
+	if ttlSeconds > 300 {
+		ttlSeconds = 300
+	}
+	now := time.Now()
+	grant, rawToken, err := auth.NewTransferGrant(
+		player.ID,
+		server.ID,
+		n.ID,
+		portalGrantSource(n, req.Source),
+		player.UUID.String(),
+		player.ProtocolName,
+		target.TransferHost,
+		target.TransferPort,
+		time.Duration(ttlSeconds)*time.Second,
+		now,
+	)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "transfer_grant.create_failed", "failed to create transfer grant"))
+		return
+	}
+	if err := s.store.SaveTransferGrant(r.Context(), grant); err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "transfer_grant.save_failed", "failed to save transfer grant"))
+		return
+	}
+	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.create", map[string]any{
+		"server_id":     server.ID,
+		"target_host":   target.TransferHost,
+		"target_port":   target.TransferPort,
+		"protocol_name": player.ProtocolName,
+		"expires_at":    grant.ExpiresAt,
+	})
+	api.WriteJSON(w, http.StatusCreated, map[string]any{
+		"grant":  transferGrantData(grant),
+		"token":  rawToken,
+		"target": store.DownstreamTargetData(target),
+		"player": playerData(player),
+	}, nil)
+}
+
+func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.Request) {
+	n, nodeErr := s.requireNode(r)
+	if nodeErr != nil {
+		api.WriteError(w, nodeErr)
+		return
+	}
+	var req consumeTransferGrantRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	serverID := strings.TrimSpace(req.ServerID)
+	if serverID == "" {
+		serverID = n.ServerID
+	}
+	if serverID == "" {
+		serverID = "default"
+	}
+	server, err := s.store.GetDownstreamServer(r.Context(), serverID)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "server.not_found", "server not found"))
+		return
+	}
+	target := store.DownstreamTargetFromServer(server)
+	if !target.GateEnabled {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "gate.disabled", "gate validation is disabled for this downstream server"))
+		return
+	}
+	tokenHash := strings.TrimSpace(req.TokenHash)
+	if tokenHash == "" && strings.TrimSpace(req.Token) != "" {
+		tokenHash = auth.TransferGrantHash(strings.TrimSpace(req.Token))
+	}
+	if tokenHash == "" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "transfer_grant.token_required", "transfer grant token is required"))
+		return
+	}
+	uuid := strings.TrimSpace(req.UUID)
+	protocolName := strings.TrimSpace(req.ProtocolName)
+	if uuid == "" || protocolName == "" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "transfer_grant.identity_required", "uuid and protocol name are required"))
+		return
+	}
+	grant, err := s.store.ConsumeTransferGrant(r.Context(), tokenHash, server.ID, uuid, protocolName, n.ID, target.AllowedPortalSources, time.Now())
+	if err != nil {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "transfer_grant.reject", map[string]any{
+			"reason":        err.Error(),
+			"protocol_name": protocolName,
+			"uuid":          uuid,
+			"source":        req.Source,
+		})
+		api.WriteError(w, api.NewError(http.StatusForbidden, "transfer_grant.invalid", err.Error()))
+		return
+	}
+	player, err := s.store.GetPlayerByID(r.Context(), grant.PlayerID)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
+		return
+	}
+	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.consume", map[string]any{
+		"server_id":     server.ID,
+		"protocol_name": protocolName,
+		"uuid":          uuid,
+		"source":        req.Source,
+		"portal_source": grant.PortalSource,
+	})
+	api.WriteJSON(w, http.StatusOK, map[string]any{
+		"allowed": true,
+		"grant":   transferGrantData(grant),
+		"player":  playerData(player),
+		"target":  store.DownstreamTargetData(target),
 	}, nil)
 }
 
@@ -338,15 +542,140 @@ func (s *Server) playerFromExtensionRequest(ctx context.Context, req upsertExten
 		}
 		return player, nil
 	}
-	username := strings.TrimPrefix(strings.TrimSpace(req.Username), "#")
+	username := normalizeNodeUsername(req.Username)
 	if username == "" {
 		return identity.Player{}, api.NewError(http.StatusBadRequest, "player.required", "player is required")
 	}
 	player, err := s.store.GetOfflinePlayer(ctx, username)
 	if err != nil {
-		return identity.Player{}, api.NewError(http.StatusNotFound, "player.not_found", "player not found")
+		player, err = s.store.GetPlayerByProtocolName(ctx, strings.TrimSpace(req.Username))
+		if err != nil {
+			return identity.Player{}, api.NewError(http.StatusNotFound, "player.not_found", "player not found")
+		}
 	}
 	return player, nil
+}
+
+func (s *Server) playerFromTransferGrantRequest(ctx context.Context, req createTransferGrantRequest) (identity.Player, *api.Error) {
+	if strings.TrimSpace(req.PlayerID) != "" {
+		player, err := s.store.GetPlayerByID(ctx, strings.TrimSpace(req.PlayerID))
+		if err != nil {
+			return identity.Player{}, api.NewError(http.StatusNotFound, "player.not_found", "player not found")
+		}
+		return player, nil
+	}
+	username := normalizeNodeUsername(req.Username)
+	if username == "" {
+		return identity.Player{}, api.NewError(http.StatusBadRequest, "player.required", "player is required")
+	}
+	player, err := s.store.GetOfflinePlayer(ctx, username)
+	if err != nil {
+		player, err = s.store.GetPlayerByProtocolName(ctx, strings.TrimSpace(req.Username))
+		if err != nil {
+			return identity.Player{}, api.NewError(http.StatusNotFound, "player.not_found", "player not found")
+		}
+	}
+	return player, nil
+}
+
+func (s *Server) resolveDownstreamTarget(ctx context.Context, n node.Node, serverID string, slug string, requestedHost string) (store.DownstreamServer, store.DownstreamTarget, *api.Error) {
+	candidate := strings.TrimSpace(serverID)
+	if candidate == "" {
+		candidate = strings.TrimSpace(slug)
+	}
+	if candidate == "" {
+		host := normalizeRequestedHost(requestedHost)
+		if host != "" {
+			for _, server := range s.store.ListDownstreamServers(ctx) {
+				for _, portalHost := range stringSliceFromAnyServer(server.PortalConfig["portal_hosts"]) {
+					if strings.EqualFold(normalizeRequestedHost(portalHost), host) {
+						target := store.DownstreamTargetFromServer(server)
+						return server, target, nil
+					}
+				}
+				if strings.EqualFold(server.Slug, host) {
+					target := store.DownstreamTargetFromServer(server)
+					return server, target, nil
+				}
+			}
+		}
+	}
+	if candidate == "" {
+		candidate = strings.TrimSpace(n.ServerID)
+	}
+	if candidate == "" {
+		candidate = "default"
+	}
+	server, err := s.store.GetDownstreamServer(ctx, candidate)
+	if err != nil {
+		return store.DownstreamServer{}, store.DownstreamTarget{}, api.NewError(http.StatusNotFound, "server.not_found", "server not found")
+	}
+	target := store.DownstreamTargetFromServer(server)
+	return server, target, nil
+}
+
+func normalizeNodeUsername(username string) string {
+	return strings.TrimPrefix(strings.TrimSpace(username), "#")
+}
+
+func normalizeRequestedHost(value string) string {
+	host := strings.ToLower(strings.TrimSpace(value))
+	if host == "" {
+		return ""
+	}
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+	return strings.Trim(host, "[]")
+}
+
+func portalSourceAllowed(source string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return false
+	}
+	for _, allowedSource := range allowed {
+		if strings.EqualFold(strings.TrimSpace(allowedSource), source) {
+			return true
+		}
+	}
+	return false
+}
+
+func portalGrantSource(n node.Node, requested string) string {
+	source := strings.TrimSpace(requested)
+	if source != "" {
+		return source
+	}
+	if strings.TrimSpace(n.Name) != "" {
+		return strings.TrimSpace(n.Name)
+	}
+	return strings.TrimSpace(n.ID)
+}
+
+func stringSliceFromAnyServer(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				out = append(out, strings.TrimSpace(text))
+			}
+		}
+		return out
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return []string{}
+		}
+		return strings.Split(typed, ",")
+	default:
+		return []string{}
+	}
 }
 
 type createPortalLinkRequest struct {
@@ -366,7 +695,7 @@ func (s *Server) handleNodeCreatePortalLink(w http.ResponseWriter, r *http.Reque
 		api.WriteError(w, err)
 		return
 	}
-	player, err := s.store.GetOfflinePlayer(r.Context(), strings.TrimPrefix(req.Username, "#"))
+	player, err := s.store.GetOfflinePlayer(r.Context(), normalizeNodeUsername(req.Username))
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
 		return
@@ -449,4 +778,22 @@ func nodeStatus(n node.Node) string {
 		return "stale"
 	}
 	return "active"
+}
+
+func transferGrantData(grant auth.TransferGrant) map[string]any {
+	return map[string]any{
+		"id":             grant.ID,
+		"player_id":      grant.PlayerID,
+		"server_id":      grant.ServerID,
+		"portal_node_id": grant.PortalNodeID,
+		"portal_source":  grant.PortalSource,
+		"gate_node_id":   grant.GateNodeID,
+		"uuid":           grant.UUID,
+		"protocol_name":  grant.ProtocolName,
+		"target_host":    grant.TargetHost,
+		"target_port":    grant.TargetPort,
+		"created_at":     grant.CreatedAt,
+		"expires_at":     grant.ExpiresAt,
+		"consumed_at":    grant.ConsumedAt,
+	}
 }

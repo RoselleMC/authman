@@ -108,7 +108,9 @@ type AdminTrustedDevice struct {
 
 type PlayerStore interface {
 	CreateOfflinePlayer(ctx context.Context, rawName string, passwordHash string) (identity.Player, error)
+	UpsertPremiumPlayer(ctx context.Context, name string, uuid identity.UUID, properties []identity.ProfileProperty) (identity.Player, error)
 	GetOfflinePlayer(ctx context.Context, rawName string) (identity.Player, error)
+	GetPlayerByProtocolName(ctx context.Context, protocolName string) (identity.Player, error)
 	PremiumNameExists(ctx context.Context, rawName string) bool
 	GetPlayerByID(ctx context.Context, id string) (identity.Player, error)
 	GetOfflineCredential(ctx context.Context, rawName string) (identity.Player, OfflineCredential, error)
@@ -133,6 +135,8 @@ type PlayerStore interface {
 	GetDownstreamServer(ctx context.Context, idOrSlug string) (DownstreamServer, error)
 	UpsertDownstreamServer(ctx context.Context, server DownstreamServer) (DownstreamServer, error)
 	DeleteDownstreamServer(ctx context.Context, id string) error
+	SaveTransferGrant(ctx context.Context, grant auth.TransferGrant) error
+	ConsumeTransferGrant(ctx context.Context, tokenHash string, serverID string, uuid string, protocolName string, gateNodeID string, allowedPortalSources []string, now time.Time) (auth.TransferGrant, error)
 	ListExtensionPlayerData(ctx context.Context, playerID string, serverSlug string, includePrivate bool) []ExtensionPlayerData
 	UpsertExtensionPlayerData(ctx context.Context, data ExtensionPlayerData) (ExtensionPlayerData, error)
 	ListAdminUsers(ctx context.Context) []AdminUser

@@ -68,6 +68,9 @@ class AuthmanMessages(private val config: AuthmanConfig) {
         player.sendMessage(Component.text("Authman 暂时不可用，请稍后重试 / Authman is temporarily unavailable.", NamedTextColor.RED))
     }
 
+    fun temporaryUnavailable(): Component =
+        Component.text("Authman 暂时不可用，请稍后重试。\nAuthman is temporarily unavailable.", NamedTextColor.RED)
+
     fun sendCooldownIgnored(player: Player) {
         player.sendMessage(Component.text("操作过快，请稍后再试 / Please wait before trying again.", NamedTextColor.YELLOW))
     }

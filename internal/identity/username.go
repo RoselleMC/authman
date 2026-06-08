@@ -46,7 +46,7 @@ func NormalizeOfflineName(raw string) (OfflineName, error) {
 	return OfflineName{
 		Raw:        name,
 		Normalized: normalized,
-		Protocol:   "#" + name,
+		Protocol:   name,
 	}, nil
 }
 

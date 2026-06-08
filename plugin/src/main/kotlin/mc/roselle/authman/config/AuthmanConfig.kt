@@ -11,6 +11,9 @@ import java.time.Duration
 
 @ConfigSerializable
 class AuthmanConfig {
+    @field:Setting("mode")
+    var mode: String = "portal"
+
     @field:Setting("api")
     var api: ApiConfig = ApiConfig()
 
@@ -26,6 +29,15 @@ class AuthmanConfig {
     @field:Setting("servers")
     var servers: ServersConfig = ServersConfig()
 
+    @field:Setting("portal")
+    var portal: PortalConfig = PortalConfig()
+
+    @field:Setting("gate")
+    var gate: GateConfig = GateConfig()
+
+    @field:Setting("dialog")
+    var dialog: DialogConfig = DialogConfig()
+
     @field:Setting("email")
     var email: EmailConfig = EmailConfig()
 
@@ -40,6 +52,9 @@ class AuthmanConfig {
 
     val nodeName: String
         get() = node.name.trim().ifEmpty { "velocity" }
+
+    val runtimeMode: RuntimeMode
+        get() = RuntimeMode.from(mode)
 
     val serverId: String
         get() = node.serverId.trim().ifEmpty { "default" }
@@ -71,6 +86,33 @@ class AuthmanConfig {
     val holdingServer: String
         get() = servers.holding.trim()
 
+    val transferCookieKey: String
+        get() = gate.transferCookieKey.trim().ifEmpty { "authman:transfer_grant" }
+
+    val gateInitialServer: String
+        get() = gate.initialServer.trim()
+
+    val gateHoldingServer: String
+        get() = gate.holdingServer.trim()
+
+    val gateValidationTimeoutSeconds: Long
+        get() = gate.validationTimeoutSeconds.coerceAtLeast(3)
+
+    val portalRequestedServerId: String
+        get() = portal.serverId.trim()
+
+    val portalRequestedHost: String
+        get() = portal.requestedHost.trim()
+
+    val portalSourceId: String
+        get() = portal.sourceId.trim().ifEmpty { nodeName }
+
+    val dialogEnabled: Boolean
+        get() = dialog.enabled
+
+    val dialogFallbackChatEnabled: Boolean
+        get() = dialog.fallbackChat
+
     val emailVerificationMode: String
         get() = email.verificationMode.trim().lowercase()
 
@@ -80,6 +122,7 @@ class AuthmanConfig {
     fun validate(configPath: Path) {
         require(api.baseUrl.isNotBlank()) { "api.base-url must be configured in $configPath" }
         require(nodeToken.isNotEmpty()) { "api.node-token must be configured in $configPath" }
+        RuntimeMode.from(mode)
     }
 
     companion object {
@@ -106,6 +149,21 @@ class AuthmanConfig {
                 ?: error("bundled $CONFIG_FILE_NAME resource is missing")
             stream.use {
                 Files.copy(it, configPath, StandardCopyOption.REPLACE_EXISTING)
+            }
+        }
+    }
+}
+
+enum class RuntimeMode {
+    PORTAL,
+    GATE;
+
+    companion object {
+        fun from(value: String): RuntimeMode {
+            return when (value.trim().lowercase()) {
+                "", "portal" -> PORTAL
+                "gate" -> GATE
+                else -> error("mode must be portal or gate")
             }
         }
     }
@@ -163,6 +221,42 @@ class ServersConfig {
 
     @field:Setting("holding")
     var holding: String = ""
+}
+
+@ConfigSerializable
+class PortalConfig {
+    @field:Setting("server-id")
+    var serverId: String = ""
+
+    @field:Setting("requested-host")
+    var requestedHost: String = ""
+
+    @field:Setting("source-id")
+    var sourceId: String = ""
+}
+
+@ConfigSerializable
+class GateConfig {
+    @field:Setting("initial-server")
+    var initialServer: String = ""
+
+    @field:Setting("holding-server")
+    var holdingServer: String = ""
+
+    @field:Setting("transfer-cookie-key")
+    var transferCookieKey: String = "authman:transfer_grant"
+
+    @field:Setting("validation-timeout-seconds")
+    var validationTimeoutSeconds: Long = 10
+}
+
+@ConfigSerializable
+class DialogConfig {
+    @field:Setting("enabled")
+    var enabled: Boolean = true
+
+    @field:Setting("fallback-chat")
+    var fallbackChat: Boolean = true
 }
 
 @ConfigSerializable

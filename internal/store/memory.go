@@ -22,12 +22,14 @@ type Memory struct {
 	nextAuditID         int
 	playersByID         map[string]identity.Player
 	offlineByNormalized map[string]string
+	protocolNameIndex   map[string]string
 	credentialsByPlayer map[string]OfflineCredential
 	sessionsByID        map[string]auth.Session
 	portalLinksByToken  map[string]auth.PortalLink
 	auditEvents         []audit.Event
 	mojangRoutes        map[string]mojang.Route
 	downstreamServers   map[string]DownstreamServer
+	transferGrants      map[string]auth.TransferGrant
 	extensionData       map[string]ExtensionPlayerData
 	adminRoles          map[string]rbac.Role
 	adminUsers          map[string]AdminUser
@@ -42,11 +44,13 @@ func NewMemory() *Memory {
 	m := &Memory{
 		playersByID:         make(map[string]identity.Player),
 		offlineByNormalized: make(map[string]string),
+		protocolNameIndex:   make(map[string]string),
 		credentialsByPlayer: make(map[string]OfflineCredential),
 		sessionsByID:        make(map[string]auth.Session),
 		portalLinksByToken:  make(map[string]auth.PortalLink),
 		mojangRoutes:        make(map[string]mojang.Route),
 		downstreamServers:   make(map[string]DownstreamServer),
+		transferGrants:      make(map[string]auth.TransferGrant),
 		extensionData:       make(map[string]ExtensionPlayerData),
 		adminRoles:          make(map[string]rbac.Role),
 		adminUsers:          make(map[string]AdminUser),
@@ -78,10 +82,36 @@ func (m *Memory) CreateOfflinePlayer(ctx context.Context, rawName string, passwo
 	}
 	m.playersByID[player.ID] = player
 	m.offlineByNormalized[name.Normalized] = player.ID
+	m.protocolNameIndex[strings.ToLower(player.ProtocolName)] = player.ID
 	m.credentialsByPlayer[player.ID] = OfflineCredential{
 		PlayerID:     player.ID,
 		PasswordHash: passwordHash,
 	}
+	return player, nil
+}
+
+func (m *Memory) UpsertPremiumPlayer(ctx context.Context, name string, uuid identity.UUID, properties []identity.ProfileProperty) (identity.Player, error) {
+	protocolName := strings.TrimSpace(name)
+	if protocolName == "" {
+		return identity.Player{}, fmt.Errorf("premium name is required")
+	}
+	key := strings.ToLower(protocolName)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, player := range m.playersByID {
+		if player.Kind == identity.PlayerKindPremium && player.PremiumUUID != nil && player.PremiumUUID.String() == uuid.String() {
+			player.ProtocolName = protocolName
+			player.NormalizedName = protocolName
+			player.ProfileProperties = append([]identity.ProfileProperty(nil), properties...)
+			m.playersByID[id] = player
+			m.protocolNameIndex[key] = id
+			return player, nil
+		}
+	}
+	m.nextID++
+	player := identity.NewPremiumPlayer(fmt.Sprintf("player-%d", m.nextID), protocolName, uuid, properties)
+	m.playersByID[player.ID] = player
+	m.protocolNameIndex[key] = player.ID
 	return player, nil
 }
 
@@ -95,6 +125,29 @@ func (m *Memory) GetOfflinePlayer(ctx context.Context, rawName string) (identity
 	id, ok := m.offlineByNormalized[name.Normalized]
 	if !ok {
 		return identity.Player{}, fmt.Errorf("offline player not found: %w", ErrNotFound)
+	}
+	return m.playersByID[id], nil
+}
+
+func (m *Memory) GetPlayerByProtocolName(ctx context.Context, protocolName string) (identity.Player, error) {
+	key := strings.ToLower(strings.TrimSpace(protocolName))
+	if key == "" {
+		return identity.Player{}, fmt.Errorf("protocol name is required")
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	id, ok := m.protocolNameIndex[key]
+	if !ok {
+		for candidateID, player := range m.playersByID {
+			if strings.EqualFold(player.ProtocolName, protocolName) {
+				id = candidateID
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		return identity.Player{}, fmt.Errorf("player not found: %w", ErrNotFound)
 	}
 	return m.playersByID[id], nil
 }
@@ -376,6 +429,61 @@ func (m *Memory) DeleteDownstreamServer(ctx context.Context, id string) error {
 	}
 	delete(m.downstreamServers, id)
 	return nil
+}
+
+func (m *Memory) SaveTransferGrant(ctx context.Context, grant auth.TransferGrant) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.transferGrants[grant.TokenHash] = grant
+	return nil
+}
+
+func (m *Memory) ConsumeTransferGrant(ctx context.Context, tokenHash string, serverID string, uuid string, protocolName string, gateNodeID string, allowedPortalSources []string, now time.Time) (auth.TransferGrant, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	grant, ok := m.transferGrants[tokenHash]
+	if !ok {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant not found: %w", ErrNotFound)
+	}
+	if grant.ConsumedAt != nil {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant already consumed")
+	}
+	if !now.UTC().Before(grant.ExpiresAt) {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant expired")
+	}
+	if grant.ServerID != serverID {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant target mismatch")
+	}
+	if grant.UUID != uuid {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant uuid mismatch")
+	}
+	if !strings.EqualFold(grant.ProtocolName, protocolName) {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant protocol name mismatch")
+	}
+	if !portalGrantSourceAllowed(grant, allowedPortalSources) {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant portal source denied")
+	}
+	consumedAt := now.UTC()
+	grant.GateNodeID = gateNodeID
+	grant.ConsumedAt = &consumedAt
+	m.transferGrants[tokenHash] = grant
+	return grant, nil
+}
+
+func portalGrantSourceAllowed(grant auth.TransferGrant, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, item := range allowed {
+		source := strings.TrimSpace(item)
+		if source == "" {
+			continue
+		}
+		if strings.EqualFold(source, grant.PortalSource) || strings.EqualFold(source, grant.PortalNodeID) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Memory) ListExtensionPlayerData(ctx context.Context, playerID string, serverSlug string, includePrivate bool) []ExtensionPlayerData {

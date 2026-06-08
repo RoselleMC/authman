@@ -524,10 +524,10 @@ function AdminsPanel() {
       render: (u) => (
         <div className="admin-user">
           <span className="acct-avatar" style={{ width: 30, height: 30 }}>
-            {u.username[0]?.toUpperCase() ?? "?"}
+            {(u.display_name || u.username || u.email)[0]?.toUpperCase() ?? "?"}
           </span>
           <div>
-            <div className="admin-user-name">{u.username}</div>
+            <div className="admin-user-name">{u.display_name || u.username || u.email || "—"}</div>
             <code className="mono admin-user-email">{u.email || "—"}</code>
           </div>
         </div>

@@ -27,6 +27,8 @@ type Postgres struct {
 	pool *pgxpool.Pool
 }
 
+const playerSelectColumns = "id, kind, uuid, premium_uuid, raw_offline_name, normalized_name, protocol_name, locked, profile_properties"
+
 func OpenPostgres(ctx context.Context, databaseURL string) (*Postgres, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
@@ -64,8 +66,8 @@ func (p *Postgres) CreateOfflinePlayer(ctx context.Context, rawName string, pass
 	defer tx.Rollback(ctx)
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO players (id, kind, uuid, raw_offline_name, normalized_name, protocol_name, locked)
-		VALUES ($1, 'offline', $2, $3, $4, $5, false)
+		INSERT INTO players (id, kind, uuid, raw_offline_name, normalized_name, protocol_name, locked, profile_properties)
+		VALUES ($1, 'offline', $2, $3, $4, $5, false, '[]'::jsonb)
 	`, player.ID, player.UUID.String(), player.RawOfflineName, name.Normalized, player.ProtocolName)
 	if err != nil {
 		return identity.Player{}, err
@@ -83,16 +85,55 @@ func (p *Postgres) CreateOfflinePlayer(ctx context.Context, rawName string, pass
 	return player, nil
 }
 
+func (p *Postgres) UpsertPremiumPlayer(ctx context.Context, name string, uuid identity.UUID, properties []identity.ProfileProperty) (identity.Player, error) {
+	protocolName := strings.TrimSpace(name)
+	if protocolName == "" {
+		return identity.Player{}, fmt.Errorf("premium name is required")
+	}
+	id, err := randomID("player")
+	if err != nil {
+		return identity.Player{}, err
+	}
+	player := identity.NewPremiumPlayer(id, protocolName, uuid, properties)
+	propsJSON, err := json.Marshal(properties)
+	if err != nil {
+		return identity.Player{}, err
+	}
+	return p.scanPlayer(p.pool.QueryRow(ctx, `
+		INSERT INTO players (id, kind, uuid, premium_uuid, normalized_name, protocol_name, locked, profile_properties)
+		VALUES ($1, 'premium', $2, $2, $3, $3, false, $4::jsonb)
+		ON CONFLICT (premium_uuid) DO UPDATE
+		SET uuid = EXCLUDED.uuid,
+			normalized_name = EXCLUDED.normalized_name,
+			protocol_name = EXCLUDED.protocol_name,
+			profile_properties = EXCLUDED.profile_properties,
+			updated_at = now()
+		RETURNING `+playerSelectColumns+`
+	`, player.ID, player.UUID.String(), player.ProtocolName, string(propsJSON)))
+}
+
 func (p *Postgres) GetOfflinePlayer(ctx context.Context, rawName string) (identity.Player, error) {
 	name, err := identity.NormalizeOfflineName(rawName)
 	if err != nil {
 		return identity.Player{}, err
 	}
 	return p.scanPlayer(p.pool.QueryRow(ctx, `
-		SELECT id, kind, uuid, raw_offline_name, normalized_name, protocol_name, locked
+		SELECT `+playerSelectColumns+`
 		FROM players
 		WHERE kind = 'offline' AND normalized_name = $1
 	`, name.Normalized))
+}
+
+func (p *Postgres) GetPlayerByProtocolName(ctx context.Context, protocolName string) (identity.Player, error) {
+	name := strings.ToLower(strings.TrimSpace(protocolName))
+	if name == "" {
+		return identity.Player{}, fmt.Errorf("protocol name is required")
+	}
+	return p.scanPlayer(p.pool.QueryRow(ctx, `
+		SELECT `+playerSelectColumns+`
+		FROM players
+		WHERE lower(protocol_name) = $1
+	`, name))
 }
 
 func (p *Postgres) PremiumNameExists(ctx context.Context, rawName string) bool {
@@ -113,7 +154,7 @@ func (p *Postgres) PremiumNameExists(ctx context.Context, rawName string) bool {
 
 func (p *Postgres) GetPlayerByID(ctx context.Context, id string) (identity.Player, error) {
 	return p.scanPlayer(p.pool.QueryRow(ctx, `
-		SELECT id, kind, uuid, raw_offline_name, normalized_name, protocol_name, locked
+		SELECT `+playerSelectColumns+`
 		FROM players
 		WHERE id = $1
 	`, id))
@@ -177,7 +218,7 @@ func (p *Postgres) RecordOfflineLoginSuccess(ctx context.Context, playerID strin
 
 func (p *Postgres) ListPlayers(ctx context.Context) []identity.Player {
 	rows, err := p.pool.Query(ctx, `
-		SELECT id, kind, uuid, raw_offline_name, normalized_name, protocol_name, locked
+		SELECT `+playerSelectColumns+`
 		FROM players
 		ORDER BY created_at ASC
 	`)
@@ -200,7 +241,7 @@ func (p *Postgres) SetPlayerLocked(ctx context.Context, id string, locked bool) 
 		UPDATE players
 		SET locked = $2, updated_at = now()
 		WHERE id = $1
-		RETURNING id, kind, uuid, raw_offline_name, normalized_name, protocol_name, locked
+		RETURNING `+playerSelectColumns+`
 	`, id, locked))
 }
 
@@ -639,6 +680,85 @@ func (p *Postgres) DeleteDownstreamServer(ctx context.Context, id string) error 
 		return fmt.Errorf("downstream server not found: %w", ErrNotFound)
 	}
 	return nil
+}
+
+func (p *Postgres) SaveTransferGrant(ctx context.Context, grant auth.TransferGrant) error {
+	_, err := p.pool.Exec(ctx, `
+		INSERT INTO transfer_grants (
+			id,
+			player_id,
+			server_id,
+			portal_node_id,
+			portal_source,
+			gate_node_id,
+			token_hash,
+			uuid,
+			protocol_name,
+			target_host,
+			target_port,
+			created_at,
+			expires_at,
+			consumed_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+	`, grant.ID, grant.PlayerID, grant.ServerID, grant.PortalNodeID, grant.PortalSource, grant.GateNodeID, grant.TokenHash, grant.UUID, grant.ProtocolName, grant.TargetHost, grant.TargetPort, grant.CreatedAt, grant.ExpiresAt, grant.ConsumedAt)
+	return err
+}
+
+func (p *Postgres) ConsumeTransferGrant(ctx context.Context, tokenHash string, serverID string, uuid string, protocolName string, gateNodeID string, allowedPortalSources []string, now time.Time) (auth.TransferGrant, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return auth.TransferGrant{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	grant, err := scanTransferGrantRow(tx.QueryRow(ctx, `
+		SELECT id, player_id, server_id, portal_node_id, portal_source, gate_node_id, token_hash, uuid, protocol_name, target_host, target_port, created_at, expires_at, consumed_at
+		FROM transfer_grants
+		WHERE token_hash = $1
+		FOR UPDATE
+	`, tokenHash))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant not found: %w", ErrNotFound)
+	}
+	if err != nil {
+		return auth.TransferGrant{}, err
+	}
+	if grant.ConsumedAt != nil {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant already consumed")
+	}
+	if !now.UTC().Before(grant.ExpiresAt) {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant expired")
+	}
+	if grant.ServerID != serverID {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant target mismatch")
+	}
+	if grant.UUID != uuid {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant uuid mismatch")
+	}
+	if !strings.EqualFold(grant.ProtocolName, protocolName) {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant protocol name mismatch")
+	}
+	if !portalGrantSourceAllowed(grant, allowedPortalSources) {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant portal source denied")
+	}
+	consumedAt := now.UTC()
+	grant.GateNodeID = gateNodeID
+	grant.ConsumedAt = &consumedAt
+	err = scanTransferGrantRowInto(tx.QueryRow(ctx, `
+		UPDATE transfer_grants
+		SET consumed_at = $2,
+			gate_node_id = $3
+		WHERE token_hash = $1
+		RETURNING id, player_id, server_id, portal_node_id, portal_source, gate_node_id, token_hash, uuid, protocol_name, target_host, target_port, created_at, expires_at, consumed_at
+	`, tokenHash, consumedAt, gateNodeID), &grant)
+	if err != nil {
+		return auth.TransferGrant{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return auth.TransferGrant{}, err
+	}
+	return grant, nil
 }
 
 func (p *Postgres) ListExtensionPlayerData(ctx context.Context, playerID string, serverSlug string, includePrivate bool) []ExtensionPlayerData {
@@ -1171,15 +1291,21 @@ type playerScanner interface {
 func scanPlayerRow(row playerScanner) (identity.Player, error) {
 	var player identity.Player
 	var uuidText string
+	var premiumUUIDText *string
+	var rawOfflineName *string
+	var normalizedName *string
 	var kind string
+	var propertiesJSON []byte
 	err := row.Scan(
 		&player.ID,
 		&kind,
 		&uuidText,
-		&player.RawOfflineName,
-		&player.NormalizedName,
+		&premiumUUIDText,
+		&rawOfflineName,
+		&normalizedName,
 		&player.ProtocolName,
 		&player.Locked,
+		&propertiesJSON,
 	)
 	if err != nil {
 		return identity.Player{}, err
@@ -1190,6 +1316,22 @@ func scanPlayerRow(row playerScanner) (identity.Player, error) {
 	}
 	player.Kind = identity.PlayerKind(kind)
 	player.UUID = uuid
+	if rawOfflineName != nil {
+		player.RawOfflineName = *rawOfflineName
+	}
+	if normalizedName != nil {
+		player.NormalizedName = *normalizedName
+	}
+	if premiumUUIDText != nil && *premiumUUIDText != "" {
+		premiumUUID, err := identity.ParseUUID(*premiumUUIDText)
+		if err != nil {
+			return identity.Player{}, err
+		}
+		player.PremiumUUID = &premiumUUID
+	}
+	if len(propertiesJSON) > 0 {
+		_ = json.Unmarshal(propertiesJSON, &player.ProfileProperties)
+	}
 	return player, nil
 }
 
@@ -1237,6 +1379,31 @@ func scanAdminPasskeyRow(row playerScanner) (AdminPasskey, error) {
 		return AdminPasskey{}, err
 	}
 	return passkey, nil
+}
+
+func scanTransferGrantRow(row playerScanner) (auth.TransferGrant, error) {
+	var grant auth.TransferGrant
+	err := scanTransferGrantRowInto(row, &grant)
+	return grant, err
+}
+
+func scanTransferGrantRowInto(row playerScanner, grant *auth.TransferGrant) error {
+	return row.Scan(
+		&grant.ID,
+		&grant.PlayerID,
+		&grant.ServerID,
+		&grant.PortalNodeID,
+		&grant.PortalSource,
+		&grant.GateNodeID,
+		&grant.TokenHash,
+		&grant.UUID,
+		&grant.ProtocolName,
+		&grant.TargetHost,
+		&grant.TargetPort,
+		&grant.CreatedAt,
+		&grant.ExpiresAt,
+		&grant.ConsumedAt,
+	)
 }
 
 func optionalJSON(raw []byte) any {
@@ -1387,16 +1554,19 @@ CREATE TABLE IF NOT EXISTS players (
 	normalized_name text,
 	protocol_name text NOT NULL,
 	locked boolean NOT NULL DEFAULT false,
+	profile_properties jsonb NOT NULL DEFAULT '[]'::jsonb,
 	registration_server_id text,
 	last_seen_server_id text,
 	last_seen_at timestamptz,
 	created_at timestamptz NOT NULL DEFAULT now(),
 	updated_at timestamptz NOT NULL DEFAULT now(),
 	CONSTRAINT offline_has_raw_name CHECK (kind != 'offline' OR raw_offline_name IS NOT NULL),
-	CONSTRAINT premium_has_no_raw_name CHECK (kind != 'premium' OR raw_offline_name IS NULL),
-	CONSTRAINT offline_protocol_marked CHECK (kind != 'offline' OR left(protocol_name, 1) = '#'),
-	CONSTRAINT premium_protocol_unmarked CHECK (kind != 'premium' OR left(protocol_name, 1) != '#')
+	CONSTRAINT premium_has_no_raw_name CHECK (kind != 'premium' OR raw_offline_name IS NULL)
 );
+
+ALTER TABLE players DROP CONSTRAINT IF EXISTS offline_protocol_marked;
+ALTER TABLE players DROP CONSTRAINT IF EXISTS premium_protocol_unmarked;
+ALTER TABLE players ADD COLUMN IF NOT EXISTS profile_properties jsonb NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE UNIQUE INDEX IF NOT EXISTS players_offline_normalized_unique
 	ON players (normalized_name)
@@ -1586,10 +1756,32 @@ VALUES (
 	'active',
 	true,
 	'{"primary_color":"#16a34a","accent_color":"#2563eb","portal_message":"Welcome to Authman","display_name":"Default Server","description":"Default Authman downstream context"}'::jsonb,
-	'{"registration_strategy":"open","show_in_global":true}'::jsonb,
+	'{"registration_strategy":"open","show_in_global":true,"host":"127.0.0.1","port":25565,"transfer_host":"127.0.0.1","transfer_port":25565,"motd":"Welcome to Authman","gate_enabled":true,"grant_ttl_seconds":45,"allowed_portal_sources":[],"portal_hosts":[]}'::jsonb,
 	ARRAY['authman.identity']::text[]
 )
 ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS transfer_grants (
+	id text PRIMARY KEY,
+	player_id text NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+	server_id text NOT NULL REFERENCES downstream_servers(id) ON DELETE CASCADE,
+	portal_node_id text NOT NULL DEFAULT '',
+	portal_source text NOT NULL DEFAULT '',
+	gate_node_id text NOT NULL DEFAULT '',
+	token_hash text NOT NULL UNIQUE,
+	uuid text NOT NULL,
+	protocol_name text NOT NULL,
+	target_host text NOT NULL,
+	target_port integer NOT NULL,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	expires_at timestamptz NOT NULL,
+	consumed_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS transfer_grants_token_hash_idx ON transfer_grants (token_hash);
+CREATE INDEX IF NOT EXISTS transfer_grants_expires_at_idx ON transfer_grants (expires_at);
+CREATE INDEX IF NOT EXISTS transfer_grants_server_player_idx ON transfer_grants (server_id, player_id);
+ALTER TABLE transfer_grants ADD COLUMN IF NOT EXISTS portal_source text NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS extension_player_data (
 	id text PRIMARY KEY,

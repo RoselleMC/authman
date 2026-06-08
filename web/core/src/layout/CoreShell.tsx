@@ -16,6 +16,7 @@ const NAV: Array<{ to: string; key: string; icon: string; permission?: string }>
   { to: "/", key: "nav.admin.overview", icon: "gauge", permission: "admin.overview.read" },
   { to: "/players", key: "nav.admin.players", icon: "users", permission: "players.read" },
   { to: "/nodes", key: "nav.admin.nodes", icon: "server", permission: "nodes.read" },
+  { to: "/servers", key: "nav.admin.servers", icon: "layers", permission: "servers.read" },
   { to: "/mojang", key: "nav.admin.mojang", icon: "activity", permission: "mojang.read" },
   { to: "/audit", key: "nav.admin.audit", icon: "list", permission: "audit.read" },
   { to: "/settings", key: "nav.admin.settings", icon: "settings", permission: "settings.read" },

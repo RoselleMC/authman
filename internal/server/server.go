@@ -233,6 +233,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/node/heartbeat", s.handleNodeHeartbeat)
 	s.mux.HandleFunc("POST /api/node/players/resolve", s.handleNodeResolvePlayer)
 	s.mux.HandleFunc("POST /api/node/players/authenticate", s.handleNodeAuthenticatePlayer)
+	s.mux.HandleFunc("POST /api/node/portal/targets/resolve", s.handleNodeResolvePortalTarget)
+	s.mux.HandleFunc("POST /api/node/portal/transfer-grants", s.handleNodeCreateTransferGrant)
+	s.mux.HandleFunc("POST /api/node/gate/transfer-grants/consume", s.handleNodeConsumeTransferGrant)
 	s.mux.HandleFunc("POST /api/node/players/extension-data", s.handleNodeUpsertExtensionData)
 	s.mux.HandleFunc("POST /api/node/portal-links", s.handleNodeCreatePortalLink)
 }
@@ -254,10 +257,23 @@ func playerData(player identity.Player) map[string]any {
 		"raw_offline_name":    player.RawOfflineName,
 		"normalized_name":     player.NormalizedName,
 		"protocol_name":       player.ProtocolName,
+		"properties":          profilePropertiesData(player.ProfileProperties),
 		"locked":              player.Locked,
 		"registration_server": player.RegistrationServer,
 		"last_seen_server":    player.LastSeenServer,
 	}
+}
+
+func profilePropertiesData(properties []identity.ProfileProperty) []map[string]any {
+	out := make([]map[string]any, 0, len(properties))
+	for _, property := range properties {
+		out = append(out, map[string]any{
+			"name":      property.Name,
+			"value":     property.Value,
+			"signature": property.Signature,
+		})
+	}
+	return out
 }
 
 func (s *Server) ResolveOffline(ctx context.Context, rawName string) (identity.Player, error) {

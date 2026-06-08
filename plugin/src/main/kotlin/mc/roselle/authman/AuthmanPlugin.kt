@@ -10,9 +10,11 @@ import com.velocitypowered.api.proxy.ProxyServer
 import mc.roselle.authman.api.AuthmanClient
 import mc.roselle.authman.config.AuthmanConfig
 import mc.roselle.authman.config.InstanceFingerprint
-import mc.roselle.authman.listener.AuthmanAuthListener
+import mc.roselle.authman.config.RuntimeMode
+import mc.roselle.authman.dialog.DialogAuthView
+import mc.roselle.authman.listener.GateAuthListener
+import mc.roselle.authman.listener.PortalAuthListener
 import mc.roselle.authman.message.AuthmanMessages
-import mc.roselle.authman.packet.OfflinePrefixPacketListener
 import mc.roselle.authman.session.AuthSessionStore
 import org.slf4j.Logger
 import java.nio.file.Path
@@ -44,16 +46,20 @@ class AuthmanPlugin @Inject constructor(
         sessions = AuthSessionStore(config)
         messages = AuthmanMessages(config)
 
-        server.eventManager.register(this, AuthmanAuthListener(this, server, logger, config, client, sessions, messages))
-        if (config.stripOfflinePrefix.enabled) {
-            PacketEvents.getAPI().eventManager.registerListener(
-                OfflinePrefixPacketListener(config, sessions, logger),
-                PacketListenerPriority.NORMAL,
-            )
+        when (config.runtimeMode) {
+            RuntimeMode.PORTAL -> {
+                val listener = PortalAuthListener(this, server, logger, config, client, sessions, messages, DialogAuthView())
+                server.eventManager.register(this, listener)
+                PacketEvents.getAPI().eventManager.registerListener(listener, PacketListenerPriority.NORMAL)
+            }
+            RuntimeMode.GATE -> {
+                server.eventManager.register(this, GateAuthListener(this, server, logger, config, client, messages))
+            }
         }
 
         logger.info(
-            "Authman plugin enabled for {} with API {} instance={}",
+            "Authman plugin enabled in {} mode for {} with API {} instance={}",
+            config.runtimeMode.name.lowercase(),
             server.version.name,
             config.apiBase,
             instanceFingerprint,

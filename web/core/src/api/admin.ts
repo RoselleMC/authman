@@ -320,6 +320,31 @@ export interface DownstreamServer {
   portal_config: {
     registration_strategy: "open" | "closed" | "invite";
     show_in_global: boolean;
+    host?: string;
+    port?: number;
+    transfer_host?: string;
+    transfer_port?: number;
+    motd?: string;
+    gate_enabled?: boolean;
+    grant_ttl_seconds?: number;
+    allowed_portal_sources?: string[];
+    portal_hosts?: string[];
+  };
+  target: {
+    server_id: string;
+    slug: string;
+    display_name: string;
+    status: DownstreamServer["status"];
+    host: string;
+    port: number;
+    transfer_host: string;
+    transfer_port: number;
+    motd: string;
+    gate_enabled: boolean;
+    grant_ttl_seconds: number;
+    allowed_portal_sources: string[];
+    registration_open: boolean;
+    extension_providers: string[];
   };
   extension_providers: string[];
 }

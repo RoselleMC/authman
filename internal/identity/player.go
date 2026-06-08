@@ -66,9 +66,6 @@ func (p Player) ValidateIsolation() error {
 		if p.RawOfflineName == "" || p.ProtocolName == "" {
 			return fmt.Errorf("offline player must have offline names")
 		}
-		if p.ProtocolName[0] != '#' {
-			return fmt.Errorf("offline protocol name must start with #")
-		}
 	case PlayerKindPremium:
 		if p.PremiumUUID == nil {
 			return fmt.Errorf("premium player must have premium uuid")
@@ -76,8 +73,8 @@ func (p Player) ValidateIsolation() error {
 		if p.RawOfflineName != "" {
 			return fmt.Errorf("premium player must not have raw offline name")
 		}
-		if p.ProtocolName == "" || p.ProtocolName[0] == '#' {
-			return fmt.Errorf("premium protocol name must not be offline-marked")
+		if p.ProtocolName == "" {
+			return fmt.Errorf("premium protocol name is required")
 		}
 	default:
 		return fmt.Errorf("unknown player kind %q", p.Kind)

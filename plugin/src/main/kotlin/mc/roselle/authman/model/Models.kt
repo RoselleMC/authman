@@ -13,14 +13,36 @@ data class ResolvedPlayer(
     val properties: List<GameProfile.Property>,
     val stripOfflinePrefix: Boolean,
 ) {
-    val offline: Boolean get() = protocolName.startsWith("#")
-    val publicName: String get() = protocolName.removePrefix("#")
+    val publicName: String get() = protocolName
 }
 
 data class AuthResult(
     val authenticated: Boolean,
     val locked: Boolean,
     val statusCode: Int,
+)
+
+data class DownstreamTarget(
+    val serverId: String,
+    val slug: String,
+    val displayName: String,
+    val host: String,
+    val port: Int,
+    val transferHost: String,
+    val transferPort: Int,
+    val motd: String,
+    val gateEnabled: Boolean,
+    val grantTtlSeconds: Int,
+)
+
+data class TransferGrant(
+    val token: String,
+    val target: DownstreamTarget,
+)
+
+data class GateConsumeResult(
+    val allowed: Boolean,
+    val resolved: ResolvedPlayer,
 )
 
 enum class PlayerAuthState {
@@ -32,6 +54,7 @@ enum class PlayerAuthState {
 }
 
 data class PlayerAuthSession(
+    val sessionId: String,
     val playerId: UUID,
     val resolved: ResolvedPlayer,
     var state: PlayerAuthState,

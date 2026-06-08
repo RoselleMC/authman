@@ -19,11 +19,14 @@ class AuthSessionStore(private val config: AuthmanConfig) {
     val pendingServers: MutableMap<UUID, RegisteredServer> = ConcurrentHashMap()
 
     fun rememberProfile(playerId: UUID, resolved: ResolvedPlayer) {
-        if (!resolved.offline) {
+        offlineProfilesByProtocolName[resolved.protocolName] = resolved
+        offlineProfilesByUUID[resolved.uuid] = resolved
+        if (!resolved.authRequired) {
             return
         }
         val state = if (resolved.locked) PlayerAuthState.LOCKED else PlayerAuthState.WAITING_PASSWORD
         sessions[playerId] = PlayerAuthSession(
+            sessionId = UUID.randomUUID().toString(),
             playerId = playerId,
             resolved = resolved,
             state = state,
@@ -31,14 +34,14 @@ class AuthSessionStore(private val config: AuthmanConfig) {
             lastPromptAt = Instant.EPOCH,
             lastChatAt = Instant.EPOCH,
         )
-        offlineProfilesByProtocolName[resolved.protocolName] = resolved
-        offlineProfilesByUUID[resolved.uuid] = resolved
         if (state == PlayerAuthState.LOCKED) {
             authenticatedPlayers.remove(playerId)
         }
     }
 
     fun get(playerId: UUID): PlayerAuthSession? = sessions[playerId]
+
+    fun resolved(playerId: UUID): ResolvedPlayer? = offlineProfilesByUUID[playerId]
 
     fun markPending(playerId: UUID, server: RegisteredServer) {
         pendingServers[playerId] = server
@@ -114,9 +117,10 @@ class AuthSessionStore(private val config: AuthmanConfig) {
 
     fun clear(playerId: UUID) {
         val session = sessions.remove(playerId)
-        if (session != null) {
-            offlineProfilesByProtocolName.remove(session.resolved.protocolName)
-            offlineProfilesByUUID.remove(session.resolved.uuid)
+        val resolved = session?.resolved ?: offlineProfilesByUUID[playerId]
+        if (resolved != null) {
+            offlineProfilesByProtocolName.remove(resolved.protocolName)
+            offlineProfilesByUUID.remove(resolved.uuid)
         }
         authenticatedPlayers.remove(playerId)
         pendingServers.remove(playerId)
@@ -124,7 +128,7 @@ class AuthSessionStore(private val config: AuthmanConfig) {
 
     private fun shouldStripOfflinePrefix(resolved: ResolvedPlayer): Boolean {
         val strip = config.stripOfflinePrefix
-        if (!strip.enabled || !resolved.offline) {
+        if (!strip.enabled) {
             return false
         }
         return resolved.stripOfflinePrefix || strip.stripWhenPremiumNameExists

@@ -1,5 +1,9 @@
 package mc.roselle.authman.listener
 
+import com.github.retrooper.packetevents.event.PacketListener
+import com.github.retrooper.packetevents.event.PacketReceiveEvent
+import com.github.retrooper.packetevents.protocol.packettype.PacketType
+import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientCustomClickAction
 import com.velocitypowered.api.event.ResultedEvent
 import com.velocitypowered.api.event.Subscribe
 import com.velocitypowered.api.event.connection.DisconnectEvent
@@ -13,15 +17,23 @@ import com.velocitypowered.api.proxy.ProxyServer
 import com.velocitypowered.api.proxy.server.RegisteredServer
 import mc.roselle.authman.api.AuthmanClient
 import mc.roselle.authman.config.AuthmanConfig
+import mc.roselle.authman.dialog.DialogActionType
+import mc.roselle.authman.dialog.DialogAuthView
 import mc.roselle.authman.message.AuthmanMessages
+import mc.roselle.authman.model.PlayerAuthSession
 import mc.roselle.authman.model.PlayerAuthState
 import mc.roselle.authman.model.ResolvedPlayer
 import mc.roselle.authman.session.AuthSessionStore
+import net.kyori.adventure.key.Key
 import org.slf4j.Logger
+import java.net.InetSocketAddress
+import java.nio.charset.StandardCharsets
 import java.time.Instant
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
-class AuthmanAuthListener(
+class PortalAuthListener(
     private val plugin: Any,
     private val server: ProxyServer,
     private val logger: Logger,
@@ -29,7 +41,10 @@ class AuthmanAuthListener(
     private val client: AuthmanClient,
     private val sessions: AuthSessionStore,
     private val messages: AuthmanMessages,
-) {
+    private val dialog: DialogAuthView,
+	) : PacketListener {
+    private val transferred: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
+
     @Subscribe
     fun onGameProfileRequest(event: GameProfileRequestEvent) {
         val username = event.username
@@ -39,9 +54,7 @@ class AuthmanAuthListener(
         val resolved = try {
             client.resolvePlayer(username)
         } catch (ex: Exception) {
-            if (username.startsWith("#")) {
-                logger.warn("Failed to resolve Authman offline player {}", username, ex)
-            }
+            logger.warn("Failed to resolve Authman player {}", username, ex)
             return
         }
         val profile = event.gameProfile
@@ -88,24 +101,41 @@ class AuthmanAuthListener(
 
         sessions.markPending(player.uniqueId, targetAfterAuth(event.originalServer))
         event.setResult(ServerPreConnectEvent.ServerResult.allowed(current))
-        if (sessions.shouldPrompt(player.uniqueId, Instant.now())) {
-            messages.sendPasswordPrompt(player, session)
-        }
+        prompt(player, session, force = false)
         logger.info("Held unauthenticated Authman player {} on {} while target is {}", player.username, current.serverInfo.name, event.originalServer.serverInfo.name)
     }
 
     @Subscribe
     fun onServerConnected(event: ServerConnectedEvent) {
         val player = event.player
+        val resolved = sessions.resolved(player.uniqueId) ?: resolveConnectedPlayer(player)
+        if (resolved != null && !resolved.authRequired && transferred.add(player.uniqueId)) {
+            server.scheduler.buildTask(plugin, Runnable {
+                if (player.isActive) {
+                    transferAfterAuth(player, resolved)
+                }
+            }).delay(config.completionDelaySeconds, TimeUnit.SECONDS).schedule()
+            logger.info("Forwarding non-password Authman player {} to downstream target", player.username)
+            return
+        }
         val session = sessions.get(player.uniqueId) ?: return
         if (!session.resolved.authRequired || sessions.isAuthenticated(player.uniqueId)) {
             return
         }
-        if (sessions.shouldPrompt(player.uniqueId, Instant.now(), force = true)) {
-            messages.sendPasswordPrompt(player, session)
-        }
+        prompt(player, session, force = true)
         scheduleTimeoutCheck(player)
         logger.info("Waiting for Authman password authentication for {}", player.username)
+    }
+
+    private fun resolveConnectedPlayer(player: Player): ResolvedPlayer? {
+        val resolved = try {
+            client.resolvePlayer(player.username)
+        } catch (ex: Exception) {
+            logger.warn("Failed to resolve connected Authman player {}", player.username, ex)
+            return null
+        }
+        sessions.rememberProfile(player.uniqueId, resolved)
+        return resolved
     }
 
     @Subscribe
@@ -116,15 +146,69 @@ class AuthmanAuthListener(
             return
         }
         event.setResult(PlayerChatEvent.ChatResult.denied())
+        if (!config.dialogFallbackChatEnabled) {
+            prompt(player, session, force = true)
+            return
+        }
         val now = Instant.now()
         if (!sessions.canAcceptChat(player.uniqueId, now)) {
             messages.sendCooldownIgnored(player)
             return
         }
-        val password = event.message.trim()
+        handlePassword(player, session, event.message.trim())
+    }
+
+    override fun onPacketReceive(event: PacketReceiveEvent) {
+        if (event.packetType != PacketType.Play.Client.CUSTOM_CLICK_ACTION) {
+            return
+        }
+		val player = event.getPlayer<Player>() ?: return
+        val session = sessions.get(player.uniqueId) ?: return
+        val submission = DialogAuthView.readSubmission(WrapperPlayClientCustomClickAction(event)) ?: return
+		event.setCancelled(true)
+        if (submission.sessionId != session.sessionId) {
+            logger.debug("Ignored stale Authman dialog submission for {}", player.username)
+            return
+        }
+        if (submission.action == DialogActionType.CANCEL) {
+            sessions.clear(player.uniqueId)
+            player.disconnect(messages.authTimeout())
+            return
+        }
+        handlePassword(player, session, submission.password.trim())
+    }
+
+    @Subscribe
+    fun onDisconnect(event: DisconnectEvent) {
+        transferred.remove(event.player.uniqueId)
+        sessions.clear(event.player.uniqueId)
+    }
+
+    private fun shouldResolve(username: String): Boolean {
+        return config.resolveRawOfflineNames || username.startsWith("#")
+    }
+
+    private fun prompt(player: Player, session: PlayerAuthSession, force: Boolean) {
+        if (!sessions.shouldPrompt(player.uniqueId, Instant.now(), force = force)) {
+            return
+        }
+        if (config.dialogEnabled) {
+            try {
+                dialog.showPasswordDialog(player, session.sessionId, session.resolved.protocolName)
+                return
+            } catch (ex: Exception) {
+                logger.warn("Failed to show Authman dialog to {}; falling back to chat prompt", player.username, ex)
+            }
+        }
+        if (config.dialogFallbackChatEnabled) {
+            messages.sendPasswordPrompt(player, session)
+        }
+    }
+
+    private fun handlePassword(player: Player, session: PlayerAuthSession, password: String) {
         if (password.isEmpty()) {
             session.lastInputMarker = "/empty"
-            messages.sendPasswordPrompt(player, session)
+            prompt(player, session, force = true)
             return
         }
         val result = try {
@@ -148,23 +232,36 @@ class AuthmanAuthListener(
                 logger.info("Disconnected Authman account {} after {} wrong password attempts", player.username, wrong)
                 return
             }
-            messages.sendPasswordPrompt(player, session)
+            prompt(player, session, force = true)
             return
         }
-        val pending = session.pendingServer
         sessions.markAuthenticated(player.uniqueId)
         messages.sendSuccess(player)
-        connectAfterAuth(player, pending)
+        transferAfterAuth(player, session.resolved)
         logger.info("Authenticated Authman offline account {}", player.username)
     }
 
-    @Subscribe
-    fun onDisconnect(event: DisconnectEvent) {
-        sessions.clear(event.player.uniqueId)
-    }
-
-    private fun shouldResolve(username: String): Boolean {
-        return username.startsWith("#") || config.resolveRawOfflineNames
+    private fun transferAfterAuth(player: Player, resolved: ResolvedPlayer) {
+        val grant = try {
+            client.createTransferGrant(
+                username = resolved.protocolName,
+                serverId = config.portalRequestedServerId.ifEmpty { config.serverId },
+                requestedHost = config.portalRequestedHost,
+                source = config.portalSourceId,
+            )
+        } catch (ex: Exception) {
+            logger.warn("Failed to create Authman transfer grant for {}", player.username, ex)
+            messages.sendTemporaryUnavailable(player)
+            return
+        }
+        try {
+            player.storeCookie(Key.key(config.transferCookieKey), grant.token.toByteArray(StandardCharsets.UTF_8))
+            player.transferToHost(InetSocketAddress.createUnresolved(grant.target.transferHost, grant.target.transferPort))
+            logger.info("Transferred Authman player {} to {}:{}", player.username, grant.target.transferHost, grant.target.transferPort)
+        } catch (ex: IllegalArgumentException) {
+            logger.warn("Player {} cannot use Minecraft transfer/cookie features", player.username, ex)
+            player.disconnect(messages.temporaryUnavailable())
+        }
     }
 
     private fun holdingServerFor(player: Player, fallback: RegisteredServer): RegisteredServer {
@@ -179,18 +276,6 @@ class AuthmanAuthListener(
             return server.getServer(config.defaultTargetServer).orElse(requested)
         }
         return requested
-    }
-
-    private fun connectAfterAuth(player: Player, pending: RegisteredServer?) {
-        val target = pending ?: config.defaultTargetServer
-            .takeIf { it.isNotBlank() }
-            ?.let { server.getServer(it).orElse(null) }
-            ?: return
-        server.scheduler.buildTask(plugin, Runnable {
-            if (player.isActive) {
-                player.createConnectionRequest(target).connect()
-            }
-        }).delay(config.completionDelaySeconds, TimeUnit.SECONDS).schedule()
     }
 
     private fun scheduleTimeoutCheck(player: Player) {

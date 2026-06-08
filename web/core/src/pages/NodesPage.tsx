@@ -9,10 +9,13 @@ import {
   Dialog,
   EmptyState,
   ErrorState,
+  Field,
   Icon,
   IconButton,
+  Input,
   PageHeader,
   PageShell,
+  SecretReveal,
   coerceVelocityNode,
   formatRelativeTime,
   useI18n,
@@ -20,7 +23,7 @@ import {
   type DataColumn,
   type SafeVelocityNode,
 } from "@authman/shared";
-import { deleteNode, fetchNodes } from "../api/admin";
+import { createNode, deleteNode, fetchNodes } from "../api/admin";
 
 function NodeStatusBadge({ status }: { status: SafeVelocityNode["status"] }) {
   const { t } = useI18n();
@@ -28,11 +31,20 @@ function NodeStatusBadge({ status }: { status: SafeVelocityNode["status"] }) {
   return <Badge tone={tone} dot>{t(`admin.nodes.status.${status}`, status)}</Badge>;
 }
 
+interface IssuedToken {
+  token_once: string;
+  token_fingerprint: string;
+  name: string;
+}
+
 export function NodesPage() {
   const { t, tError } = useI18n();
   const toast = useToast();
   const qc = useQueryClient();
   const [deleteTarget, setDeleteTarget] = useState<SafeVelocityNode | null>(null);
+  const [issueOpen, setIssueOpen] = useState(false);
+  const [issueName, setIssueName] = useState("");
+  const [issuedToken, setIssuedToken] = useState<IssuedToken | null>(null);
 
   const q = useQuery({
     queryKey: ["admin.nodes"],
@@ -48,6 +60,21 @@ export function NodesPage() {
     onSuccess: () => {
       toast.push({ tone: "success", title: t("admin.nodes.delete.toast") });
       setDeleteTarget(null);
+      void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
+  });
+
+  const issueMut = useMutation({
+    mutationFn: (name: string) => createNode({ name, server_id: "" }),
+    onSuccess: (res, name) => {
+      setIssuedToken({
+        token_once: res.token_once,
+        token_fingerprint: res.token_fingerprint,
+        name,
+      });
+      setIssueOpen(false);
+      setIssueName("");
       void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
     },
     onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
@@ -112,6 +139,16 @@ export function NodesPage() {
       <PageHeader
         title={t("admin.nodes.heading")}
         desc={t("admin.nodes.desc")}
+        action={(
+          <Button
+            variant="primary"
+            icon="plus"
+            onClick={() => setIssueOpen(true)}
+            data-testid="node-issue-open"
+          >
+            {t("admin.nodes.issueToken")}
+          </Button>
+        )}
       />
       {q.error ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : null}
       <Card noBody className="table-card">
@@ -134,6 +171,67 @@ export function NodesPage() {
           <Icon name="info" size={13} /> {t("admin.nodes.footnote")}
         </div>
       </Card>
+      <Dialog
+        open={issueOpen}
+        onClose={() => !issueMut.isPending && setIssueOpen(false)}
+        icon="plus"
+        iconTone="primary"
+        title={t("admin.nodes.issueToken")}
+        desc={t("admin.nodes.issueToken.desc")}
+        testId="dialog-node-issue"
+        footer={(
+          <>
+            <Button variant="ghost" onClick={() => setIssueOpen(false)} disabled={issueMut.isPending}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant="primary"
+              icon="check"
+              loading={issueMut.isPending}
+              disabled={!issueName.trim() || issueMut.isPending}
+              onClick={() => issueMut.mutate(issueName.trim())}
+              data-testid="node-issue-submit"
+            >
+              {t("admin.nodes.issueToken.submit")}
+            </Button>
+          </>
+        )}
+      >
+        <Field label={t("admin.nodes.field.name")} hint={t("admin.nodes.field.name.hint")}>
+          <Input
+            value={issueName}
+            onChange={(e) => setIssueName(e.target.value)}
+            placeholder="edge-eu-1"
+            mono
+            data-testid="node-issue-name"
+          />
+        </Field>
+      </Dialog>
+
+      <Dialog
+        open={!!issuedToken}
+        onClose={() => setIssuedToken(null)}
+        icon="alert"
+        iconTone="warning"
+        title={t("admin.nodes.secret.heading")}
+        desc={t("admin.nodes.secret.body")}
+        testId="dialog-node-secret"
+        footer={(
+          <Button variant="primary" onClick={() => setIssuedToken(null)} data-testid="secret-close">
+            {t("admin.nodes.copiedDone")}
+          </Button>
+        )}
+      >
+        {issuedToken ? (
+          <>
+            <SecretReveal value={issuedToken.token_once} valueTestId="node-secret" />
+            <p className="dialog-note" style={{ marginTop: 12 }}>
+              {t("admin.nodes.nodeLabel")}: <code className="mono">{issuedToken.name}</code> · {t("admin.nodes.col.fingerprint")}: <code className="mono">{issuedToken.token_fingerprint}</code>
+            </p>
+          </>
+        ) : null}
+      </Dialog>
+
       <Dialog
         open={!!deleteTarget}
         onClose={() => !deleteMut.isPending && setDeleteTarget(null)}

@@ -185,6 +185,25 @@ func presenceRows(presences []store.PlayerPresence) []map[string]any {
 	return out
 }
 
+func nodeActionRows(actions []store.NodeAction) []map[string]any {
+	out := make([]map[string]any, 0, len(actions))
+	for _, action := range actions {
+		out = append(out, map[string]any{
+			"id":            action.ID,
+			"type":          action.Type,
+			"presence_id":   action.PresenceID,
+			"passport_id":   action.PassportID,
+			"profile_id":    action.ProfileID,
+			"uuid":          action.UUID,
+			"protocol_name": action.ProtocolName,
+			"reason":        action.Reason,
+			"created_at":    action.CreatedAt,
+			"expires_at":    action.ExpiresAt,
+		})
+	}
+	return out
+}
+
 func banRows(bans []store.PlayerBan) []map[string]any {
 	out := make([]map[string]any, 0, len(bans))
 	for _, ban := range bans {

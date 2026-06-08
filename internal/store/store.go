@@ -68,6 +68,27 @@ type PlayerPresence struct {
 	EndReason    string
 }
 
+type NodeActionType string
+
+const (
+	NodeActionDisconnect NodeActionType = "disconnect"
+)
+
+type NodeAction struct {
+	ID           string
+	NodeID       string
+	Type         NodeActionType
+	PresenceID   string
+	PassportID   string
+	ProfileID    string
+	UUID         string
+	ProtocolName string
+	Reason       string
+	CreatedAt    time.Time
+	ExpiresAt    *time.Time
+	AckedAt      *time.Time
+}
+
 type BanScope string
 
 const (
@@ -218,6 +239,9 @@ type PlayerStore interface {
 	EndPresence(ctx context.Context, id string, reason string, endedAt time.Time) (PlayerPresence, error)
 	EndProfilePresences(ctx context.Context, profileID string, reason string, endedAt time.Time) int
 	EndPassportPresences(ctx context.Context, passportID string, reason string, endedAt time.Time) int
+	EnqueueNodeAction(ctx context.Context, action NodeAction) (NodeAction, error)
+	ListPendingNodeActions(ctx context.Context, nodeID string, now time.Time, limit int) []NodeAction
+	AckNodeActions(ctx context.Context, nodeID string, ids []string, now time.Time) int
 	ListBans(ctx context.Context, scope BanScope, targetID string, includeInactive bool, now time.Time) []PlayerBan
 	GetBan(ctx context.Context, id string) (PlayerBan, error)
 	CreateBan(ctx context.Context, ban PlayerBan) (PlayerBan, error)

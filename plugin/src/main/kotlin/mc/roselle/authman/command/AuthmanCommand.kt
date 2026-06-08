@@ -1,12 +1,12 @@
 package mc.roselle.authman.command
 
 import com.velocitypowered.api.command.SimpleCommand
-import mc.roselle.authman.api.AuthmanClient
+import mc.roselle.authman.AuthmanPlugin
 import net.kyori.adventure.text.Component
 import org.slf4j.Logger
 
 class AuthmanCommand(
-    private val client: AuthmanClient,
+    private val plugin: AuthmanPlugin,
     private val logger: Logger,
 ) : SimpleCommand {
     override fun execute(invocation: SimpleCommand.Invocation) {
@@ -16,8 +16,20 @@ class AuthmanCommand(
             source.sendMessage(Component.text("You do not have permission to use Authman moderation commands."))
             return
         }
+        when (args.firstOrNull()?.lowercase()) {
+            "reload" -> {
+                val ok = plugin.reloadConfigAndReconnect()
+                source.sendMessage(Component.text(if (ok) "Authman config reloaded and Core connection is available." else "Authman config reloaded, but Core connection is still unavailable."))
+                return
+            }
+            "reconnect" -> {
+                val ok = plugin.reconnectNow()
+                source.sendMessage(Component.text(if (ok) "Authman Core connection is available." else "Authman Core connection is unavailable."))
+                return
+            }
+        }
         if (args.size < 4) {
-            source.sendMessage(Component.text("Usage: /authman <ban-profile|ban-passport> <player> <duration> <reason...>"))
+            source.sendMessage(Component.text("Usage: /authman <reload|reconnect|ban-profile|ban-passport> [player] [duration] [reason...]"))
             source.sendMessage(Component.text("Duration examples: 1s, 1min, 1h, 1w, 1m, 1y."))
             return
         }
@@ -35,10 +47,10 @@ class AuthmanCommand(
         }
         try {
             when (action) {
-                "ban-profile" -> client.banProfile(target, durationSeconds, reason)
-                "ban-passport" -> client.banPassport(target, durationSeconds, reason)
+                "ban-profile" -> plugin.client().banProfile(target, durationSeconds, reason)
+                "ban-passport" -> plugin.client().banPassport(target, durationSeconds, reason)
                 else -> {
-                    source.sendMessage(Component.text("Usage: /authman <ban-profile|ban-passport> <player> <duration> <reason...>"))
+                    source.sendMessage(Component.text("Usage: /authman <reload|reconnect|ban-profile|ban-passport> [player] [duration] [reason...]"))
                     return
                 }
             }
@@ -52,7 +64,7 @@ class AuthmanCommand(
     override fun suggest(invocation: SimpleCommand.Invocation): List<String> {
         val args = invocation.arguments()
         if (args.size <= 1) {
-            return listOf("ban-profile", "ban-passport").filter { it.startsWith(args.firstOrNull() ?: "") }
+            return listOf("reload", "reconnect", "ban-profile", "ban-passport").filter { it.startsWith(args.firstOrNull() ?: "") }
         }
         if (args.size == 3) {
             return listOf("1h", "1w", "1m", "1y").filter { it.startsWith(args[2]) }

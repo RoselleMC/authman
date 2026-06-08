@@ -1451,6 +1451,80 @@ func (p *Postgres) endPresences(ctx context.Context, where string, arg string, r
 	return int(tag.RowsAffected())
 }
 
+func (p *Postgres) EnqueueNodeAction(ctx context.Context, action NodeAction) (NodeAction, error) {
+	if strings.TrimSpace(action.NodeID) == "" {
+		return NodeAction{}, fmt.Errorf("node action node id is required")
+	}
+	if strings.TrimSpace(action.ID) == "" {
+		id, err := randomID("node-action")
+		if err != nil {
+			return NodeAction{}, err
+		}
+		action.ID = id
+	}
+	if action.Type == "" {
+		action.Type = NodeActionDisconnect
+	}
+	if action.CreatedAt.IsZero() {
+		action.CreatedAt = time.Now().UTC()
+	}
+	return scanNodeActionRow(p.pool.QueryRow(ctx, `
+		INSERT INTO node_actions (id, node_id, action_type, presence_id, passport_id, profile_id, uuid, protocol_name, reason, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, node_id, action_type, presence_id, passport_id, profile_id, uuid, protocol_name, reason, created_at, expires_at, acked_at
+	`, action.ID, action.NodeID, action.Type, action.PresenceID, action.PassportID, action.ProfileID, action.UUID, action.ProtocolName, action.Reason, action.CreatedAt.UTC(), action.ExpiresAt))
+}
+
+func (p *Postgres) ListPendingNodeActions(ctx context.Context, nodeID string, now time.Time, limit int) []NodeAction {
+	nodeID = strings.TrimSpace(nodeID)
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, node_id, action_type, presence_id, passport_id, profile_id, uuid, protocol_name, reason, created_at, expires_at, acked_at
+		FROM node_actions
+		WHERE node_id = $1
+		  AND acked_at IS NULL
+		  AND (expires_at IS NULL OR expires_at > $2)
+		ORDER BY created_at ASC
+		LIMIT $3
+	`, nodeID, now.UTC(), limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []NodeAction{}
+	for rows.Next() {
+		action, err := scanNodeActionRow(rows)
+		if err == nil {
+			out = append(out, action)
+		}
+	}
+	return out
+}
+
+func (p *Postgres) AckNodeActions(ctx context.Context, nodeID string, ids []string, now time.Time) int {
+	nodeID = strings.TrimSpace(nodeID)
+	clean := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			clean = append(clean, trimmed)
+		}
+	}
+	if nodeID == "" || len(clean) == 0 {
+		return 0
+	}
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE node_actions
+		SET acked_at = $3
+		WHERE node_id = $1 AND id = ANY($2) AND acked_at IS NULL
+	`, nodeID, clean, now.UTC())
+	if err != nil {
+		return 0
+	}
+	return int(tag.RowsAffected())
+}
+
 func (p *Postgres) ListBans(ctx context.Context, scope BanScope, targetID string, includeInactive bool, now time.Time) []PlayerBan {
 	where := "scope = $1 AND target_id = $2"
 	args := []any{scope, strings.TrimSpace(targetID)}
@@ -2507,6 +2581,27 @@ func scanPresenceRow(row playerScanner) (PlayerPresence, error) {
 	return presence, err
 }
 
+func scanNodeActionRow(row playerScanner) (NodeAction, error) {
+	var action NodeAction
+	var actionType string
+	err := row.Scan(
+		&action.ID,
+		&action.NodeID,
+		&actionType,
+		&action.PresenceID,
+		&action.PassportID,
+		&action.ProfileID,
+		&action.UUID,
+		&action.ProtocolName,
+		&action.Reason,
+		&action.CreatedAt,
+		&action.ExpiresAt,
+		&action.AckedAt,
+	)
+	action.Type = NodeActionType(actionType)
+	return action, err
+}
+
 func scanBanRow(row playerScanner) (PlayerBan, error) {
 	var ban PlayerBan
 	err := row.Scan(
@@ -2940,6 +3035,27 @@ CREATE INDEX IF NOT EXISTS player_presences_profile_active_idx ON player_presenc
 CREATE UNIQUE INDEX IF NOT EXISTS player_presences_profile_server_active_unique
 	ON player_presences (profile_id, server_id)
 	WHERE ended_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS node_actions (
+	id text PRIMARY KEY,
+	node_id text NOT NULL REFERENCES velocity_nodes(id) ON DELETE CASCADE,
+	action_type text NOT NULL CHECK (action_type IN ('disconnect')),
+	presence_id text NOT NULL DEFAULT '',
+	passport_id text NOT NULL DEFAULT '',
+	profile_id text NOT NULL DEFAULT '',
+	uuid text NOT NULL DEFAULT '',
+	protocol_name text NOT NULL DEFAULT '',
+	reason text NOT NULL DEFAULT '',
+	created_at timestamptz NOT NULL DEFAULT now(),
+	expires_at timestamptz,
+	acked_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS node_actions_pending_idx
+	ON node_actions (node_id, created_at)
+	WHERE acked_at IS NULL;
+CREATE INDEX IF NOT EXISTS node_actions_presence_idx ON node_actions (presence_id);
+CREATE INDEX IF NOT EXISTS node_actions_profile_idx ON node_actions (profile_id);
 
 CREATE TABLE IF NOT EXISTS player_bans (
 	id text PRIMARY KEY,

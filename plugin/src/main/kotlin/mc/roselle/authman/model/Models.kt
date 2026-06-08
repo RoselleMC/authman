@@ -44,6 +44,17 @@ data class GateConsumeResult(
     val presenceId: String,
 )
 
+data class NodeAction(
+    val id: String,
+    val type: String,
+    val presenceId: String,
+    val passportId: String,
+    val profileId: String,
+    val uuid: String,
+    val protocolName: String,
+    val reason: String,
+)
+
 enum class PlayerAuthState {
     WAITING_PASSWORD,
     WAITING_EMAIL,

@@ -34,6 +34,10 @@ type nodeHeartbeatRequest struct {
 	VelocityVersion     string `json:"velocity_version"`
 }
 
+type ackNodeActionsRequest struct {
+	IDs []string `json:"ids"`
+}
+
 func (s *Server) handleAdminCreateNode(w http.ResponseWriter, r *http.Request) {
 	session, authErr := s.requireAdmin(r, true)
 	if authErr != nil {
@@ -197,6 +201,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		api.WriteJSON(w, http.StatusOK, map[string]any{
 			"node":           s.nodeData(r.Context(), node),
 			"runtime_config": s.nodeRuntimeConfig(r.Context(), node),
+			"actions":        nodeActionRows(s.store.ListPendingNodeActions(r.Context(), node.ID, time.Now(), 50)),
 		}, nil)
 		return
 	}
@@ -208,7 +213,23 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"node":           s.nodeData(r.Context(), node),
 		"runtime_config": s.nodeRuntimeConfig(r.Context(), node),
+		"actions":        nodeActionRows(s.store.ListPendingNodeActions(r.Context(), node.ID, time.Now(), 50)),
 	}, nil)
+}
+
+func (s *Server) handleNodeAckActions(w http.ResponseWriter, r *http.Request) {
+	n, nodeErr := s.requireNode(r)
+	if nodeErr != nil {
+		api.WriteError(w, nodeErr)
+		return
+	}
+	var req ackNodeActionsRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	acked := s.store.AckNodeActions(r.Context(), n.ID, req.IDs, time.Now())
+	api.WriteJSON(w, http.StatusOK, map[string]any{"acked": acked}, nil)
 }
 
 type resolvePlayerRequest struct {
@@ -734,17 +755,22 @@ func (s *Server) handleNodeCreateProfileBan(w http.ResponseWriter, r *http.Reque
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "ban.create_failed", "failed to create ban"))
 		return
 	}
-	ended := s.store.EndProfilePresences(r.Context(), player.ID, "profile banned", time.Now())
+	now := time.Now()
+	presences := s.store.ListProfilePresences(r.Context(), player.ID)
+	queued := s.enqueueDisconnectActions(r.Context(), presences, "profile banned: "+ban.Reason, now)
+	ended := s.store.EndProfilePresences(r.Context(), player.ID, "profile banned", now)
 	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "profile.ban.create", playerEventDetails(player, map[string]any{
 		"ban_id":          ban.ID,
 		"reason":          ban.Reason,
 		"expires_at":      ban.ExpiresAt,
 		"ended_presences": ended,
+		"queued_actions":  queued,
 		"server_id":       n.ServerID,
 	}))
 	api.WriteJSON(w, http.StatusCreated, map[string]any{
 		"ban":             banRows([]store.PlayerBan{ban})[0],
 		"ended_presences": ended,
+		"queued_actions":  queued,
 	}, nil)
 }
 
@@ -774,18 +800,23 @@ func (s *Server) handleNodeCreatePassportBan(w http.ResponseWriter, r *http.Requ
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "ban.create_failed", "failed to create ban"))
 		return
 	}
-	ended := s.store.EndPassportPresences(r.Context(), passport.ID, "passport banned", time.Now())
+	now := time.Now()
+	presences := s.store.ListPassportPresences(r.Context(), passport.ID)
+	queued := s.enqueueDisconnectActions(r.Context(), presences, "passport banned: "+ban.Reason, now)
+	ended := s.store.EndPassportPresences(r.Context(), passport.ID, "passport banned", now)
 	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, passport.ID, "passport.ban.create", map[string]any{
 		"ban_id":          ban.ID,
 		"reason":          ban.Reason,
 		"expires_at":      ban.ExpiresAt,
 		"ended_presences": ended,
+		"queued_actions":  queued,
 		"server_id":       n.ServerID,
 		"username":        passport.Username,
 	})
 	api.WriteJSON(w, http.StatusCreated, map[string]any{
 		"ban":             banRows([]store.PlayerBan{ban})[0],
 		"ended_presences": ended,
+		"queued_actions":  queued,
 	}, nil)
 }
 

@@ -16,9 +16,13 @@ import mc.roselle.authman.dialog.DialogAuthView
 import mc.roselle.authman.listener.GateAuthListener
 import mc.roselle.authman.listener.PortalAuthListener
 import mc.roselle.authman.message.AuthmanMessages
+import mc.roselle.authman.model.NodeAction
 import mc.roselle.authman.session.AuthSessionStore
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.format.NamedTextColor
 import org.slf4j.Logger
 import java.nio.file.Path
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 @Plugin(
@@ -59,7 +63,7 @@ class AuthmanPlugin @Inject constructor(
                 server.eventManager.register(this, GateAuthListener(this, server, logger, config, client, messages))
             }
         }
-        val command = AuthmanCommand(client, logger)
+        val command = AuthmanCommand(this, logger)
         val meta = server.commandManager.metaBuilder("authman")
             .aliases("am")
             .plugin(this)
@@ -79,7 +83,22 @@ class AuthmanPlugin @Inject constructor(
             .schedule()
     }
 
-    private fun sendHeartbeat() {
+    fun reconnectNow(): Boolean = sendHeartbeat()
+
+    fun reloadConfigAndReconnect(): Boolean {
+        val next = AuthmanConfig.load(dataDirectory)
+        val oldMode = config.runtimeMode
+        val nextMode = RuntimeMode.from(next.mode)
+        if (oldMode != nextMode) {
+            logger.warn("Authman mode changed from {} to {}; restart Velocity to replace listeners", oldMode, nextMode)
+        }
+        config.replaceLocal(next)
+        return sendHeartbeat()
+    }
+
+    fun client(): AuthmanClient = client
+
+    private fun sendHeartbeat(): Boolean {
         try {
             val response = client.heartbeat(pluginVersion = VERSION, velocityVersion = server.version.version)
             if (!response.ok) {
@@ -87,17 +106,27 @@ class AuthmanPlugin @Inject constructor(
                 if (response.accessRevoked) {
                     lockFromCore("Core revoked or rejected this node token")
                 }
-                return
+                return false
             }
             response.runtime?.let {
                 config.applyRuntime(it)
+            }
+            val acked = executeNodeActions(response.actions)
+            if (acked.isNotEmpty()) {
+                try {
+                    client.ackActions(acked)
+                } catch (ex: Exception) {
+                    logger.warn("Failed to ACK Authman node actions {}", acked, ex)
+                }
             }
             if (coreAccessRevoked) {
                 logger.info("Authman Core access restored after successful heartbeat")
             }
             coreAccessRevoked = false
+            return true
         } catch (ex: Exception) {
             logger.warn("Authman heartbeat failed", ex)
+            return false
         }
     }
 
@@ -125,6 +154,48 @@ class AuthmanPlugin @Inject constructor(
             lockFromCore("Core rejected this node token")
         }
         return rejected
+    }
+
+    private fun executeNodeActions(actions: List<NodeAction>): List<String> {
+        if (actions.isEmpty()) {
+            return emptyList()
+        }
+        val acked = mutableListOf<String>()
+        for (action in actions) {
+            when (action.type.lowercase()) {
+                "disconnect" -> {
+                    disconnectActionTargets(action)
+                    acked += action.id
+                }
+                else -> logger.warn("Ignoring unknown Authman node action {} type={}", action.id, action.type)
+            }
+        }
+        return acked
+    }
+
+    private fun disconnectActionTargets(action: NodeAction) {
+        val uuid = runCatching {
+            action.uuid.takeIf { it.isNotBlank() }?.let(UUID::fromString)
+        }.getOrNull()
+        val reason = action.reason.ifBlank { "Authman disconnected this session." }
+        val component = Component.text(reason, NamedTextColor.RED)
+        var count = 0
+        server.allPlayers.forEach { player ->
+            val uuidMatches = uuid != null && player.uniqueId == uuid
+            val nameMatches = action.protocolName.isNotBlank() && player.username.equals(action.protocolName, ignoreCase = true)
+            if (player.isActive && (uuidMatches || nameMatches)) {
+                player.disconnect(component)
+                count++
+            }
+        }
+        logger.info(
+            "Executed Authman node action {} type={} disconnected={} profile={} presence={}",
+            action.id,
+            action.type,
+            count,
+            action.profileId,
+            action.presenceId,
+        )
     }
 
     companion object {

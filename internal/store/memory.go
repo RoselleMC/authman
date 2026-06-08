@@ -36,6 +36,7 @@ type Memory struct {
 	systemSettings      map[string]map[string]any
 	presencesByID       map[string]PlayerPresence
 	bansByID            map[string]PlayerBan
+	nodeActionsByID     map[string]NodeAction
 	downstreamServers   map[string]DownstreamServer
 	transferGrants      map[string]auth.TransferGrant
 	extensionData       map[string]ExtensionPlayerData
@@ -65,6 +66,7 @@ func NewMemory() *Memory {
 		systemSettings:      make(map[string]map[string]any),
 		presencesByID:       make(map[string]PlayerPresence),
 		bansByID:            make(map[string]PlayerBan),
+		nodeActionsByID:     make(map[string]NodeAction),
 		downstreamServers:   make(map[string]DownstreamServer),
 		transferGrants:      make(map[string]auth.TransferGrant),
 		extensionData:       make(map[string]ExtensionPlayerData),
@@ -1051,6 +1053,76 @@ func (m *Memory) endPresencesLocked(match func(PlayerPresence) bool, reason stri
 			m.presencesByID[id] = presence
 			count++
 		}
+	}
+	return count
+}
+
+func (m *Memory) EnqueueNodeAction(ctx context.Context, action NodeAction) (NodeAction, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if strings.TrimSpace(action.NodeID) == "" {
+		return NodeAction{}, fmt.Errorf("node action node id is required")
+	}
+	if action.Type == "" {
+		action.Type = NodeActionDisconnect
+	}
+	if strings.TrimSpace(action.ID) == "" {
+		m.nextID++
+		action.ID = "node-action-" + strconv.Itoa(m.nextID)
+	}
+	if action.CreatedAt.IsZero() {
+		action.CreatedAt = time.Now().UTC()
+	}
+	m.nodeActionsByID[action.ID] = action
+	return action, nil
+}
+
+func (m *Memory) ListPendingNodeActions(ctx context.Context, nodeID string, now time.Time, limit int) []NodeAction {
+	nodeID = strings.TrimSpace(nodeID)
+	if limit <= 0 {
+		limit = 50
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []NodeAction{}
+	for _, action := range m.nodeActionsByID {
+		if action.NodeID != nodeID || action.AckedAt != nil {
+			continue
+		}
+		if action.ExpiresAt != nil && !action.ExpiresAt.After(now.UTC()) {
+			continue
+		}
+		out = append(out, action)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func (m *Memory) AckNodeActions(ctx context.Context, nodeID string, ids []string, now time.Time) int {
+	nodeID = strings.TrimSpace(nodeID)
+	if len(ids) == 0 {
+		return 0
+	}
+	idSet := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			idSet[trimmed] = struct{}{}
+		}
+	}
+	when := now.UTC()
+	count := 0
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id := range idSet {
+		action, ok := m.nodeActionsByID[id]
+		if !ok || action.NodeID != nodeID || action.AckedAt != nil {
+			continue
+		}
+		action.AckedAt = &when
+		m.nodeActionsByID[id] = action
+		count++
 	}
 	return count
 }

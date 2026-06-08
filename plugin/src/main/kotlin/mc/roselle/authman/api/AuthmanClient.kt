@@ -9,6 +9,7 @@ import mc.roselle.authman.config.RuntimeConfig
 import mc.roselle.authman.model.AuthResult
 import mc.roselle.authman.model.DownstreamTarget
 import mc.roselle.authman.model.GateConsumeResult
+import mc.roselle.authman.model.NodeAction
 import mc.roselle.authman.model.ResolvedPlayer
 import mc.roselle.authman.model.TransferGrant
 import java.net.http.HttpClient
@@ -171,8 +172,20 @@ class AuthmanClient(
             statusCode = response.statusCode,
             body = response.body,
             runtime = parseRuntime(data.obj("runtime_config")),
+            actions = parseNodeActions(data["actions"]),
             accessRevoked = false,
         )
+    }
+
+    fun ackActions(ids: List<String>) {
+        val clean = ids.map { it.trim() }.filter { it.isNotEmpty() }
+        if (clean.isEmpty()) {
+            return
+        }
+        val response = post("/api/node/actions/ack", mapOf("ids" to clean))
+        if (!response.ok && !response.isAccessRevoked()) {
+            throw AuthmanHttpException("ack actions", response)
+        }
     }
 
     private fun post(path: String, body: Map<String, Any?>, includeInstanceHeader: Boolean = true): AuthmanResponse {
@@ -209,6 +222,7 @@ data class HeartbeatResult(
     val statusCode: Int,
     val body: String,
     val runtime: RuntimeConfig?,
+    val actions: List<NodeAction> = emptyList(),
     val accessRevoked: Boolean,
 )
 
@@ -250,6 +264,30 @@ private fun parseRuntime(obj: JsonObject): RuntimeConfig {
         dialogFallbackChatEnabled = obj.boolean("dialog_fallback_chat_enabled", true),
         emailVerificationMode = obj.stringOr("email_verification_mode", "disabled"),
     )
+}
+
+private fun parseNodeActions(element: JsonElement?): List<NodeAction> {
+    if (element == null || element.isJsonNull || !element.isJsonArray) {
+        return emptyList()
+    }
+    return element.asJsonArray.mapNotNull { item ->
+        val obj = item.asJsonObject ?: return@mapNotNull null
+        val id = obj.stringOr("id", "")
+        val type = obj.stringOr("type", "")
+        if (id.isBlank() || type.isBlank()) {
+            return@mapNotNull null
+        }
+        NodeAction(
+            id = id,
+            type = type,
+            presenceId = obj.stringOr("presence_id", ""),
+            passportId = obj.stringOr("passport_id", ""),
+            profileId = obj.stringOr("profile_id", ""),
+            uuid = obj.stringOr("uuid", ""),
+            protocolName = obj.stringOr("protocol_name", ""),
+            reason = obj.stringOr("reason", ""),
+        )
+    }
 }
 
 data class AuthmanResponse(

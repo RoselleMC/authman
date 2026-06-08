@@ -620,16 +620,21 @@ func (s *Server) handleAdminCreatePassportBan(w http.ResponseWriter, r *http.Req
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "ban.create_failed", "failed to create ban"))
 		return
 	}
-	ended := s.store.EndPassportPresences(r.Context(), passport.ID, "passport banned", time.Now())
+	now := time.Now()
+	presences := s.store.ListPassportPresences(r.Context(), passport.ID)
+	queued := s.enqueueDisconnectActions(r.Context(), presences, "passport banned: "+ban.Reason, now)
+	ended := s.store.EndPassportPresences(r.Context(), passport.ID, "passport banned", now)
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, passport.ID, "passport.ban.create", map[string]any{
 		"ban_id":          ban.ID,
 		"reason":          ban.Reason,
 		"expires_at":      ban.ExpiresAt,
 		"ended_presences": ended,
+		"queued_actions":  queued,
 	})
 	api.WriteJSON(w, http.StatusCreated, map[string]any{
 		"ban":             banRows([]store.PlayerBan{ban})[0],
 		"ended_presences": ended,
+		"queued_actions":  queued,
 	}, nil)
 }
 
@@ -654,16 +659,21 @@ func (s *Server) handleAdminCreateProfileBan(w http.ResponseWriter, r *http.Requ
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "ban.create_failed", "failed to create ban"))
 		return
 	}
-	ended := s.store.EndProfilePresences(r.Context(), profile.ID, "profile banned", time.Now())
+	now := time.Now()
+	presences := s.store.ListProfilePresences(r.Context(), profile.ID)
+	queued := s.enqueueDisconnectActions(r.Context(), presences, "profile banned: "+ban.Reason, now)
+	ended := s.store.EndProfilePresences(r.Context(), profile.ID, "profile banned", now)
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, profile.ID, "profile.ban.create", map[string]any{
 		"ban_id":          ban.ID,
 		"reason":          ban.Reason,
 		"expires_at":      ban.ExpiresAt,
 		"ended_presences": ended,
+		"queued_actions":  queued,
 	})
 	api.WriteJSON(w, http.StatusCreated, map[string]any{
 		"ban":             banRows([]store.PlayerBan{ban})[0],
 		"ended_presences": ended,
+		"queued_actions":  queued,
 	}, nil)
 }
 
@@ -770,13 +780,15 @@ func (s *Server) handleAdminKickPresence(w http.ResponseWriter, r *http.Request)
 		api.WriteError(w, api.NewError(http.StatusNotFound, "presence.not_found", "presence not found"))
 		return
 	}
+	queued := s.enqueueDisconnectActions(r.Context(), []store.PlayerPresence{presence}, reason, time.Now())
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, presence.ProfileID, "presence.kick", map[string]any{
-		"presence_id": presence.ID,
-		"passport_id": presence.PassportID,
-		"profile_id":  presence.ProfileID,
-		"server_id":   presence.ServerID,
-		"node_id":     presence.NodeID,
-		"reason":      reason,
+		"presence_id":    presence.ID,
+		"passport_id":    presence.PassportID,
+		"profile_id":     presence.ProfileID,
+		"server_id":      presence.ServerID,
+		"node_id":        presence.NodeID,
+		"reason":         reason,
+		"queued_actions": queued,
 	})
 	api.WriteJSON(w, http.StatusOK, presenceRows([]store.PlayerPresence{presence})[0], nil)
 }
@@ -798,12 +810,16 @@ func (s *Server) handleAdminKickPassport(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	reason := normalizeKickReason(req.Reason)
-	ended := s.store.EndPassportPresences(r.Context(), passport.ID, reason, time.Now())
+	now := time.Now()
+	presences := s.store.ListPassportPresences(r.Context(), passport.ID)
+	queued := s.enqueueDisconnectActions(r.Context(), presences, reason, now)
+	ended := s.store.EndPassportPresences(r.Context(), passport.ID, reason, now)
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, passport.ID, "passport.kick", map[string]any{
 		"reason":          reason,
 		"ended_presences": ended,
+		"queued_actions":  queued,
 	})
-	api.WriteJSON(w, http.StatusOK, map[string]any{"ended_presences": ended}, nil)
+	api.WriteJSON(w, http.StatusOK, map[string]any{"ended_presences": ended, "queued_actions": queued}, nil)
 }
 
 func (s *Server) handleAdminKickProfile(w http.ResponseWriter, r *http.Request) {
@@ -823,12 +839,16 @@ func (s *Server) handleAdminKickProfile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	reason := normalizeKickReason(req.Reason)
-	ended := s.store.EndProfilePresences(r.Context(), profile.ID, reason, time.Now())
+	now := time.Now()
+	presences := s.store.ListProfilePresences(r.Context(), profile.ID)
+	queued := s.enqueueDisconnectActions(r.Context(), presences, reason, now)
+	ended := s.store.EndProfilePresences(r.Context(), profile.ID, reason, now)
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, profile.ID, "profile.kick", map[string]any{
 		"reason":          reason,
 		"ended_presences": ended,
+		"queued_actions":  queued,
 	})
-	api.WriteJSON(w, http.StatusOK, map[string]any{"ended_presences": ended}, nil)
+	api.WriteJSON(w, http.StatusOK, map[string]any{"ended_presences": ended, "queued_actions": queued}, nil)
 }
 
 func (s *Server) handleAdminUpdatePlayer(w http.ResponseWriter, r *http.Request) {

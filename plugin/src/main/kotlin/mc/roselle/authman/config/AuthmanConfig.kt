@@ -100,6 +100,12 @@ class AuthmanConfig {
         runtimeRef.set(next.normalized(runtimeMode))
     }
 
+    fun replaceLocal(next: AuthmanConfig) {
+        mode = next.mode
+        api = next.api
+        runtimeRef.set(next.runtime.normalized(runtimeMode))
+    }
+
     fun validate(configPath: Path) {
         require(api.baseUrl.isNotBlank()) { "api.base-url must be configured in $configPath" }
         require(nodeToken.isNotEmpty()) { "api.node-token must be configured in $configPath" }

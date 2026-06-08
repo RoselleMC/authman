@@ -289,6 +289,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/admin/roles/{id}", s.handleAdminDeleteRole)
 	s.mux.HandleFunc("GET /api/admin/system/summary", s.handleAdminSystemSummary)
 	s.mux.HandleFunc("POST /api/node/heartbeat", s.handleNodeHeartbeat)
+	s.mux.HandleFunc("POST /api/node/actions/ack", s.handleNodeAckActions)
 	s.mux.HandleFunc("POST /api/node/players/resolve", s.handleNodeResolvePlayer)
 	s.mux.HandleFunc("POST /api/node/players/authenticate", s.handleNodeAuthenticatePlayer)
 	s.mux.HandleFunc("POST /api/node/portal/targets/resolve", s.handleNodeResolvePortalTarget)

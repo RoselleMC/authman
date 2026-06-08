@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/RoselleMC/authman/internal/identity"
+	"github.com/RoselleMC/authman/internal/store"
 )
 
 func (s *Server) recordPassportProfileSeen(r *http.Request, passport identity.Passport, profile identity.Profile, serverID string, now time.Time) {
@@ -33,4 +35,30 @@ func playerEventDetails(player identity.Player, extra map[string]any) map[string
 		details[key] = value
 	}
 	return details
+}
+
+func (s *Server) enqueueDisconnectActions(ctx context.Context, presences []store.PlayerPresence, reason string, now time.Time) int {
+	count := 0
+	for _, presence := range presences {
+		if strings.TrimSpace(presence.NodeID) == "" {
+			continue
+		}
+		expiresAt := now.UTC().Add(10 * time.Minute)
+		_, err := s.store.EnqueueNodeAction(ctx, store.NodeAction{
+			NodeID:       presence.NodeID,
+			Type:         store.NodeActionDisconnect,
+			PresenceID:   presence.ID,
+			PassportID:   presence.PassportID,
+			ProfileID:    presence.ProfileID,
+			UUID:         presence.UUID,
+			ProtocolName: presence.ProtocolName,
+			Reason:       strings.TrimSpace(reason),
+			CreatedAt:    now.UTC(),
+			ExpiresAt:    &expiresAt,
+		})
+		if err == nil {
+			count++
+		}
+	}
+	return count
 }

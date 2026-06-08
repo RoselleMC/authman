@@ -12,6 +12,7 @@ import {
   loginWithLink,
   logout,
   register,
+  selectProfile,
   type ExampleStatus,
   type ExtensionData,
   type PortalConfig,
@@ -95,6 +96,7 @@ function App() {
             tab={tab}
             onTab={setTab}
             onMessage={setMessage}
+            onSession={setSession}
             onLogout={async () => {
               await logout();
               setSession(null);
@@ -258,6 +260,7 @@ function AuthenticatedPanel({
   tab,
   onTab,
   onMessage,
+  onSession,
   onLogout
 }: {
   session: PortalSession;
@@ -266,8 +269,19 @@ function AuthenticatedPanel({
   tab: Tab;
   onTab: (tab: Tab) => void;
   onMessage: (message: string) => void;
+  onSession: (session: PortalSession) => void;
   onLogout: () => Promise<void>;
 }) {
+  async function switchProfile(profileID: string) {
+    try {
+      const next = await selectProfile(profileID);
+      onSession(next);
+      onMessage(`Switched profile to ${next.profile.protocol_name}.`);
+    } catch (err) {
+      onMessage(errorMessage(err));
+    }
+  }
+
   return (
     <section className="camp-grid">
       <aside className="stone-panel player-card">
@@ -280,7 +294,17 @@ function AuthenticatedPanel({
           <span className="leg right" />
         </div>
         <h2>{displayName(session)}</h2>
-        <p>{session.player.kind === "premium" ? "Premium profile" : "Offline profile"}</p>
+        <p>{session.passport.kind === "premium" ? "Premium passport" : "Offline passport"}</p>
+        <label className="profile-switcher">
+          Active profile
+          <select value={session.profile.id} onChange={(event) => switchProfile(event.target.value)}>
+            {session.profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.protocol_name}
+              </option>
+            ))}
+          </select>
+        </label>
         <button className="secondary full" onClick={onLogout}>
           Logout
         </button>
@@ -306,9 +330,11 @@ function AuthenticatedPanel({
 function ProfileView({ session, config }: { session: PortalSession; config: PortalConfig | null }) {
   const inventory = useMemo(
     () => [
-      ["Player ID", session.player.id],
-      ["UUID", session.player.uuid],
-      ["Protocol name", session.player.protocol_name || "n/a"],
+      ["Passport username", session.passport.username],
+      ["Passport UUID", session.passport.uuid],
+      ["UUID", session.profile.uuid],
+      ["Protocol name", session.profile.protocol_name || "n/a"],
+      ["Available profiles", String(session.profiles.length)],
       ["Registered at", session.player.registration_server_label || "n/a"],
       ["Last seen", session.player.last_seen_server_label || "n/a"],
       ["Password policy", config?.password_policy_hints?.join(", ") || "n/a"]
@@ -435,7 +461,7 @@ function SecurityView({ onMessage }: { onMessage: (message: string) => void }) {
 }
 
 function displayName(session: PortalSession) {
-  return session.player.protocol_name || session.player.raw_name || session.player.raw_offline_name || "Player";
+  return session.profile?.protocol_name || session.player.protocol_name || session.player.raw_name || session.player.raw_offline_name || "Player";
 }
 
 function labelForTab(tab: Tab) {

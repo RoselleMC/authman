@@ -141,7 +141,10 @@ export function OverviewPage() {
             {overview.audit_events.slice(0, 6).map((ev) => (
               <li key={ev.id || `${ev.event_type}-${ev.created_at}`} className="mini-audit-item" data-testid={`overview-audit-${ev.id || ev.event_type}`}>
                 <span className={cx("actor-tag", `actor-tag--${ev.actor_type}`)}>{t(`admin.audit.actor.${ev.actor_type}`, ev.actor_type)}</span>
-                <code className="mono mini-audit-event">{ev.event_type}</code>
+                <span className="mini-audit-event">
+                  <span>{t(`audit.event.${ev.event_type}`, ev.event_type)}</span>
+                  <code className="mono event-type">{ev.event_type}</code>
+                </span>
                 <span className="mini-audit-target">{ev.target_label}</span>
                 <span className="mini-audit-time">{formatRelativeTime(ev.created_at)}</span>
               </li>

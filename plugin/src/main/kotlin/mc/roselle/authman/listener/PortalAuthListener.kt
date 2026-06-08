@@ -15,6 +15,7 @@ import com.velocitypowered.api.event.player.ServerPreConnectEvent
 import com.velocitypowered.api.proxy.Player
 import com.velocitypowered.api.proxy.ProxyServer
 import com.velocitypowered.api.proxy.server.RegisteredServer
+import mc.roselle.authman.AuthmanPlugin
 import mc.roselle.authman.api.AuthmanClient
 import mc.roselle.authman.config.AuthmanConfig
 import mc.roselle.authman.dialog.DialogActionType
@@ -34,7 +35,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 class PortalAuthListener(
-    private val plugin: Any,
+    private val plugin: AuthmanPlugin,
     private val server: ProxyServer,
     private val logger: Logger,
     private val config: AuthmanConfig,
@@ -47,6 +48,9 @@ class PortalAuthListener(
 
     @Subscribe
     fun onGameProfileRequest(event: GameProfileRequestEvent) {
+        if (plugin.isCoreAccessRevoked()) {
+            return
+        }
         val username = event.username
         if (!shouldResolve(username)) {
             return
@@ -54,6 +58,7 @@ class PortalAuthListener(
         val resolved = try {
             client.resolvePlayer(username)
         } catch (ex: Exception) {
+            plugin.lockIfCoreRejected(ex)
             logger.warn("Failed to resolve Authman player {}", username, ex)
             return
         }
@@ -68,6 +73,10 @@ class PortalAuthListener(
 
     @Subscribe
     fun onLogin(event: LoginEvent) {
+        if (plugin.isCoreAccessRevoked()) {
+            event.setResult(ResultedEvent.ComponentResult.denied(messages.temporaryUnavailable()))
+            return
+        }
         val session = sessions.get(event.player.uniqueId) ?: return
         if (session.resolved.locked || session.state == PlayerAuthState.LOCKED) {
             event.setResult(ResultedEvent.ComponentResult.denied(messages.locked()))
@@ -78,6 +87,11 @@ class PortalAuthListener(
     @Subscribe
     fun onServerPreConnect(event: ServerPreConnectEvent) {
         val player = event.player
+        if (plugin.isCoreAccessRevoked()) {
+            event.setResult(ServerPreConnectEvent.ServerResult.denied())
+            player.disconnect(messages.temporaryUnavailable())
+            return
+        }
         val session = sessions.get(player.uniqueId) ?: return
         if (!session.resolved.authRequired || sessions.isAuthenticated(player.uniqueId)) {
             return
@@ -108,6 +122,10 @@ class PortalAuthListener(
     @Subscribe
     fun onServerConnected(event: ServerConnectedEvent) {
         val player = event.player
+        if (plugin.isCoreAccessRevoked()) {
+            player.disconnect(messages.temporaryUnavailable())
+            return
+        }
         val resolved = sessions.resolved(player.uniqueId) ?: resolveConnectedPlayer(player)
         if (resolved != null && !resolved.authRequired && transferred.add(player.uniqueId)) {
             server.scheduler.buildTask(plugin, Runnable {
@@ -131,6 +149,7 @@ class PortalAuthListener(
         val resolved = try {
             client.resolvePlayer(player.username)
         } catch (ex: Exception) {
+            plugin.lockIfCoreRejected(ex)
             logger.warn("Failed to resolve connected Authman player {}", player.username, ex)
             return null
         }
@@ -165,7 +184,7 @@ class PortalAuthListener(
 		val player = event.getPlayer<Player>() ?: return
         val session = sessions.get(player.uniqueId) ?: return
         val submission = DialogAuthView.readSubmission(WrapperPlayClientCustomClickAction(event)) ?: return
-		event.setCancelled(true)
+        event.setCancelled(true)
         if (submission.sessionId != session.sessionId) {
             logger.debug("Ignored stale Authman dialog submission for {}", player.username)
             return
@@ -185,7 +204,7 @@ class PortalAuthListener(
     }
 
     private fun shouldResolve(username: String): Boolean {
-        return config.resolveRawOfflineNames || username.startsWith("#")
+        return config.resolveRawOfflineNames
     }
 
     private fun prompt(player: Player, session: PlayerAuthSession, force: Boolean) {
@@ -206,14 +225,19 @@ class PortalAuthListener(
     }
 
     private fun handlePassword(player: Player, session: PlayerAuthSession, password: String) {
+        if (plugin.isCoreAccessRevoked()) {
+            player.disconnect(messages.temporaryUnavailable())
+            return
+        }
         if (password.isEmpty()) {
             session.lastInputMarker = "/empty"
             prompt(player, session, force = true)
             return
         }
         val result = try {
-            client.authenticatePlayer(session.resolved.protocolName, password)
+            client.authenticatePlayer(session.resolved.authUsername, password)
         } catch (ex: Exception) {
+            plugin.lockIfCoreRejected(ex)
             logger.warn("Failed to authenticate Authman player {}", player.username, ex)
             messages.sendTemporaryUnavailable(player)
             return
@@ -242,6 +266,10 @@ class PortalAuthListener(
     }
 
     private fun transferAfterAuth(player: Player, resolved: ResolvedPlayer) {
+        if (plugin.isCoreAccessRevoked()) {
+            player.disconnect(messages.temporaryUnavailable())
+            return
+        }
         val grant = try {
             client.createTransferGrant(
                 username = resolved.protocolName,
@@ -250,6 +278,7 @@ class PortalAuthListener(
                 source = config.portalSourceId,
             )
         } catch (ex: Exception) {
+            plugin.lockIfCoreRejected(ex)
             logger.warn("Failed to create Authman transfer grant for {}", player.username, ex)
             messages.sendTemporaryUnavailable(player)
             return

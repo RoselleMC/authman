@@ -22,8 +22,13 @@ export interface ListColumn<T> {
   key: string;
   header: ReactNode;
   render: (row: T) => ReactNode;
+  sortable?: boolean;
+  sortValue?: (row: T) => string | number | boolean | Date | null | undefined;
   width?: string;
+  minWidth?: string;
   align?: "left" | "right" | "center";
+  /** Keep the column visible while the table scrolls horizontally. */
+  sticky?: "right";
   /** Default visibility. Defaults to true. */
   defaultVisible?: boolean;
   /** When true, the column cannot be hidden by the user. */
@@ -52,12 +57,16 @@ export interface ListState {
   filters: Record<string, string>;
   /** Set of column keys the user has hidden. Mandatory columns are ignored. */
   hidden: string[];
+  sortKey?: string;
+  sortDir?: "asc" | "desc";
 }
 
 export interface ListStateDefaults {
   pageSize?: number;
   hidden?: string[];
   filters?: Record<string, string>;
+  sortKey?: string;
+  sortDir?: "asc" | "desc";
 }
 
 export type ListMode = "client" | "server";

@@ -26,8 +26,29 @@ export interface PortalPlayer {
   connected_servers: Array<{ slug: string; display_name: string }>;
 }
 
+export interface PortalPassport {
+  id: string;
+  uuid: string;
+  username: string;
+  kind: "premium" | "offline";
+  status: string;
+  profile_count: number;
+}
+
+export interface PortalProfile {
+  id: string;
+  uuid: string;
+  protocol_name: string;
+  normalized_name: string;
+  display_name: string;
+  status: "active" | "locked" | "archived";
+}
+
 export interface PortalSession {
   player: PortalPlayer;
+  passport: PortalPassport;
+  profiles: PortalProfile[];
+  profile: PortalProfile;
   csrf_token: string;
   expires_at?: string;
 }
@@ -152,6 +173,17 @@ export async function loginWithLink(token: string) {
     skipCSRF: true
   });
   setCSRF(session.csrf_token);
+  return session;
+}
+
+export async function selectProfile(profileID: string) {
+  const session = await apiFetch<PortalSession>("/api/portal/session/select-profile", {
+    method: "POST",
+    bodyJSON: { profile_id: profileID }
+  });
+  if (session.csrf_token) {
+    setCSRF(session.csrf_token);
+  }
   return session;
 }
 

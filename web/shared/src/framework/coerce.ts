@@ -13,6 +13,8 @@
  * - Coercers MUST be pure and synchronous.
  */
 
+import type { IPGeo } from "../components/IPLocation";
+
 export function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -279,8 +281,10 @@ export function coerceAdminUser(raw: unknown): SafeAdminUser {
 export interface SafeVelocityNode {
   id: string;
   name: string;
+  mode: "portal" | "gate";
   server_id: string;
   server_label: string;
+  runtime_config: Record<string, unknown>;
   status: "active" | "disabled" | "stale";
   last_seen_at: string | null;
   token_fingerprint: string;
@@ -295,8 +299,10 @@ export function coerceVelocityNode(raw: unknown): SafeVelocityNode {
   return {
     id: asString(r.id, ""),
     name: asString(r.name, "—"),
+    mode: mapEnum(r.mode, ["portal", "gate"] as const, "portal"),
     server_id: asString(r.server_id, ""),
     server_label: asString(firstDefined(r.server_label, r.server_name), "—"),
+    runtime_config: asRecord(r.runtime_config),
     status: mapEnum(r.status, ["active", "disabled", "stale"] as const, "stale"),
     last_seen_at: typeof r.last_seen_at === "string" ? r.last_seen_at : null,
     token_fingerprint: asString(firstDefined(r.token_fingerprint, r.fingerprint, r.token_hint), "—"),
@@ -310,10 +316,21 @@ export function coerceVelocityNode(raw: unknown): SafeVelocityNode {
 export interface SafeAuditEvent {
   id: string;
   event_type: string;
+  schema_version: number;
+  category: string;
+  outcome: string;
+  source: string;
+  session_id: string;
+  correlation_id: string;
   actor_type: string;
+  actor_id: string;
   actor_label: string;
   target_type: string;
+  target_id: string;
   target_label: string;
+  client_ip: string;
+  client_geo: IPGeo | null;
+  details: Record<string, unknown>;
   created_at: string;
 }
 
@@ -322,10 +339,45 @@ export function coerceAuditEvent(raw: unknown): SafeAuditEvent {
   return {
     id: asString(r.id, ""),
     event_type: asString(r.event_type, "unknown"),
+    schema_version: asNumber(r.schema_version, 1),
+    category: asString(firstDefined(r.category, pick(r.details, "category")), ""),
+    outcome: asString(firstDefined(r.outcome, pick(r.details, "outcome")), ""),
+    source: asString(firstDefined(r.source, pick(r.details, "source")), ""),
+    session_id: asString(firstDefined(r.session_id, pick(r.details, "session_id")), ""),
+    correlation_id: asString(firstDefined(r.correlation_id, pick(r.details, "correlation_id")), ""),
     actor_type: asString(r.actor_type, "system"),
-    actor_label: asString(firstDefined(r.actor_label, r.actor), "—"),
+    actor_id: asString(r.actor_id, ""),
+    actor_label: asString(firstDefined(r.actor_label, r.actor_id, r.actor), "—"),
     target_type: asString(r.target_type, "—"),
-    target_label: asString(firstDefined(r.target_label, r.target), "—"),
+    target_id: asString(r.target_id, ""),
+    target_label: asString(firstDefined(r.target_label, r.target_id, r.target), "—"),
+    client_ip: asString(firstDefined(r.client_ip, pick(r.details, "client_ip")), ""),
+    client_geo: coerceIPGeo(firstDefined(r.client_geo, pick(r.details, "client_geo"))),
+    details: asRecord(firstDefined(r.details, r.metadata)),
     created_at: asString(r.created_at, ""),
+  };
+}
+
+function coerceIPGeo(raw: unknown): IPGeo | null {
+  const r = asRecord(raw);
+  const ip = asString(r.ip, "");
+  const countryCode = asString(r.country_code, "");
+  if (!ip && !countryCode) return null;
+  const localesRaw = asRecord(r.locales);
+  const locales: IPGeo["locales"] = {};
+  for (const [key, value] of Object.entries(localesRaw)) {
+    const loc = asRecord(value);
+    locales[key] = {
+      country: asString(loc.country, ""),
+      region: asString(loc.region, ""),
+      city: asString(loc.city, ""),
+    };
+  }
+  return {
+    ip,
+    country_code: countryCode,
+    isp: asString(r.isp, ""),
+    asn: asString(r.asn, ""),
+    locales,
   };
 }

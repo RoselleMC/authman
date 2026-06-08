@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 /**
- * Two-column layout for detail pages (admin/players/:id, admin/servers/:id):
+ * Two-column layout for detail pages (core/passports/:id, core/profiles/:id):
  * a sticky aside on the left with summary + actions, and a body on the right
  * with tabs / panels.
  *

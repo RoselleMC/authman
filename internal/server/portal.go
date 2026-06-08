@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -35,19 +34,26 @@ func (s *Server) handleOfflineRegister(w http.ResponseWriter, r *http.Request) {
 	if username == "" {
 		username = req.RawUsername
 	}
-	player, err := s.store.CreateOfflinePlayer(r.Context(), username, passwordHash)
+	pp, err := s.store.CreateOfflinePassportProfile(r.Context(), username, username, passwordHash)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "player.offline_registration_failed", err.Error()))
 		return
 	}
-	s.audit(r, audit.ActorPlayer, player.ID, audit.TargetPlayer, player.ID, "offline.register", map[string]any{
-		"raw_offline_name": player.RawOfflineName,
+	player := identity.PlayerFromPassportProfileLink(pp)
+	now := time.Now()
+	s.recordPassportProfileSeen(r, pp.Passport, pp.Profile, req.ServerSlug, now)
+	s.audit(r, audit.ActorPlayer, pp.Passport.ID, audit.TargetPlayer, pp.Passport.ID, "offline.register", map[string]any{
+		"raw_offline_name": pp.Passport.RawOfflineName,
+		"profile_id":       pp.Profile.ID,
+		"protocol_name":    pp.Profile.ProtocolName,
+		"server_slug":      req.ServerSlug,
 	})
-	session, sessionToken, csrfToken, err := auth.NewSession(auth.SessionPlayer, player.ID, 24*time.Hour, time.Now())
+	session, sessionToken, csrfToken, err := auth.NewSession(auth.SessionPlayer, pp.Passport.ID, 24*time.Hour, now)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.token_failed", "failed to create session"))
 		return
 	}
+	session.SelectedProfileID = pp.Profile.ID
 	if err := s.saveSession(r.Context(), session); err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.session_failed", "failed to save session"))
 		return
@@ -55,6 +61,9 @@ func (s *Server) handleOfflineRegister(w http.ResponseWriter, r *http.Request) {
 	setSessionCookie(w, r, playerSessionCookie, sessionToken, session.ExpiresAt)
 	api.WriteJSON(w, http.StatusCreated, map[string]any{
 		"player":     portalPlayerData(player),
+		"passport":   passportRowData(pp.Passport, []identity.Profile{pp.Profile}, s.store.ListPassportPresences(r.Context(), pp.Passport.ID)),
+		"profiles":   []map[string]any{profileSummaryData(pp.Profile, nil)},
+		"profile":    profileRowData(pp.Profile, &pp.Passport, s.store.ListProfilePresences(r.Context(), pp.Profile.ID)),
 		"csrf_token": csrfToken,
 		"expires_at": session.ExpiresAt,
 	}, nil)
@@ -72,35 +81,67 @@ func (s *Server) handlePortalLogin(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, err)
 		return
 	}
-	player, credential, err := s.store.GetOfflineCredential(r.Context(), req.Username)
+	passport, credential, err := s.store.GetPassportCredential(r.Context(), req.Username)
 	if err != nil {
+		s.audit(r, audit.ActorPlayer, strings.TrimSpace(req.Username), audit.TargetPlayer, strings.TrimSpace(req.Username), "passport.session.login_failure", map[string]any{
+			"reason":      "credential_not_found",
+			"server_slug": req.ServerSlug,
+		})
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.invalid_credentials", "invalid username or password"))
 		return
 	}
-	if player.Locked || credentialLocked(credential, time.Now()) {
+	if passport.Status == identity.PassportStatusLocked || passport.Status == identity.PassportStatusDeleted || passportCredentialLocked(credential, time.Now()) {
+		s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPlayer, passport.ID, "passport.session.login_rejected", map[string]any{
+			"reason":          "account_locked",
+			"passport_status": passport.Status,
+			"locked_until":    credential.LockedUntil,
+			"server_slug":     req.ServerSlug,
+		})
 		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.account_locked", "account is locked"))
 		return
 	}
 	ok, err := auth.VerifyPassword(req.Password, credential.PasswordHash)
 	if err != nil || !ok {
-		_, _ = s.store.RecordOfflineLoginFailure(r.Context(), player.ID, time.Now())
+		updatedCredential, _ := s.store.RecordPassportLoginFailure(r.Context(), passport.ID, time.Now())
+		s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPlayer, passport.ID, "passport.session.login_failure", map[string]any{
+			"reason":          "password_mismatch",
+			"failed_attempts": updatedCredential.FailedAttempts,
+			"locked_until":    updatedCredential.LockedUntil,
+			"server_slug":     req.ServerSlug,
+		})
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.invalid_credentials", "invalid username or password"))
 		return
 	}
-	_ = s.store.RecordOfflineLoginSuccess(r.Context(), player.ID)
-	session, sessionToken, csrfToken, err := auth.NewSession(auth.SessionPlayer, player.ID, 24*time.Hour, time.Now())
+	_ = s.store.RecordPassportLoginSuccess(r.Context(), passport.ID)
+	profile, err := s.store.GetPrimaryProfileForPassport(r.Context(), passport.ID)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "profile.none", "passport has no profile"))
+		return
+	}
+	player := identity.PlayerFromPassportProfile(passport, profile)
+	now := time.Now()
+	s.recordPassportProfileSeen(r, passport, profile, req.ServerSlug, now)
+	session, sessionToken, csrfToken, err := auth.NewSession(auth.SessionPlayer, passport.ID, 24*time.Hour, now)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.token_failed", "failed to create session"))
 		return
 	}
+	session.SelectedProfileID = profile.ID
 	if err := s.saveSession(r.Context(), session); err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.session_failed", "failed to save session"))
 		return
 	}
 	setSessionCookie(w, r, playerSessionCookie, sessionToken, session.ExpiresAt)
-	s.audit(r, audit.ActorPlayer, player.ID, audit.TargetPortalSession, session.ID, "player.session.login", nil)
+	s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPortalSession, session.ID, "passport.session.login", map[string]any{
+		"profile_id":    profile.ID,
+		"protocol_name": profile.ProtocolName,
+		"server_slug":   req.ServerSlug,
+	})
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"player":     portalPlayerData(player),
+		"passport":   passportRowData(passport, s.store.ListProfilesForPassport(r.Context(), passport.ID), s.store.ListPassportPresences(r.Context(), passport.ID)),
+		"profiles":   portalProfileListData(s.store.ListProfilesForPassport(r.Context(), passport.ID)),
+		"profile":    profileRowData(profile, &passport, s.store.ListProfilePresences(r.Context(), profile.ID)),
 		"csrf_token": csrfToken,
 		"expires_at": session.ExpiresAt,
 	}, nil)
@@ -112,9 +153,9 @@ func (s *Server) handlePortalMe(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, authErr)
 		return
 	}
-	player, err := s.store.GetPlayerByID(r.Context(), session.SubjectID)
+	passport, profile, player, err := s.portalSessionIdentity(r.Context(), session)
 	if err != nil {
-		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session player was not found"))
+		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session passport was not found"))
 		return
 	}
 	csrf, csrfErr := s.rotateCSRF(r.Context(), session)
@@ -122,7 +163,14 @@ func (s *Server) handlePortalMe(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.token_failed", "failed to refresh CSRF token"))
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, map[string]any{"player": portalPlayerData(player), "csrf_token": csrf}, nil)
+	profiles := s.store.ListProfilesForPassport(r.Context(), passport.ID)
+	api.WriteJSON(w, http.StatusOK, map[string]any{
+		"player":     portalPlayerData(player),
+		"passport":   passportRowData(passport, profiles, s.store.ListPassportPresences(r.Context(), passport.ID)),
+		"profiles":   portalProfileListData(profiles),
+		"profile":    profileRowData(profile, &passport, s.store.ListProfilePresences(r.Context(), profile.ID)),
+		"csrf_token": csrf,
+	}, nil)
 }
 
 func (s *Server) handlePortalLogout(w http.ResponseWriter, r *http.Request) {
@@ -147,9 +195,9 @@ func (s *Server) handlePortalChangePassword(w http.ResponseWriter, r *http.Reque
 		api.WriteError(w, authErr)
 		return
 	}
-	player, err := s.store.GetPlayerByID(r.Context(), session.SubjectID)
+	passport, _, _, err := s.portalSessionIdentity(r.Context(), session)
 	if err != nil {
-		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session player was not found"))
+		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session passport was not found"))
 		return
 	}
 	var req portalChangePasswordRequest
@@ -157,13 +205,14 @@ func (s *Server) handlePortalChangePassword(w http.ResponseWriter, r *http.Reque
 		api.WriteError(w, err)
 		return
 	}
-	_, credential, err := s.store.GetOfflineCredential(r.Context(), player.RawOfflineName)
+	_, credential, err := s.store.GetPassportCredential(r.Context(), passport.Username)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "auth.credential_not_found", "offline credential not found"))
 		return
 	}
 	ok, err := auth.VerifyPassword(req.CurrentPassword, credential.PasswordHash)
 	if err != nil || !ok {
+		s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPlayer, passport.ID, "offline.password.change_failure", map[string]any{"reason": "current_password_mismatch"})
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.invalid_credentials", "invalid current password"))
 		return
 	}
@@ -172,11 +221,11 @@ func (s *Server) handlePortalChangePassword(w http.ResponseWriter, r *http.Reque
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "auth.password_policy_failed", "password does not satisfy policy"))
 		return
 	}
-	if err := s.store.UpdateOfflinePassword(r.Context(), player.ID, passwordHash); err != nil {
+	if err := s.store.UpdatePassportPassword(r.Context(), passport.ID, passwordHash); err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "auth.password_update_failed", "failed to update password"))
 		return
 	}
-	s.audit(r, audit.ActorPlayer, player.ID, audit.TargetPlayer, player.ID, "offline.password.change", nil)
+	s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPlayer, passport.ID, "offline.password.change", map[string]any{"profile_id": session.SelectedProfileID})
 	api.WriteJSON(w, http.StatusOK, nil, nil)
 }
 
@@ -239,7 +288,7 @@ func (s *Server) handlePortalExtensionData(w http.ResponseWriter, r *http.Reques
 		api.WriteError(w, authErr)
 		return
 	}
-	player, err := s.store.GetPlayerByID(r.Context(), session.SubjectID)
+	_, _, player, err := s.portalSessionIdentity(r.Context(), session)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session player was not found"))
 		return
@@ -251,6 +300,50 @@ type portalLinkLoginRequest struct {
 	Token string `json:"token"`
 }
 
+type portalSelectProfileRequest struct {
+	ProfileID string `json:"profile_id"`
+}
+
+func (s *Server) handlePortalSelectProfile(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requirePlayer(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	var req portalSelectProfileRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	profile, err := s.store.GetProfileByID(r.Context(), strings.TrimSpace(req.ProfileID))
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "profile.not_found", "profile not found"))
+		return
+	}
+	passport, err := s.store.GetPassportForProfile(r.Context(), profile.ID)
+	if err != nil || passport.ID != session.SubjectID {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "profile.not_owned", "profile is not available for this passport"))
+		return
+	}
+	session.SelectedProfileID = profile.ID
+	if err := s.store.UpdateSession(r.Context(), session); err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.session_failed", "failed to update session"))
+		return
+	}
+	s.recordPassportProfileSeen(r, passport, profile, "", time.Now())
+	s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPlayer, profile.ID, "passport.profile.select", map[string]any{
+		"profile_id":    profile.ID,
+		"protocol_name": profile.ProtocolName,
+	})
+	profiles := s.store.ListProfilesForPassport(r.Context(), passport.ID)
+	api.WriteJSON(w, http.StatusOK, map[string]any{
+		"passport": passportRowData(passport, profiles, s.store.ListPassportPresences(r.Context(), passport.ID)),
+		"profiles": portalProfileListData(profiles),
+		"profile":  profileRowData(profile, &passport, s.store.ListProfilePresences(r.Context(), profile.ID)),
+		"player":   portalPlayerData(identity.PlayerFromPassportProfile(passport, profile)),
+	}, nil)
+}
+
 func (s *Server) handlePortalLinkLogin(w http.ResponseWriter, r *http.Request) {
 	var req portalLinkLoginRequest
 	if err := api.DecodeJSON(r, &req); err != nil {
@@ -259,25 +352,39 @@ func (s *Server) handlePortalLinkLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	link, err := s.getPortalLink(r.Context(), req.Token)
 	if err != nil {
+		s.audit(r, audit.ActorSystem, "portal-link", audit.TargetPortalSession, auth.TokenFingerprint(req.Token), "passport.session.link_login_failure", map[string]any{"reason": "link_not_found"})
 		api.WriteError(w, api.NewError(http.StatusNotFound, "portal_link.not_found", "portal link was not found"))
 		return
 	}
 	switch result := link.Verify(req.Token, time.Now()); result {
 	case auth.PortalLinkVerifyOK:
 	default:
+		s.audit(r, audit.ActorPlayer, link.PlayerID, audit.TargetPortalSession, link.ID, "passport.session.link_login_failure", map[string]any{
+			"reason":    string(result),
+			"server_id": link.ServerID,
+		})
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "portal_link."+string(result), "portal link cannot be used"))
 		return
 	}
-	player, err := s.store.GetPlayerByID(r.Context(), link.PlayerID)
+	passport, err := s.store.GetPassportByID(r.Context(), link.PlayerID)
 	if err != nil {
-		api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
+		api.WriteError(w, api.NewError(http.StatusNotFound, "passport.not_found", "passport not found"))
 		return
 	}
-	session, sessionToken, csrfToken, err := auth.NewSession(auth.SessionPlayer, player.ID, 24*time.Hour, time.Now())
+	profile, err := s.store.GetPrimaryProfileForPassport(r.Context(), passport.ID)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "profile.none", "passport has no profile"))
+		return
+	}
+	player := identity.PlayerFromPassportProfile(passport, profile)
+	now := time.Now()
+	s.recordPassportProfileSeen(r, passport, profile, link.ServerID, now)
+	session, sessionToken, csrfToken, err := auth.NewSession(auth.SessionPlayer, passport.ID, 24*time.Hour, now)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.token_failed", "failed to create session"))
 		return
 	}
+	session.SelectedProfileID = profile.ID
 	if err := s.saveSession(r.Context(), session); err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.session_failed", "failed to save session"))
 		return
@@ -287,73 +394,51 @@ func (s *Server) handlePortalLinkLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setSessionCookie(w, r, playerSessionCookie, sessionToken, session.ExpiresAt)
-	s.audit(r, audit.ActorPlayer, player.ID, audit.TargetPortalSession, session.ID, "player.session.link_login", map[string]any{
-		"server_id": link.ServerID,
+	s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPortalSession, session.ID, "passport.session.link_login", map[string]any{
+		"server_id":     link.ServerID,
+		"profile_id":    profile.ID,
+		"protocol_name": profile.ProtocolName,
+		"link_id":       link.ID,
 	})
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"player":     portalPlayerData(player),
+		"passport":   passportRowData(passport, s.store.ListProfilesForPassport(r.Context(), passport.ID), s.store.ListPassportPresences(r.Context(), passport.ID)),
+		"profiles":   portalProfileListData(s.store.ListProfilesForPassport(r.Context(), passport.ID)),
+		"profile":    profileRowData(profile, &passport, s.store.ListProfilePresences(r.Context(), profile.ID)),
 		"csrf_token": csrfToken,
 		"expires_at": session.ExpiresAt,
 	}, nil)
 }
 
-func (s *Server) handleAdminPlayers(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireAdmin(r, false); err != nil {
-		api.WriteError(w, err)
-		return
+func (s *Server) portalSessionIdentity(ctx context.Context, session auth.Session) (identity.Passport, identity.Profile, identity.Player, error) {
+	passport, err := s.store.GetPassportByID(ctx, session.SubjectID)
+	if err != nil {
+		return identity.Passport{}, identity.Profile{}, identity.Player{}, err
 	}
-	params := parseListPageParams(r)
-	q := r.URL.Query()
-	search := q.Get("q")
-	kind := strings.TrimSpace(q.Get("kind"))
-	status := strings.TrimSpace(q.Get("status"))
-
-	players := s.store.ListPlayers(r.Context())
-	sort.SliceStable(players, func(i, j int) bool {
-		left := players[i].ProtocolName
-		if left == "" {
-			left = players[i].RawOfflineName
+	var profile identity.Profile
+	if session.SelectedProfileID != "" {
+		profile, err = s.store.GetProfileByID(ctx, session.SelectedProfileID)
+		if err == nil {
+			if owner, ownerErr := s.store.GetPassportForProfile(ctx, profile.ID); ownerErr == nil && owner.ID == passport.ID {
+				return passport, profile, identity.PlayerFromPassportProfile(passport, profile), nil
+			}
 		}
-		right := players[j].ProtocolName
-		if right == "" {
-			right = players[j].RawOfflineName
-		}
-		if left == right {
-			return players[i].ID < players[j].ID
-		}
-		return strings.ToLower(left) < strings.ToLower(right)
-	})
-
-	filtered := make([]identity.Player, 0, len(players))
-	for _, player := range players {
-		if kind != "" && string(player.Kind) != kind {
-			continue
-		}
-		playerStatus := "active"
-		if player.Locked {
-			playerStatus = "locked"
-		}
-		if status != "" && playerStatus != status {
-			continue
-		}
-		if search != "" &&
-			!containsFold(player.ID, search) &&
-			!containsFold(player.RawOfflineName, search) &&
-			!containsFold(player.NormalizedName, search) &&
-			!containsFold(player.ProtocolName, search) &&
-			!containsFold(player.UUID.String(), search) &&
-			!containsFold(player.UUID.Compact(), search) {
-			continue
-		}
-		filtered = append(filtered, player)
 	}
-
-	start, end := pageBounds(len(filtered), params)
-	data := make([]map[string]any, 0, end-start)
-	for _, player := range filtered[start:end] {
-		data = append(data, playerRowData(player))
+	profile, err = s.store.GetPrimaryProfileForPassport(ctx, passport.ID)
+	if err != nil {
+		return identity.Passport{}, identity.Profile{}, identity.Player{}, err
 	}
-	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), len(filtered), params))
+	session.SelectedProfileID = profile.ID
+	_ = s.store.UpdateSession(ctx, session)
+	return passport, profile, identity.PlayerFromPassportProfile(passport, profile), nil
+}
+
+func portalProfileListData(profiles []identity.Profile) []map[string]any {
+	out := make([]map[string]any, 0, len(profiles))
+	for _, profile := range profiles {
+		out = append(out, profileSummaryData(profile, nil))
+	}
+	return out
 }
 
 func (s *Server) getPortalLink(ctx context.Context, token string) (auth.PortalLink, error) {

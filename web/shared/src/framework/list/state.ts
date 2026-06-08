@@ -18,6 +18,8 @@ export function makeDefaultState(defaults?: ListStateDefaults): ListState {
     pageSize: defaults?.pageSize ?? DEFAULT_PAGE_SIZE,
     filters: { ...(defaults?.filters ?? {}) },
     hidden: [...(defaults?.hidden ?? [])],
+    sortKey: defaults?.sortKey,
+    sortDir: defaults?.sortDir,
   };
 }
 
@@ -78,6 +80,19 @@ export function paginateClient<T>(rows: ReadonlyArray<T>, state: ListState): T[]
   return rows.slice(start, start + state.pageSize);
 }
 
+export function sortClientRows<T>(
+  rows: ReadonlyArray<T>,
+  columns: ReadonlyArray<ListColumn<T>>,
+  state: ListState,
+): T[] {
+  if (!state.sortKey || !state.sortDir) return rows.slice();
+  const col = columns.find((c) => c.key === state.sortKey && c.sortable);
+  if (!col) return rows.slice();
+  const dir = state.sortDir === "asc" ? 1 : -1;
+  const valueOf = col.sortValue ?? ((row: T) => String(col.render(row) ?? ""));
+  return rows.slice().sort((a, b) => compareSortValues(valueOf(a), valueOf(b)) * dir);
+}
+
 /* ------------------------------------------------------------------ */
 /* URL codec                                                            */
 /* ------------------------------------------------------------------ */
@@ -92,7 +107,7 @@ function prefixed(prefix: string, name: string): string {
  *
  * - page=1 is omitted
  * - pageSize=defaults.pageSize is omitted
- * - empty hidden list is omitted
+ * - default hidden list is omitted; an explicit empty list is kept when the default hides columns
  * - empty filter values are omitted
  */
 export function writeStateToParams(
@@ -108,8 +123,15 @@ export function writeStateToParams(
   if (state.pageSize !== defSize) into.set(prefixed(prefix, "size"), String(state.pageSize));
   else into.delete(prefixed(prefix, "size"));
 
-  if (state.hidden.length > 0) into.set(prefixed(prefix, "hidden"), state.hidden.join(HIDDEN_SEP));
-  else into.delete(prefixed(prefix, "hidden"));
+  const hiddenKey = prefixed(prefix, "hidden");
+  const defaultHidden = defaults?.hidden ?? [];
+  if (sameStringList(state.hidden, defaultHidden)) into.delete(hiddenKey);
+  else into.set(hiddenKey, state.hidden.join(HIDDEN_SEP));
+
+  if (state.sortKey) into.set(prefixed(prefix, "sort"), state.sortKey);
+  else into.delete(prefixed(prefix, "sort"));
+  if (state.sortKey && state.sortDir) into.set(prefixed(prefix, "dir"), state.sortDir);
+  else into.delete(prefixed(prefix, "dir"));
 
   // Remove every existing filter param under this prefix, then add the
   // current set so cleared filters disappear from the URL.
@@ -133,8 +155,9 @@ export function readStateFromParams(
   const rawSize = Number(params.get(prefixed(prefix, "size")) ?? "");
   const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
   const pageSize = Number.isFinite(rawSize) && rawSize > 0 ? Math.floor(rawSize) : base.pageSize;
-  const hiddenRaw = params.get(prefixed(prefix, "hidden")) ?? "";
-  const hidden = hiddenRaw ? hiddenRaw.split(HIDDEN_SEP).filter(Boolean) : base.hidden;
+  const hiddenKey = prefixed(prefix, "hidden");
+  const hiddenRaw = params.get(hiddenKey) ?? "";
+  const hidden = params.has(hiddenKey) ? hiddenRaw.split(HIDDEN_SEP).filter(Boolean) : base.hidden;
 
   const filterPrefix = `${prefixed(prefix, "f")}.`;
   const filters: Record<string, string> = { ...base.filters };
@@ -143,7 +166,10 @@ export function readStateFromParams(
     const columnKey = key.slice(filterPrefix.length);
     if (columnKey) filters[columnKey] = value;
   }
-  return { page, pageSize, hidden, filters };
+  const sortKey = params.get(prefixed(prefix, "sort")) ?? base.sortKey;
+  const rawDir = params.get(prefixed(prefix, "dir")) ?? base.sortDir;
+  const sortDir = rawDir === "asc" || rawDir === "desc" ? rawDir : undefined;
+  return { page, pageSize, hidden, filters, sortKey: sortKey || undefined, sortDir };
 }
 
 /**
@@ -153,4 +179,23 @@ export function readStateFromParams(
  */
 export function withPageReset(state: ListState, page = 1): ListState {
   return { ...state, page };
+}
+
+function sameStringList(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function compareSortValues(a: unknown, b: unknown): number {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  const av = a instanceof Date ? a.getTime() : a;
+  const bv = b instanceof Date ? b.getTime() : b;
+  if (typeof av === "number" && typeof bv === "number") return av === bv ? 0 : av < bv ? -1 : 1;
+  if (typeof av === "boolean" && typeof bv === "boolean") return av === bv ? 0 : av ? 1 : -1;
+  return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" });
 }

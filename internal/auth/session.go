@@ -12,12 +12,13 @@ const (
 )
 
 type Session struct {
-	ID        string
-	Kind      SessionKind
-	SubjectID string
-	CSRFToken string
-	CreatedAt time.Time
-	ExpiresAt time.Time
+	ID                string
+	Kind              SessionKind
+	SubjectID         string
+	SelectedProfileID string
+	CSRFToken         string
+	CreatedAt         time.Time
+	ExpiresAt         time.Time
 }
 
 func NewSession(kind SessionKind, subjectID string, ttl time.Duration, now time.Time) (Session, string, string, error) {

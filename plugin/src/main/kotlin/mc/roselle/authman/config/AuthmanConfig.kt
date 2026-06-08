@@ -8,6 +8,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicReference
 
 @ConfigSerializable
 class AuthmanConfig {
@@ -17,32 +18,8 @@ class AuthmanConfig {
     @field:Setting("api")
     var api: ApiConfig = ApiConfig()
 
-    @field:Setting("node")
-    var node: NodeConfig = NodeConfig()
-
-    @field:Setting("identity")
-    var identity: IdentityConfig = IdentityConfig()
-
-    @field:Setting("auth")
-    var auth: AuthConfig = AuthConfig()
-
-    @field:Setting("servers")
-    var servers: ServersConfig = ServersConfig()
-
-    @field:Setting("portal")
-    var portal: PortalConfig = PortalConfig()
-
-    @field:Setting("gate")
-    var gate: GateConfig = GateConfig()
-
-    @field:Setting("dialog")
-    var dialog: DialogConfig = DialogConfig()
-
-    @field:Setting("email")
-    var email: EmailConfig = EmailConfig()
-
-    @field:Setting("packets")
-    var packets: PacketsConfig = PacketsConfig()
+    @Transient
+    private val runtimeRef = AtomicReference(RuntimeConfig())
 
     val apiBase: URI
         get() = URI.create(api.baseUrl.trim())
@@ -51,73 +28,77 @@ class AuthmanConfig {
         get() = api.nodeToken.trim()
 
     val nodeName: String
-        get() = node.name.trim().ifEmpty { "velocity" }
+        get() = runtime.nodeName
 
     val runtimeMode: RuntimeMode
         get() = RuntimeMode.from(mode)
 
     val serverId: String
-        get() = node.serverId.trim().ifEmpty { "default" }
+        get() = runtime.serverId
 
     val heartbeatIntervalSeconds: Long
-        get() = node.heartbeatIntervalSeconds.coerceAtLeast(10)
+        get() = runtime.heartbeatIntervalSeconds.coerceAtLeast(10)
 
     val requestTimeout: Duration
         get() = Duration.ofSeconds(api.requestTimeoutSeconds.coerceAtLeast(1))
 
     val resolveRawOfflineNames: Boolean
-        get() = identity.resolveRawOfflineNames
+        get() = runtime.resolveRawOfflineNames
 
     val maxPasswordAttempts: Int
-        get() = auth.maxPasswordAttempts.coerceAtLeast(1)
+        get() = runtime.maxPasswordAttempts.coerceAtLeast(1)
 
     val chatCooldownMillis: Long
-        get() = auth.chatCooldownMillis.coerceAtLeast(0)
+        get() = runtime.chatCooldownMillis.coerceAtLeast(0)
 
     val authTimeoutSeconds: Long
-        get() = auth.timeoutSeconds.coerceAtLeast(10)
+        get() = runtime.authTimeoutSeconds.coerceAtLeast(10)
 
     val completionDelaySeconds: Long
-        get() = auth.completionDelaySeconds.coerceAtLeast(0)
+        get() = runtime.completionDelaySeconds.coerceAtLeast(0)
 
     val defaultTargetServer: String
-        get() = servers.defaultTarget.trim()
+        get() = runtime.defaultTargetServer
 
     val holdingServer: String
-        get() = servers.holding.trim()
+        get() = runtime.holdingServer
 
     val transferCookieKey: String
-        get() = gate.transferCookieKey.trim().ifEmpty { "authman:transfer_grant" }
+        get() = runtime.transferCookieKey
 
     val gateInitialServer: String
-        get() = gate.initialServer.trim()
+        get() = runtime.gateInitialServer
 
     val gateHoldingServer: String
-        get() = gate.holdingServer.trim()
+        get() = runtime.gateHoldingServer
 
     val gateValidationTimeoutSeconds: Long
-        get() = gate.validationTimeoutSeconds.coerceAtLeast(3)
+        get() = runtime.gateValidationTimeoutSeconds.coerceAtLeast(3)
 
     val portalRequestedServerId: String
-        get() = portal.serverId.trim()
+        get() = runtime.portalRequestedServerId
 
     val portalRequestedHost: String
-        get() = portal.requestedHost.trim()
+        get() = runtime.portalRequestedHost
 
     val portalSourceId: String
-        get() = portal.sourceId.trim().ifEmpty { nodeName }
+        get() = runtime.portalSourceId.ifEmpty { nodeName }
 
     val dialogEnabled: Boolean
-        get() = dialog.enabled
+        get() = runtime.dialogEnabled
 
     val dialogFallbackChatEnabled: Boolean
-        get() = dialog.fallbackChat
+        get() = runtime.dialogFallbackChatEnabled
 
     val emailVerificationMode: String
-        get() = email.verificationMode.trim().lowercase()
+        get() = runtime.emailVerificationMode
 
-    val stripOfflinePrefix: StripOfflinePrefixConfig
-        get() = packets.stripOfflinePrefix
+    val runtime: RuntimeConfig
+        get() = runtimeRef.get()
+
+    fun applyRuntime(next: RuntimeConfig) {
+        runtimeRef.set(next.normalized(runtimeMode))
+    }
 
     fun validate(configPath: Path) {
         require(api.baseUrl.isNotBlank()) { "api.base-url must be configured in $configPath" }
@@ -178,110 +159,44 @@ class ApiConfig {
     var nodeToken: String = ""
 
     @field:Setting("request-timeout-seconds")
-    var requestTimeoutSeconds: Long = 0
+    var requestTimeoutSeconds: Long = 8
 }
 
-@ConfigSerializable
-class NodeConfig {
-    @field:Setting("name")
-    var name: String = ""
-
-    @field:Setting("server-id")
-    var serverId: String = ""
-
-    @field:Setting("heartbeat-interval-seconds")
-    var heartbeatIntervalSeconds: Long = 0
-}
-
-@ConfigSerializable
-class IdentityConfig {
-    @field:Setting("resolve-raw-offline-names")
-    var resolveRawOfflineNames: Boolean = false
-}
-
-@ConfigSerializable
-class AuthConfig {
-    @field:Setting("max-password-attempts")
-    var maxPasswordAttempts: Int = 0
-
-    @field:Setting("chat-cooldown-millis")
-    var chatCooldownMillis: Long = 0
-
-    @field:Setting("timeout-seconds")
-    var timeoutSeconds: Long = 0
-
-    @field:Setting("completion-delay-seconds")
-    var completionDelaySeconds: Long = 0
-}
-
-@ConfigSerializable
-class ServersConfig {
-    @field:Setting("default-target")
-    var defaultTarget: String = ""
-
-    @field:Setting("holding")
-    var holding: String = ""
-}
-
-@ConfigSerializable
-class PortalConfig {
-    @field:Setting("server-id")
-    var serverId: String = ""
-
-    @field:Setting("requested-host")
-    var requestedHost: String = ""
-
-    @field:Setting("source-id")
-    var sourceId: String = ""
-}
-
-@ConfigSerializable
-class GateConfig {
-    @field:Setting("initial-server")
-    var initialServer: String = ""
-
-    @field:Setting("holding-server")
-    var holdingServer: String = ""
-
-    @field:Setting("transfer-cookie-key")
-    var transferCookieKey: String = "authman:transfer_grant"
-
-    @field:Setting("validation-timeout-seconds")
-    var validationTimeoutSeconds: Long = 10
-}
-
-@ConfigSerializable
-class DialogConfig {
-    @field:Setting("enabled")
-    var enabled: Boolean = true
-
-    @field:Setting("fallback-chat")
-    var fallbackChat: Boolean = true
-}
-
-@ConfigSerializable
-class EmailConfig {
-    @field:Setting("verification-mode")
-    var verificationMode: String = ""
-}
-
-@ConfigSerializable
-class PacketsConfig {
-    @field:Setting("strip-offline-prefix")
-    var stripOfflinePrefix: StripOfflinePrefixConfig = StripOfflinePrefixConfig()
-}
-
-@ConfigSerializable
-class StripOfflinePrefixConfig {
-    @field:Setting("enabled")
-    var enabled: Boolean = false
-
-    @field:Setting("player-info-packets")
-    var playerInfoPackets: Boolean = false
-
-    @field:Setting("scoreboard-team-packets")
-    var scoreboardTeamPackets: Boolean = false
-
-    @field:Setting("strip-when-premium-name-exists")
-    var stripWhenPremiumNameExists: Boolean = false
+data class RuntimeConfig(
+    val nodeName: String = "velocity",
+    val serverId: String = "default",
+    val heartbeatIntervalSeconds: Long = 60,
+    val resolveRawOfflineNames: Boolean = true,
+    val maxPasswordAttempts: Int = 3,
+    val chatCooldownMillis: Long = 150,
+    val authTimeoutSeconds: Long = 90,
+    val completionDelaySeconds: Long = 3,
+    val defaultTargetServer: String = "",
+    val holdingServer: String = "",
+    val transferCookieKey: String = "authman:transfer_grant",
+    val gateInitialServer: String = "",
+    val gateHoldingServer: String = "",
+    val gateValidationTimeoutSeconds: Long = 10,
+    val portalRequestedServerId: String = "",
+    val portalRequestedHost: String = "",
+    val portalSourceId: String = "",
+    val dialogEnabled: Boolean = true,
+    val dialogFallbackChatEnabled: Boolean = true,
+    val emailVerificationMode: String = "disabled",
+) {
+    fun normalized(mode: RuntimeMode): RuntimeConfig {
+        val fallbackName = if (mode == RuntimeMode.PORTAL) "portal" else "gate"
+        return copy(
+            nodeName = nodeName.trim().ifEmpty { fallbackName },
+            serverId = serverId.trim().ifEmpty { "default" },
+            heartbeatIntervalSeconds = heartbeatIntervalSeconds.coerceAtLeast(10),
+            maxPasswordAttempts = maxPasswordAttempts.coerceAtLeast(1),
+            chatCooldownMillis = chatCooldownMillis.coerceAtLeast(0),
+            authTimeoutSeconds = authTimeoutSeconds.coerceAtLeast(10),
+            completionDelaySeconds = completionDelaySeconds.coerceAtLeast(0),
+            transferCookieKey = transferCookieKey.trim().ifEmpty { "authman:transfer_grant" },
+            gateValidationTimeoutSeconds = gateValidationTimeoutSeconds.coerceAtLeast(3),
+            emailVerificationMode = emailVerificationMode.trim().lowercase().ifEmpty { "disabled" },
+        )
+    }
 }

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import {
   ApiError,
   Badge,
@@ -31,6 +32,23 @@ function NodeStatusBadge({ status }: { status: SafeVelocityNode["status"] }) {
   return <Badge tone={tone} dot>{t(`admin.nodes.status.${status}`, status)}</Badge>;
 }
 
+function NodeModeBadge({ mode }: { mode: SafeVelocityNode["mode"] }) {
+  const { t } = useI18n();
+  return <Badge tone={mode === "gate" ? "warning" : "info"} dot>{t(`admin.nodes.mode.${mode}`)}</Badge>;
+}
+
+function nodeRuntimeSummary(n: SafeVelocityNode, t: (key: string, fallback?: string) => string) {
+  const cfg = n.runtime_config ?? {};
+  if (n.mode === "gate") {
+    const initial = typeof cfg.gate_initial_server === "string" && cfg.gate_initial_server ? cfg.gate_initial_server : "—";
+    const holding = typeof cfg.gate_holding_server === "string" && cfg.gate_holding_server ? cfg.gate_holding_server : "—";
+    return `${t("admin.nodes.runtime.initial")}: ${initial} · ${t("admin.nodes.runtime.holding")}: ${holding}`;
+  }
+  const target = typeof cfg.portal_requested_server_id === "string" && cfg.portal_requested_server_id ? cfg.portal_requested_server_id : "default";
+  const source = typeof cfg.portal_source_id === "string" && cfg.portal_source_id ? cfg.portal_source_id : n.name;
+  return `${t("admin.nodes.runtime.target")}: ${target} · ${t("admin.nodes.runtime.source")}: ${source}`;
+}
+
 interface IssuedToken {
   token_once: string;
   token_fingerprint: string;
@@ -39,6 +57,7 @@ interface IssuedToken {
 
 export function NodesPage() {
   const { t, tError } = useI18n();
+  const navigate = useNavigate();
   const toast = useToast();
   const qc = useQueryClient();
   const [deleteTarget, setDeleteTarget] = useState<SafeVelocityNode | null>(null);
@@ -66,7 +85,7 @@ export function NodesPage() {
   });
 
   const issueMut = useMutation({
-    mutationFn: (name: string) => createNode({ name, server_id: "" }),
+    mutationFn: (name: string) => createNode({ name }),
     onSuccess: (res, name) => {
       setIssuedToken({
         token_once: res.token_once,
@@ -93,7 +112,12 @@ export function NodesPage() {
         </div>
       ),
     },
-    { key: "server", header: t("admin.nodes.col.server"), render: (n) => <span className="muted-cell">{n.server_label}</span> },
+    { key: "mode", header: t("admin.nodes.col.mode"), render: (n) => <NodeModeBadge mode={n.mode} /> },
+    {
+      key: "runtime",
+      header: t("admin.nodes.col.runtime"),
+      render: (n) => <span className="muted-cell">{nodeRuntimeSummary(n, t)}</span>,
+    },
     { key: "status", header: t("admin.nodes.col.status"), render: (n) => <NodeStatusBadge status={n.status} /> },
     {
       key: "fingerprint",
@@ -118,17 +142,21 @@ export function NodesPage() {
       key: "actions",
       header: "",
       align: "right",
+      width: "52px",
+      minWidth: "52px",
+      sticky: "right",
       render: (n) => (
         <div className="row-actions">
-          {n.status !== "active" ? (
-            <IconButton
-              name="close"
-              size={16}
-              label={t("admin.nodes.delete")}
-              onClick={() => setDeleteTarget(n)}
-              data-testid={`delete-${n.id}`}
-            />
-          ) : null}
+          <IconButton
+            name="close"
+            size={16}
+            label={t("admin.nodes.delete")}
+            onClick={(event) => {
+              event.stopPropagation();
+              setDeleteTarget(n);
+            }}
+            data-testid={`delete-${n.id}`}
+          />
         </div>
       ),
     },
@@ -157,6 +185,7 @@ export function NodesPage() {
           rows={rows}
           columns={columns}
           rowKey={(r) => r.id}
+          onRowClick={(r) => navigate(`/nodes/${encodeURIComponent(r.id)}`)}
           empty={
             <EmptyState
               icon="server"

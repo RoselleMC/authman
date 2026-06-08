@@ -5,6 +5,7 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.velocitypowered.api.util.GameProfile
 import mc.roselle.authman.config.AuthmanConfig
+import mc.roselle.authman.config.RuntimeConfig
 import mc.roselle.authman.model.AuthResult
 import mc.roselle.authman.model.DownstreamTarget
 import mc.roselle.authman.model.GateConsumeResult
@@ -32,14 +33,13 @@ class AuthmanClient(
         val data = response.jsonData()
         val player = data.obj("player")
         val auth = data.obj("auth")
-        val display = data.obj("display")
         return ResolvedPlayer(
             uuid = UUID.fromString(player.string("uuid")),
             protocolName = player.string("protocol_name"),
+            authUsername = auth.stringOr("username", player.string("protocol_name")),
             locked = player.boolean("locked") || auth.boolean("locked"),
             authRequired = auth.boolean("required"),
             properties = parseProperties(player["properties"]),
-            stripOfflinePrefix = display.boolean("strip_offline_prefix", fallback = true),
         )
     }
 
@@ -106,35 +106,72 @@ class AuthmanClient(
             throw AuthmanHttpException("consume transfer grant", response)
         }
         val player = response.jsonData().obj("player")
+        val presence = response.jsonData().obj("presence")
         return GateConsumeResult(
             allowed = true,
             resolved = ResolvedPlayer(
                 uuid = UUID.fromString(player.string("uuid")),
                 protocolName = player.string("protocol_name"),
+                authUsername = player.string("protocol_name"),
                 locked = player.boolean("locked"),
                 authRequired = false,
                 properties = parseProperties(player["properties"]),
-                stripOfflinePrefix = false,
             ),
+            presenceId = presence.stringOr("id", ""),
         )
     }
 
-    fun heartbeat(
-        nodeName: String,
-        serverId: String,
-        pluginVersion: String,
-        velocityVersion: String,
-    ): AuthmanResponse {
-        return post(
+    fun endPresence(presenceId: String, reason: String) {
+        if (presenceId.isBlank()) {
+            return
+        }
+        val response = post(
+            "/api/node/presences/end",
+            mapOf(
+                "presence_id" to presenceId,
+                "reason" to reason,
+            ),
+        )
+        if (!response.ok && !response.isAccessRevoked()) {
+            throw AuthmanHttpException("end presence", response)
+        }
+    }
+
+    fun banProfile(username: String, durationSeconds: Long, reason: String) {
+        createBan("/api/node/bans/profile", username, durationSeconds, reason)
+    }
+
+    fun banPassport(username: String, durationSeconds: Long, reason: String) {
+        createBan("/api/node/bans/passport", username, durationSeconds, reason)
+    }
+
+    fun heartbeat(pluginVersion: String, velocityVersion: String): HeartbeatResult {
+        val response = post(
             "/api/node/heartbeat",
             mapOf(
-                "name" to nodeName,
-                "server_id" to serverId,
+                "mode" to config.runtimeMode.name.lowercase(),
                 "instance_fingerprint" to instanceFingerprint,
                 "plugin_version" to pluginVersion,
                 "velocity_version" to velocityVersion,
             ),
             includeInstanceHeader = false,
+        )
+        if (!response.ok) {
+            return HeartbeatResult(
+                ok = false,
+                statusCode = response.statusCode,
+                body = response.body,
+                runtime = null,
+                accessRevoked = response.isAccessRevoked(),
+            )
+        }
+        val data = response.jsonData()
+        return HeartbeatResult(
+            ok = true,
+            statusCode = response.statusCode,
+            body = response.body,
+            runtime = parseRuntime(data.obj("runtime_config")),
+            accessRevoked = false,
         )
     }
 
@@ -151,7 +188,29 @@ class AuthmanClient(
         val response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString())
         return AuthmanResponse(response.statusCode(), response.body(), gson)
     }
+
+    private fun createBan(path: String, username: String, durationSeconds: Long, reason: String) {
+        val response = post(
+            path,
+            mapOf(
+                "username" to username,
+                "expires_in_seconds" to durationSeconds,
+                "reason" to reason,
+            ),
+        )
+        if (!response.ok) {
+            throw AuthmanHttpException("create ban", response)
+        }
+    }
 }
+
+data class HeartbeatResult(
+    val ok: Boolean,
+    val statusCode: Int,
+    val body: String,
+    val runtime: RuntimeConfig?,
+    val accessRevoked: Boolean,
+)
 
 private fun parseTarget(target: JsonObject): DownstreamTarget {
     return DownstreamTarget(
@@ -168,12 +227,47 @@ private fun parseTarget(target: JsonObject): DownstreamTarget {
     )
 }
 
+private fun parseRuntime(obj: JsonObject): RuntimeConfig {
+    return RuntimeConfig(
+        nodeName = obj.stringOr("node_name", "velocity"),
+        serverId = obj.stringOr("server_id", "default"),
+        heartbeatIntervalSeconds = obj.long("heartbeat_interval_seconds", 60),
+        resolveRawOfflineNames = obj.boolean("resolve_raw_offline_names", true),
+        maxPasswordAttempts = obj.int("max_password_attempts", 3),
+        chatCooldownMillis = obj.long("chat_cooldown_millis", 150),
+        authTimeoutSeconds = obj.long("auth_timeout_seconds", 90),
+        completionDelaySeconds = obj.long("completion_delay_seconds", 3),
+        defaultTargetServer = obj.stringOr("default_target_server", ""),
+        holdingServer = obj.stringOr("holding_server", ""),
+        transferCookieKey = obj.stringOr("transfer_cookie_key", "authman:transfer_grant"),
+        gateInitialServer = obj.stringOr("gate_initial_server", ""),
+        gateHoldingServer = obj.stringOr("gate_holding_server", ""),
+        gateValidationTimeoutSeconds = obj.long("gate_validation_timeout_seconds", 10),
+        portalRequestedServerId = obj.stringOr("portal_requested_server_id", ""),
+        portalRequestedHost = obj.stringOr("portal_requested_host", ""),
+        portalSourceId = obj.stringOr("portal_source_id", ""),
+        dialogEnabled = obj.boolean("dialog_enabled", true),
+        dialogFallbackChatEnabled = obj.boolean("dialog_fallback_chat_enabled", true),
+        emailVerificationMode = obj.stringOr("email_verification_mode", "disabled"),
+    )
+}
+
 data class AuthmanResponse(
     val statusCode: Int,
     val body: String,
     private val gson: Gson,
 ) {
     val ok: Boolean get() = statusCode in 200..299
+
+    fun isAccessRevoked(): Boolean {
+        if (statusCode != 401 && statusCode != 403) {
+            return false
+        }
+        return body.contains("node.revoked") ||
+            body.contains("node.unauthorized") ||
+            body.contains("node token is invalid") ||
+            body.contains("invalid node token")
+    }
 
     fun jsonData(): JsonObject {
         val root = gson.fromJson(body, JsonObject::class.java)
@@ -190,11 +284,17 @@ private fun JsonObject.obj(key: String): JsonObject =
 private fun JsonObject.string(key: String): String =
     get(key)?.takeIf { !it.isJsonNull }?.asString ?: throw IllegalArgumentException("missing JSON string $key")
 
+private fun JsonObject.stringOr(key: String, fallback: String): String =
+    get(key)?.takeIf { !it.isJsonNull }?.asString ?: fallback
+
 private fun JsonObject.boolean(key: String, fallback: Boolean = false): Boolean =
     get(key)?.takeIf { !it.isJsonNull }?.asBoolean ?: fallback
 
 private fun JsonObject.int(key: String, fallback: Int = 0): Int =
     get(key)?.takeIf { !it.isJsonNull }?.asInt ?: fallback
+
+private fun JsonObject.long(key: String, fallback: Long = 0): Long =
+    get(key)?.takeIf { !it.isJsonNull }?.asLong ?: fallback
 
 private fun parseProperties(element: JsonElement?): List<GameProfile.Property> {
     if (element == null || element.isJsonNull || !element.isJsonArray) {

@@ -11,7 +11,6 @@ import {
   EmptyState,
   ErrorState,
   Field,
-  HealthBanner,
   Icon,
   IconButton,
   Input,
@@ -24,7 +23,7 @@ import {
   type DataColumn,
   type SafeMojangProxy,
 } from "@authman/shared";
-import { createMojangRoute, deleteMojangRoute, fetchMojang, type CreateMojangRouteInput } from "../api/admin";
+import { createMojangRoute, deleteMojangRoute, fetchMojang, updateMojangRoute, type CreateMojangRouteInput } from "../api/admin";
 
 function StateBadge({ state }: { state: string }) {
   const { t } = useI18n();
@@ -35,7 +34,7 @@ function StateBadge({ state }: { state: string }) {
 
 const PROXY_TYPE: Record<Exclude<SafeMojangProxy["kind"], "direct">, string> = { http: "HTTP", socks5: "SOCKS5" };
 
-export function MojangPage() {
+export function ProxyPoolPage() {
   const { t, tError } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
@@ -45,6 +44,11 @@ export function MojangPage() {
   const [routeID, setRouteID] = useState("");
   const [routeURL, setRouteURL] = useState("");
   const [weight, setWeight] = useState(1);
+  const [disabled, setDisabled] = useState(false);
+  const [authEnabled, setAuthEnabled] = useState(false);
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [editTarget, setEditTarget] = useState<SafeMojangProxy | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SafeMojangProxy | null>(null);
   const q = useQuery({
     queryKey: ["admin.mojang"],
@@ -57,15 +61,30 @@ export function MojangPage() {
     mutationFn: () => createMojangRoute({
       id: routeID.trim() || undefined,
       kind,
-      url: routeURL.trim(),
+      url: buildRouteURL(routeURL, authEnabled, authUsername, authPassword),
       weight,
     }),
     onSuccess: () => {
       toast.push({ tone: "success", title: t("admin.mojang.add.toast") });
-      setDialogOpen(false);
-      setRouteID("");
-      setRouteURL("");
-      setWeight(1);
+      resetDialog();
+      void qc.invalidateQueries({ queryKey: ["admin.mojang"] });
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
+  });
+  const updateMut = useMutation({
+    mutationFn: () => {
+      if (!editTarget) throw new Error("missing edit target");
+      return updateMojangRoute(editTarget.id, {
+        id: editTarget.id,
+        kind,
+        url: routeURL.trim() ? buildRouteURL(routeURL, authEnabled, authUsername, authPassword) : "",
+        weight,
+        disabled,
+      });
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("common.saved") });
+      resetDialog();
       void qc.invalidateQueries({ queryKey: ["admin.mojang"] });
     },
     onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
@@ -79,15 +98,9 @@ export function MojangPage() {
     },
     onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
   });
+  const dialogPending = createMut.isPending || updateMut.isPending;
 
   const status = q.data ? coerceMojangStatus(q.data) : null;
-  const overall = status?.overall;
-  const overallText = overall
-    ? {
-        title: t(`admin.mojang.overall.${overall.key}.title`, t("admin.mojang.overall.unknown.title")),
-        desc: t(`admin.mojang.overall.${overall.key}.desc`, t("admin.mojang.overall.unknown.desc").replace("{state}", overall.key)),
-      }
-    : null;
   const columns: DataColumn<SafeMojangProxy>[] = [
     {
       key: "route",
@@ -124,30 +137,81 @@ export function MojangPage() {
       key: "actions",
       header: "",
       align: "right",
+      width: "52px",
+      minWidth: "52px",
+      sticky: "right",
       render: (p) => (
         <div className="row-actions" onClick={(event) => event.stopPropagation()}>
           {p.kind !== "direct" ? (
-            <IconButton
-              name="close"
-              size={16}
-              label={t("admin.mojang.delete")}
-              onClick={() => setDeleteTarget(p)}
-              data-testid={`delete-mojang-${p.id}`}
-            />
+            <>
+              <IconButton
+                name="settings"
+                size={16}
+                label={t("common.edit")}
+                onClick={() => openEditDialog(p)}
+                data-testid={`edit-mojang-${p.id}`}
+              />
+              <IconButton
+                name="close"
+                size={16}
+                label={t("admin.mojang.delete")}
+                onClick={() => setDeleteTarget(p)}
+                data-testid={`delete-mojang-${p.id}`}
+              />
+            </>
           ) : null}
         </div>
       ),
     },
   ];
 
+  function openCreateDialog() {
+    setEditTarget(null);
+    setDialogOpen(true);
+    setKind("http");
+    setRouteID("");
+    setRouteURL("");
+    setWeight(1);
+    setDisabled(false);
+    setAuthEnabled(false);
+    setAuthUsername("");
+    setAuthPassword("");
+  }
+
+  function openEditDialog(route: SafeMojangProxy) {
+    if (route.kind === "direct") return;
+    setEditTarget(route);
+    setDialogOpen(true);
+    setKind(route.kind);
+    setRouteID(route.id);
+    setRouteURL("");
+    setWeight(route.weight || 1);
+    setDisabled(route.state === "disabled");
+    setAuthEnabled(false);
+    setAuthUsername("");
+    setAuthPassword("");
+  }
+
+  function resetDialog() {
+    setDialogOpen(false);
+    setEditTarget(null);
+    setRouteID("");
+    setRouteURL("");
+    setWeight(1);
+    setDisabled(false);
+    setAuthEnabled(false);
+    setAuthUsername("");
+    setAuthPassword("");
+  }
+
   return (
     <PageShell>
       <PageHeader
-        title={t("admin.mojang.heading")}
-        desc={t("admin.mojang.desc")}
+        title={t("admin.proxies.heading")}
+        desc={t("admin.proxies.desc")}
         action={
           <div className="row-actions">
-            <Button variant="primary" icon="plus" onClick={() => setDialogOpen(true)} data-testid="mojang-add-proxy">
+            <Button variant="primary" icon="plus" onClick={openCreateDialog} data-testid="mojang-add-proxy">
               {t("admin.mojang.add")}
             </Button>
             <Button variant="secondary" icon="list" onClick={() => navigate("/audit")} data-testid="mojang-audit">
@@ -160,15 +224,6 @@ export function MojangPage() {
         }
       />
       {q.error ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : null}
-
-      {overall && overallText ? (
-        <HealthBanner
-          tone={overall.tone}
-          title={overallText.title}
-          desc={overallText.desc}
-          testId="mojang-overall"
-        />
-      ) : null}
 
       <Card title={t("admin.mojang.proxies")} noBody className="table-card">
         <DataTable
@@ -186,25 +241,25 @@ export function MojangPage() {
 
       <Dialog
         open={dialogOpen}
-        onClose={() => !createMut.isPending && setDialogOpen(false)}
+        onClose={() => !dialogPending && resetDialog()}
         icon="activity"
         iconTone="primary"
-        title={t("admin.mojang.add")}
-        desc={t("admin.mojang.add.desc")}
+        title={editTarget ? t("admin.mojang.edit") : t("admin.mojang.add")}
+        desc={editTarget ? t("admin.mojang.edit.desc") : t("admin.mojang.add.desc")}
         testId="dialog-mojang-route"
         footer={
           <>
-            <Button variant="ghost" onClick={() => setDialogOpen(false)} disabled={createMut.isPending} data-testid="confirm-cancel">
+            <Button variant="ghost" onClick={resetDialog} disabled={dialogPending} data-testid="confirm-cancel">
               {t("common.cancel")}
             </Button>
             <Button
               variant="primary"
-              icon="plus"
-              loading={createMut.isPending}
-              onClick={() => createMut.mutate()}
+              icon={editTarget ? "check" : "plus"}
+              loading={dialogPending}
+              onClick={() => (editTarget ? updateMut.mutate() : createMut.mutate())}
               data-testid="confirm-confirm"
             >
-              {t("admin.mojang.add.submit")}
+              {editTarget ? t("common.save") : t("admin.mojang.add.submit")}
             </Button>
           </>
         }
@@ -220,7 +275,7 @@ export function MojangPage() {
             testId="mojang-route-kind"
           />
         </Field>
-        <Field label={t("admin.mojang.field.url")} hint={kind === "http" ? t("admin.mojang.field.url.httpHint") : t("admin.mojang.field.url.socksHint")}>
+        <Field label={t("admin.mojang.field.url")} hint={editTarget ? t("admin.mojang.field.url.editHint") : (kind === "http" ? t("admin.mojang.field.url.httpHint") : t("admin.mojang.field.url.socksHint"))}>
           <Input
             value={routeURL}
             onChange={(e) => setRouteURL(e.target.value)}
@@ -229,6 +284,20 @@ export function MojangPage() {
             data-testid="mojang-route-url"
           />
         </Field>
+        <label className="toggle-row">
+          <input type="checkbox" checked={authEnabled} onChange={(event) => setAuthEnabled(event.target.checked)} />
+          <span>{t("admin.proxies.auth.enabled")}</span>
+        </label>
+        {authEnabled ? (
+          <div className="form-grid two">
+            <Field label={t("common.username")}>
+              <Input value={authUsername} onChange={(e) => setAuthUsername(e.target.value)} autoComplete="off" data-testid="mojang-route-auth-user" />
+            </Field>
+            <Field label={t("common.password")}>
+              <Input value={authPassword} type="password" onChange={(e) => setAuthPassword(e.target.value)} autoComplete="new-password" data-testid="mojang-route-auth-password" />
+            </Field>
+          </div>
+        ) : null}
         <Field label={t("admin.mojang.field.id")} hint={t("admin.mojang.field.id.hint")}>
           <Input
             value={routeID}
@@ -236,6 +305,7 @@ export function MojangPage() {
             placeholder={`${kind}-edge-1`}
             mono
             data-testid="mojang-route-id"
+            disabled={!!editTarget}
           />
         </Field>
         <Field label={t("admin.mojang.field.weight")} hint={t("admin.mojang.field.weight.hint")}>
@@ -248,6 +318,12 @@ export function MojangPage() {
             data-testid="mojang-route-weight"
           />
         </Field>
+        {editTarget ? (
+          <label className="toggle-row">
+            <input type="checkbox" checked={disabled} onChange={(event) => setDisabled(event.target.checked)} />
+            <span>{t("admin.proxies.disabled")}</span>
+          </label>
+        ) : null}
       </Dialog>
       <Dialog
         open={!!deleteTarget}
@@ -280,4 +356,17 @@ export function MojangPage() {
       </Dialog>
     </PageShell>
   );
+}
+
+function buildRouteURL(rawURL: string, authEnabled: boolean, username: string, password: string) {
+  const trimmed = rawURL.trim();
+  if (!authEnabled) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    parsed.username = username.trim();
+    parsed.password = password;
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
 }

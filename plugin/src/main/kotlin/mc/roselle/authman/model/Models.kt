@@ -8,13 +8,11 @@ import java.util.UUID
 data class ResolvedPlayer(
     val uuid: UUID,
     val protocolName: String,
+    val authUsername: String,
     val locked: Boolean,
     val authRequired: Boolean,
     val properties: List<GameProfile.Property>,
-    val stripOfflinePrefix: Boolean,
-) {
-    val publicName: String get() = protocolName
-}
+)
 
 data class AuthResult(
     val authenticated: Boolean,
@@ -43,6 +41,7 @@ data class TransferGrant(
 data class GateConsumeResult(
     val allowed: Boolean,
     val resolved: ResolvedPlayer,
+    val presenceId: String,
 )
 
 enum class PlayerAuthState {

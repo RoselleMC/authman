@@ -44,6 +44,7 @@ export * from "./components/BrandMark";
 export * from "./components/PreferenceSelect";
 export * from "./components/ThemeToggle";
 export * from "./components/AccountMenu";
+export * from "./components/IPLocation";
 
 export * from "./extensions/types";
 export * from "./extensions/SchemaRenderer";

@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -9,14 +10,31 @@ import (
 
 type UUID [16]byte
 
-var offlineNamespaceSeed = []byte("authman:offline-player-uuid:v1")
+var (
+	offlinePassportNamespaceSeed = []byte("authman:offline-passport-uuid:v1")
+)
 
-func OfflineUUID(normalizedOfflineName string) UUID {
-	input := strings.ToLower(strings.TrimSpace(normalizedOfflineName))
+func OfflinePassportUUID(normalizedOfflineName string) UUID {
+	return offlineNamespacedUUID(offlinePassportNamespaceSeed, "passport", normalizedOfflineName)
+}
+
+func RandomProfileUUID() (UUID, error) {
+	var uuid UUID
+	if _, err := rand.Read(uuid[:]); err != nil {
+		return UUID{}, err
+	}
+	uuid[6] = (uuid[6] & 0x0f) | 0x40
+	uuid[8] = (uuid[8] & 0x3f) | 0x80
+	return uuid, nil
+}
+
+func offlineNamespacedUUID(seed []byte, marker string, value string) UUID {
+	input := strings.ToLower(strings.TrimSpace(value))
 	hash := sha256.New()
-	hash.Write(offlineNamespaceSeed)
+	hash.Write(seed)
 	hash.Write([]byte{0})
-	hash.Write([]byte("#"))
+	hash.Write([]byte(marker))
+	hash.Write([]byte{0})
 	hash.Write([]byte(input))
 	sum := hash.Sum(nil)
 

@@ -19,8 +19,208 @@ func portalPlayerData(player identity.Player) map[string]any {
 		"kind":                      player.Kind,
 		"registration_server_label": emptyStringNil(player.RegistrationServer),
 		"last_seen_server_label":    emptyStringNil(player.LastSeenServer),
+		"last_seen_at":              player.LastSeenAt,
+		"last_seen_ip":              emptyStringNil(player.LastSeenIP),
+		"last_seen_geo":             ipGeoData(player.LastSeenGeo),
 		"connected_servers":         []map[string]any{},
 	}
+}
+
+func passportRowData(passport identity.Passport, profiles []identity.Profile, presences []store.PlayerPresence) map[string]any {
+	return map[string]any{
+		"id":                  passport.ID,
+		"kind":                passport.Kind,
+		"uuid":                passport.UUID.String(),
+		"uuid_compact":        passport.UUID.Compact(),
+		"username":            passport.Username,
+		"username_normalized": passport.UsernameNormalized,
+		"raw_offline_name":    passport.RawOfflineName,
+		"status":              passport.Status,
+		"profile_count":       len(profiles),
+		"online":              len(presences) > 0,
+		"presence_count":      len(presences),
+		"primary_profile":     primaryProfileSummary(profiles),
+		"registration_server": emptyStringNil(passport.RegistrationServer),
+		"last_seen_server":    emptyStringNil(passport.LastSeenServer),
+		"last_seen_at":        passport.LastSeenAt,
+		"last_seen_ip":        emptyStringNil(passport.LastSeenIP),
+		"last_seen_geo":       ipGeoData(passport.LastSeenGeo),
+		"active_ban":          nil,
+		"ban_expires_at":      nil,
+		"locked_until":        nil,
+		"created_at":          passport.CreatedAt,
+		"updated_at":          passport.UpdatedAt,
+	}
+}
+
+func passportDetailData(passport identity.Passport, profiles []identity.Profile, credential *store.PassportCredential, presences []store.PlayerPresence, bans []store.PlayerBan, profileBans map[string]store.PlayerBan, events []map[string]any) map[string]any {
+	data := passportRowData(passport, profiles, presences)
+	if credential != nil {
+		data["locked_until"] = credential.LockedUntil
+	}
+	if ban, ok := firstActiveBan(bans, time.Now()); ok {
+		row := banRows([]store.PlayerBan{ban})[0]
+		data["active_ban"] = row
+		data["ban_expires_at"] = ban.ExpiresAt
+	}
+	profileRows := make([]map[string]any, 0, len(profiles))
+	passportBan, passportBanned := firstActiveBan(bans, time.Now())
+	for _, profile := range profiles {
+		row := profileSummaryData(profile, presencesForProfile(presences, profile.ID))
+		if credential != nil {
+			row["locked_until"] = credential.LockedUntil
+		}
+		if ban, ok := profileBans[profile.ID]; ok {
+			row["active_ban"] = banRows([]store.PlayerBan{ban})[0]
+			row["ban_expires_at"] = ban.ExpiresAt
+		} else if passportBanned {
+			row["active_ban"] = banRows([]store.PlayerBan{passportBan})[0]
+			row["ban_expires_at"] = passportBan.ExpiresAt
+		}
+		profileRows = append(profileRows, row)
+	}
+	data["profiles"] = profileRows
+	data["presences"] = presenceRows(presences)
+	data["bans"] = banRows(bans)
+	data["credential"] = nil
+	if credential != nil {
+		data["credential"] = map[string]any{
+			"password_updated_at": credential.PasswordUpdatedAt,
+			"failed_attempts":     credential.FailedAttempts,
+			"locked_until":        credential.LockedUntil,
+		}
+	}
+	data["audit_events"] = events
+	return data
+}
+
+func profileRowData(profile identity.Profile, passport *identity.Passport, presences []store.PlayerPresence) map[string]any {
+	data := profileSummaryData(profile, presences)
+	data["uuid_compact"] = profile.UUID.Compact()
+	data["display_name"] = profile.DisplayName
+	data["status"] = profile.Status
+	data["skin_source"] = profile.SkinSource
+	data["last_seen_server"] = emptyStringNil(profile.LastSeenServer)
+	data["last_seen_at"] = profile.LastSeenAt
+	data["last_seen_ip"] = emptyStringNil(profile.LastSeenIP)
+	data["last_seen_geo"] = ipGeoData(profile.LastSeenGeo)
+	data["active_ban"] = nil
+	data["ban_expires_at"] = nil
+	data["locked_until"] = nil
+	data["created_at"] = profile.CreatedAt
+	data["updated_at"] = profile.UpdatedAt
+	data["passport"] = nil
+	if passport != nil {
+		data["passport"] = map[string]any{
+			"id":       passport.ID,
+			"kind":     passport.Kind,
+			"username": passport.Username,
+			"status":   passport.Status,
+		}
+	}
+	return data
+}
+
+func profileDetailData(profile identity.Profile, passport *identity.Passport, presences []store.PlayerPresence, bans []store.PlayerBan, events []map[string]any) map[string]any {
+	data := profileRowData(profile, passport, presences)
+	data["properties"] = profilePropertiesData(profile.ProfileProperties)
+	data["presences"] = presenceRows(presences)
+	data["bans"] = banRows(bans)
+	data["audit_events"] = events
+	data["extension_data"] = []map[string]any{}
+	return data
+}
+
+func primaryProfileSummary(profiles []identity.Profile) any {
+	if len(profiles) == 0 {
+		return nil
+	}
+	return profileSummaryData(profiles[0], nil)
+}
+
+func profileSummaryData(profile identity.Profile, presences []store.PlayerPresence) map[string]any {
+	return map[string]any{
+		"id":              profile.ID,
+		"uuid":            profile.UUID.String(),
+		"protocol_name":   profile.ProtocolName,
+		"normalized_name": profile.NormalizedName,
+		"display_name":    profile.DisplayName,
+		"status":          profile.Status,
+		"online":          len(presences) > 0,
+		"presence_count":  len(presences),
+		"last_seen_ip":    emptyStringNil(profile.LastSeenIP),
+		"last_seen_geo":   ipGeoData(profile.LastSeenGeo),
+		"active_ban":      nil,
+		"ban_expires_at":  nil,
+		"locked_until":    nil,
+	}
+}
+
+func presencesForProfile(presences []store.PlayerPresence, profileID string) []store.PlayerPresence {
+	out := []store.PlayerPresence{}
+	for _, presence := range presences {
+		if presence.ProfileID == profileID {
+			out = append(out, presence)
+		}
+	}
+	return out
+}
+
+func presenceRows(presences []store.PlayerPresence) []map[string]any {
+	out := make([]map[string]any, 0, len(presences))
+	for _, presence := range presences {
+		out = append(out, map[string]any{
+			"id":            presence.ID,
+			"passport_id":   presence.PassportID,
+			"profile_id":    presence.ProfileID,
+			"server_id":     presence.ServerID,
+			"node_id":       presence.NodeID,
+			"protocol_name": presence.ProtocolName,
+			"uuid":          presence.UUID,
+			"remote_addr":   presence.RemoteAddr,
+			"connected_at":  presence.ConnectedAt,
+			"last_seen_at":  presence.LastSeenAt,
+		})
+	}
+	return out
+}
+
+func banRows(bans []store.PlayerBan) []map[string]any {
+	out := make([]map[string]any, 0, len(bans))
+	for _, ban := range bans {
+		out = append(out, map[string]any{
+			"id":            ban.ID,
+			"scope":         ban.Scope,
+			"target_id":     ban.TargetID,
+			"reason":        ban.Reason,
+			"created_by":    ban.CreatedBy,
+			"created_at":    ban.CreatedAt,
+			"expires_at":    ban.ExpiresAt,
+			"revoked_by":    ban.RevokedBy,
+			"revoked_at":    ban.RevokedAt,
+			"revoke_reason": ban.RevokeReason,
+		})
+	}
+	return out
+}
+
+func firstActiveBan(bans []store.PlayerBan, now time.Time) (store.PlayerBan, bool) {
+	for _, ban := range bans {
+		if ban.RevokedAt != nil {
+			continue
+		}
+		if ban.ExpiresAt == nil || ban.ExpiresAt.After(now.UTC()) {
+			return ban, true
+		}
+	}
+	return store.PlayerBan{}, false
+}
+
+func ipGeoData(geo *identity.IPGeo) any {
+	if geo == nil {
+		return nil
+	}
+	return geo
 }
 
 func playerRowData(player identity.Player) map[string]any {
@@ -41,7 +241,7 @@ func playerRowData(player identity.Player) map[string]any {
 		"kind":                   player.Kind,
 		"status":                 status,
 		"locked":                 player.Locked,
-		"last_seen_at":           nil,
+		"last_seen_at":           player.LastSeenAt,
 		"last_seen_server_label": emptyStringNil(player.LastSeenServer),
 	}
 }
@@ -152,6 +352,10 @@ func (s *Server) playerExtensionData(ctx context.Context, player identity.Player
 }
 
 func credentialLocked(credential store.OfflineCredential, now time.Time) bool {
+	return credential.LockedUntil != nil && credential.LockedUntil.After(now.UTC())
+}
+
+func passportCredentialLocked(credential store.PassportCredential, now time.Time) bool {
 	return credential.LockedUntil != nil && credential.LockedUntil.After(now.UTC())
 }
 

@@ -16,8 +16,8 @@ export function TypeBadge({ kind }: { kind: PlayerKind }) {
   }
   return (
     <Badge tone="offline">
-      <Icon name="user" size={12} />
-      {t("account.type.offline")}
+      <Icon name="shield" size={12} />
+      <span className="non-premium-label">{t("account.type.premium")}</span>
     </Badge>
   );
 }

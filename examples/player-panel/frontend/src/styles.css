@@ -311,6 +311,12 @@ button:disabled {
   text-align: center;
 }
 
+.profile-switcher {
+  width: 100%;
+  text-align: left;
+  font-size: 13px;
+}
+
 .skin {
   width: 126px;
   height: 176px;

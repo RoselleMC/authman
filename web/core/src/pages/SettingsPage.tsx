@@ -47,6 +47,8 @@ import {
   fetchAdminPermissions,
   fetchAdminRoles,
   fetchAdminUsers,
+  fetchIPGeoSettings,
+  fetchMojangSettings,
   fetchSystemSummary,
   registerAdminPasskey,
   startAdminTOTP,
@@ -55,15 +57,20 @@ import {
   updateAdminAccountPreferences,
   updateAdminUser,
   updateAdminRole,
+  updateIPGeoSettings,
+  updateMojangSettings,
   type AdminAccountSecurity,
   type AdminPermission,
   type AdminRole,
+  type IPGeoSettings,
+  type MojangRuntimeSettings,
+  type RouteChoice,
 } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
-type SettingsSection = "account" | "admins" | "roles" | "system" | "security";
+type SettingsSection = "account" | "admins" | "roles" | "mojang" | "geo" | "system" | "security";
 
-const SECTIONS: SettingsSection[] = ["account", "admins", "roles", "system", "security"];
+const SECTIONS: SettingsSection[] = ["account", "admins", "roles", "mojang", "geo", "system", "security"];
 
 function roleTone(role: string): "info" | "success" | "neutral" {
   if (role === "owner") return "info";
@@ -95,6 +102,8 @@ export function SettingsPage() {
           { value: "account", label: t("admin.settings.account"), icon: "user" },
           { value: "admins", label: t("admin.settings.admins"), icon: "users" },
           { value: "roles", label: t("admin.settings.roles"), icon: "shield" },
+          { value: "mojang", label: t("admin.settings.mojang"), icon: "activity" },
+          { value: "geo", label: t("admin.settings.geo"), icon: "globe" },
           { value: "system", label: t("admin.settings.system"), icon: "database" },
           { value: "security", label: t("admin.settings.security"), icon: "key" },
         ]}
@@ -103,6 +112,8 @@ export function SettingsPage() {
         {current === "account" ? <AccountPanel /> : null}
         {current === "admins" ? <AdminsPanel /> : null}
         {current === "roles" ? <RolesPanel /> : null}
+        {current === "mojang" ? <MojangSettingsPanel /> : null}
+        {current === "geo" ? <IPGeoSettingsPanel /> : null}
         {current === "system" ? <SystemPanel /> : null}
         {current === "security" ? <SecurityPanel /> : null}
       </div>
@@ -578,6 +589,9 @@ function AdminsPanel() {
       key: "actions",
       header: "",
       align: "right",
+      width: "150px",
+      minWidth: "150px",
+      sticky: "right",
       render: (u) => {
         const ownerProtected = u.role === "owner" && !currentIsOwner;
         const disabled = ownerProtected || (!canEditAdmins && !canManageAdminSecurity);
@@ -1156,6 +1170,149 @@ function RoleCreateDialog({
         {error ? <Alert tone="warning">{String((error as { message?: string }).message ?? error)}</Alert> : null}
       </div>
     </Dialog>
+  );
+}
+
+function MojangSettingsPanel() {
+  const { t } = useI18n();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["settings.mojang"], queryFn: fetchMojangSettings });
+  const [form, setForm] = useState<MojangRuntimeSettings | null>(null);
+
+  useEffect(() => {
+    if (q.data) setForm(q.data);
+  }, [q.data]);
+
+  const save = useMutation({
+    mutationFn: () => updateMojangSettings(form!),
+    onSuccess: (next) => {
+      setForm(next);
+      toast.push({ tone: "success", title: t("admin.settings.mojang.saved") });
+      void qc.invalidateQueries({ queryKey: ["settings.mojang"] });
+      void qc.invalidateQueries({ queryKey: ["admin.mojang"] });
+    },
+  });
+
+  if (q.error) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
+  if (q.isLoading || !form) return <LoadingState />;
+
+  return (
+    <SettingsStack>
+      <Card
+        title={t("admin.settings.mojang")}
+        actions={<Button variant="primary" icon="check" loading={save.isPending} onClick={() => save.mutate()}>{t("common.save")}</Button>}
+      >
+        <div className="settings-form-grid">
+          <Field label={t("admin.settings.mojang.strategy")}>
+            <Select
+              value={form.load_balance_strategy}
+              onChange={(value) => setForm({ ...form, load_balance_strategy: value })}
+              options={[{ value: "weighted_round_robin", label: t("admin.settings.mojang.strategy.weighted") }]}
+            />
+          </Field>
+          <Field label={t("admin.settings.mojang.timeout")}>
+            <Input type="number" min={1} max={60} value={form.request_timeout_seconds} onChange={(e) => setForm({ ...form, request_timeout_seconds: Number(e.target.value) || 1 })} />
+          </Field>
+          <Field label={t("admin.settings.mojang.cooldown")}>
+            <Input type="number" min={5} max={3600} value={form.failure_cooldown_seconds} onChange={(e) => setForm({ ...form, failure_cooldown_seconds: Number(e.target.value) || 30 })} />
+          </Field>
+          <Field label={t("admin.settings.mojang.cacheFresh")}>
+            <Input type="number" min={1} max={86400} value={form.cache_fresh_seconds} onChange={(e) => setForm({ ...form, cache_fresh_seconds: Number(e.target.value) || 30 })} />
+          </Field>
+          <Field label={t("admin.settings.mojang.cacheStale")}>
+            <Input type="number" min={1} max={604800} value={form.cache_stale_seconds} onChange={(e) => setForm({ ...form, cache_stale_seconds: Number(e.target.value) || 300 })} />
+          </Field>
+        </div>
+      </Card>
+      <Card title={t("admin.settings.proxySelection")}>
+        <p className="muted-cell">{t("admin.settings.mojang.routes.desc")}</p>
+        <RouteSelection
+          routes={form.available_routes}
+          selected={form.enabled_route_ids}
+          onChange={(enabled_route_ids) => setForm({ ...form, enabled_route_ids })}
+        />
+      </Card>
+    </SettingsStack>
+  );
+}
+
+function IPGeoSettingsPanel() {
+  const { t } = useI18n();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["settings.ipGeo"], queryFn: fetchIPGeoSettings });
+  const [form, setForm] = useState<IPGeoSettings | null>(null);
+
+  useEffect(() => {
+    if (q.data) setForm(q.data);
+  }, [q.data]);
+
+  const save = useMutation({
+    mutationFn: () => updateIPGeoSettings(form!),
+    onSuccess: (next) => {
+      setForm(next);
+      toast.push({ tone: "success", title: t("admin.settings.geo.saved") });
+      void qc.invalidateQueries({ queryKey: ["settings.ipGeo"] });
+    },
+  });
+
+  if (q.error) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
+  if (q.isLoading || !form) return <LoadingState />;
+
+  return (
+    <SettingsStack>
+      <Card
+        title={t("admin.settings.geo")}
+        actions={<Button variant="primary" icon="check" loading={save.isPending} onClick={() => save.mutate()}>{t("common.save")}</Button>}
+      >
+        <p className="muted-cell">{t("admin.settings.geo.desc")}</p>
+        <div className="settings-form-grid">
+          <Field label={t("admin.settings.geo.provider")}>
+            <Input value={form.provider} readOnly data-testid="ip-geo-provider" />
+          </Field>
+          <Field label={t("admin.settings.geo.cacheTTL")}>
+            <Input type="number" min={60} max={604800} value={form.cache_ttl_seconds} onChange={(e) => setForm({ ...form, cache_ttl_seconds: Number(e.target.value) || 86400 })} />
+          </Field>
+          <Field label={t("admin.settings.geo.timeout")}>
+            <Input type="number" min={1} max={30} value={form.request_timeout_seconds} onChange={(e) => setForm({ ...form, request_timeout_seconds: Number(e.target.value) || 3 })} />
+          </Field>
+        </div>
+      </Card>
+      <Card title={t("admin.settings.proxySelection")}>
+        <p className="muted-cell">{t("admin.settings.geo.routes.desc")}</p>
+        <RouteSelection
+          routes={form.available_routes}
+          selected={form.enabled_route_ids}
+          onChange={(enabled_route_ids) => setForm({ ...form, enabled_route_ids })}
+        />
+      </Card>
+    </SettingsStack>
+  );
+}
+
+function RouteSelection({ routes, selected, onChange }: { routes: RouteChoice[]; selected: string[]; onChange: (next: string[]) => void }) {
+  const { t } = useI18n();
+  const effective = selected.length ? new Set(selected) : new Set(routes.filter((r) => !r.disabled).map((r) => r.id));
+  function toggle(id: string, checked: boolean) {
+    const next = new Set(effective);
+    if (checked) next.add(id);
+    else next.delete(id);
+    onChange(Array.from(next));
+  }
+  if (!routes.length) return <EmptyState icon="activity" title={t("admin.settings.routes.empty")} />;
+  return (
+    <div className="route-selection-list">
+      {routes.map((route) => (
+        <label key={route.id} className="toggle-row">
+          <input type="checkbox" checked={effective.has(route.id)} disabled={route.disabled} onChange={(e) => toggle(route.id, e.target.checked)} />
+          <span>
+            <strong>{route.id} <Badge tone="neutral">{route.kind.toUpperCase()}</Badge></strong>
+            <small>{route.url_masked || t("admin.mojang.route.direct")} · weight {route.weight}</small>
+          </span>
+        </label>
+      ))}
+    </div>
   );
 }
 

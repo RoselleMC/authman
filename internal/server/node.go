@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"strings"
@@ -17,13 +18,17 @@ import (
 )
 
 type createNodeRequest struct {
-	Name     string `json:"name"`
-	ServerID string `json:"server_id"`
+	Name string `json:"name"`
+}
+
+type updateNodeRequest struct {
+	Name          string         `json:"name"`
+	RuntimeConfig map[string]any `json:"runtime_config"`
 }
 
 type nodeHeartbeatRequest struct {
 	Name                string `json:"name"`
-	ServerID            string `json:"server_id"`
+	Mode                string `json:"mode"`
 	InstanceFingerprint string `json:"instance_fingerprint"`
 	PluginVersion       string `json:"plugin_version"`
 	VelocityVersion     string `json:"velocity_version"`
@@ -67,6 +72,43 @@ func (s *Server) handleAdminListNodes(w http.ResponseWriter, r *http.Request) {
 		data = append(data, s.nodeData(r.Context(), node))
 	}
 	api.WriteJSON(w, http.StatusOK, data, map[string]any{"count": len(data)})
+}
+
+func (s *Server) handleAdminGetNode(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireAdmin(r, false); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	n, err := s.nodes.Get(r.Context(), strings.TrimSpace(r.PathValue("id")))
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "node.not_found", "node not found"))
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, s.nodeData(r.Context(), n), nil)
+}
+
+func (s *Server) handleAdminUpdateNode(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	var req updateNodeRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	n, err := s.nodes.Update(r.Context(), id, req.Name, req.RuntimeConfig)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "node.not_found", "node not found"))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetNode, n.ID, "node.update", map[string]any{
+		"name": n.Name,
+		"mode": node.NormalizeMode(n.Mode),
+	})
+	api.WriteJSON(w, http.StatusOK, s.nodeData(r.Context(), n), nil)
 }
 
 func (s *Server) handleAdminRotateNode(w http.ResponseWriter, r *http.Request) {
@@ -117,15 +159,11 @@ func (s *Server) handleAdminDeleteNode(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "node.not_found", "node not found"))
 		return
 	}
-	if nodeStatus(target) == "active" {
-		api.WriteError(w, api.NewError(http.StatusBadRequest, "node.delete_active", "active nodes cannot be deleted"))
-		return
-	}
 	if err := s.nodes.Delete(r.Context(), id); err != nil {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "node.not_found", "node not found"))
 		return
 	}
-	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetNode, id, "node.delete", map[string]any{
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetNode, id, "node.revoke", map[string]any{
 		"name":                 target.Name,
 		"instance_fingerprint": target.InstanceFingerprint,
 	})
@@ -146,17 +184,20 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		}
 		node, err := s.nodes.Register(r.Context(), node.Registration{
 			Name:                req.Name,
-			ServerID:            req.ServerID,
+			Mode:                req.Mode,
 			InstanceFingerprint: req.InstanceFingerprint,
 			AccessFingerprint:   auth.TokenFingerprint(token),
 			PluginVersion:       req.PluginVersion,
 			VelocityVersion:     req.VelocityVersion,
 		}, time.Now())
 		if err != nil {
-			api.WriteError(w, api.NewError(http.StatusBadRequest, "node.register_failed", err.Error()))
+			api.WriteError(w, api.NewError(http.StatusForbidden, "node.revoked", err.Error()))
 			return
 		}
-		api.WriteJSON(w, http.StatusOK, map[string]any{"node": s.nodeData(r.Context(), node)}, nil)
+		api.WriteJSON(w, http.StatusOK, map[string]any{
+			"node":           s.nodeData(r.Context(), node),
+			"runtime_config": s.nodeRuntimeConfig(r.Context(), node),
+		}, nil)
 		return
 	}
 	node, err := s.nodes.Heartbeat(r.Context(), token, time.Now())
@@ -164,7 +205,10 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "node.unauthorized", "invalid node token"))
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, map[string]any{"node": s.nodeData(r.Context(), node)}, nil)
+	api.WriteJSON(w, http.StatusOK, map[string]any{
+		"node":           s.nodeData(r.Context(), node),
+		"runtime_config": s.nodeRuntimeConfig(r.Context(), node),
+	}, nil)
 }
 
 type resolvePlayerRequest struct {
@@ -196,6 +240,22 @@ type consumeTransferGrantRequest struct {
 	Source       string `json:"source"`
 }
 
+type endPresenceRequest struct {
+	PresenceID string `json:"presence_id"`
+	ProfileID  string `json:"profile_id"`
+	ServerID   string `json:"server_id"`
+	Reason     string `json:"reason"`
+}
+
+type nodeBanRequest struct {
+	ProfileID        string `json:"profile_id"`
+	PassportID       string `json:"passport_id"`
+	Username         string `json:"username"`
+	Reason           string `json:"reason"`
+	ExpiresAt        string `json:"expires_at"`
+	ExpiresInSeconds int    `json:"expires_in_seconds"`
+}
+
 func (s *Server) requireNode(r *http.Request) (node.Node, *api.Error) {
 	token, ok := bearerToken(r)
 	if !ok {
@@ -221,8 +281,9 @@ func (s *Server) requireNode(r *http.Request) (node.Node, *api.Error) {
 }
 
 func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireNode(r); err != nil {
-		api.WriteError(w, err)
+	n, nodeErr := s.requireNode(r)
+	if nodeErr != nil {
+		api.WriteError(w, nodeErr)
 		return
 	}
 	var req resolvePlayerRequest
@@ -234,6 +295,11 @@ func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		player, err = s.store.GetPlayerByProtocolName(r.Context(), strings.TrimSpace(req.Username))
 		if err != nil {
+			s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "player.resolve_failure", map[string]any{
+				"reason":   "not_found",
+				"username": strings.TrimSpace(req.Username),
+				"mode":     node.NormalizeMode(n.Mode),
+			})
 			api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
 			return
 		}
@@ -243,17 +309,24 @@ func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request)
 	if player.Kind == identity.PlayerKindOffline {
 		authKind = "offline_password"
 	}
-	premiumNameExists := player.Kind == identity.PlayerKindOffline && s.store.PremiumNameExists(r.Context(), player.RawOfflineName)
+	authUsername := player.ProtocolName
+	if passport, err := s.store.GetPassportForProfile(r.Context(), player.ID); err == nil && passport.Username != "" {
+		authUsername = passport.Username
+	}
+	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "player.resolve", playerEventDetails(player, map[string]any{
+		"requested_username": strings.TrimSpace(req.Username),
+		"auth_required":      authRequired,
+		"auth_kind":          authKind,
+		"auth_username":      authUsername,
+		"mode":               node.NormalizeMode(n.Mode),
+	}))
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"player": playerData(player),
 		"auth": map[string]any{
 			"required": authRequired,
 			"kind":     authKind,
 			"locked":   player.Locked,
-		},
-		"display": map[string]any{
-			"strip_offline_prefix": !premiumNameExists,
-			"premium_name_exists":  premiumNameExists,
+			"username": authUsername,
 		},
 	}, nil)
 }
@@ -286,22 +359,37 @@ func (s *Server) handleNodeAuthenticatePlayer(w http.ResponseWriter, r *http.Req
 	}
 	player, credential, err := s.store.GetOfflineCredential(r.Context(), normalizeNodeUsername(req.Username))
 	if err != nil {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "offline.password.failure", map[string]any{
+			"reason":   "credential_not_found",
+			"username": strings.TrimSpace(req.Username),
+		})
 		api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
 		return
 	}
 	if player.Locked || credentialLocked(credential, time.Now()) {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "offline.password.rejected", playerEventDetails(player, map[string]any{
+			"reason":       "account_locked",
+			"locked_until": credential.LockedUntil,
+		}))
 		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.account_locked", "account is locked"))
 		return
 	}
 	ok, err := auth.VerifyPassword(req.Password, credential.PasswordHash)
 	if err != nil || !ok {
-		_, _ = s.store.RecordOfflineLoginFailure(r.Context(), player.ID, time.Now())
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "offline.password.failure", nil)
+		updatedCredential, _ := s.store.RecordOfflineLoginFailure(r.Context(), player.ID, time.Now())
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "offline.password.failure", playerEventDetails(player, map[string]any{
+			"reason":          "password_mismatch",
+			"failed_attempts": updatedCredential.FailedAttempts,
+			"locked_until":    updatedCredential.LockedUntil,
+		}))
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.invalid_credentials", "invalid username or password"))
 		return
 	}
 	_ = s.store.RecordOfflineLoginSuccess(r.Context(), player.ID)
-	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "offline.password.success", nil)
+	s.recordPlayerSeen(r, player, n.ServerID, time.Now())
+	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "offline.password.success", playerEventDetails(player, map[string]any{
+		"server_id": n.ServerID,
+	}))
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"authenticated": true,
 		"player":        playerData(player),
@@ -321,9 +409,20 @@ func (s *Server) handleNodeResolvePortalTarget(w http.ResponseWriter, r *http.Re
 	}
 	server, target, apiErr := s.resolveDownstreamTarget(r.Context(), n, req.ServerID, req.Slug, req.RequestedHost)
 	if apiErr != nil {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, strings.TrimSpace(req.ServerID), "portal.target.resolve_failure", map[string]any{
+			"slug":           req.Slug,
+			"requested_host": req.RequestedHost,
+			"reason":         apiErr.Message,
+		})
 		api.WriteError(w, apiErr)
 		return
 	}
+	s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "portal.target.resolve", map[string]any{
+		"slug":           server.Slug,
+		"requested_host": req.RequestedHost,
+		"target_host":    target.TransferHost,
+		"target_port":    target.TransferPort,
+	})
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"server": downstreamServerData(server),
 		"target": store.DownstreamTargetData(target),
@@ -343,20 +442,50 @@ func (s *Server) handleNodeCreateTransferGrant(w http.ResponseWriter, r *http.Re
 	}
 	server, target, apiErr := s.resolveDownstreamTarget(r.Context(), n, req.ServerID, req.Slug, req.RequestedHost)
 	if apiErr != nil {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, strings.TrimSpace(req.ServerID), "transfer_grant.reject", map[string]any{
+			"reason":         apiErr.Message,
+			"slug":           req.Slug,
+			"requested_host": req.RequestedHost,
+		})
 		api.WriteError(w, apiErr)
 		return
 	}
 	if target.Status != "active" {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "transfer_grant.reject", map[string]any{
+			"reason": "server_unavailable",
+			"status": target.Status,
+		})
 		api.WriteError(w, api.NewError(http.StatusForbidden, "server.unavailable", "downstream server is not active"))
 		return
 	}
 	player, apiErr := s.playerFromTransferGrantRequest(r.Context(), req)
 	if apiErr != nil {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.PlayerID+req.Username), "transfer_grant.reject", map[string]any{
+			"reason":    apiErr.Message,
+			"player_id": req.PlayerID,
+			"username":  req.Username,
+			"server_id": server.ID,
+		})
 		api.WriteError(w, apiErr)
 		return
 	}
 	if player.Locked {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
+			"reason":    "account_locked",
+			"server_id": server.ID,
+		}))
 		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.account_locked", "account is locked"))
+		return
+	}
+	if ban, banned := s.activeBanForPlayer(r.Context(), player); banned {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
+			"reason":     "banned",
+			"server_id":  server.ID,
+			"ban_id":     ban.ID,
+			"ban_scope":  ban.Scope,
+			"expires_at": ban.ExpiresAt,
+		}))
+		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.banned", ban.Reason))
 		return
 	}
 	ttlSeconds := target.GrantTTLSeconds
@@ -390,6 +519,7 @@ func (s *Server) handleNodeCreateTransferGrant(w http.ResponseWriter, r *http.Re
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "transfer_grant.save_failed", "failed to save transfer grant"))
 		return
 	}
+	s.recordPlayerSeen(r, player, server.ID, now)
 	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.create", map[string]any{
 		"server_id":     server.ID,
 		"target_host":   target.TransferHost,
@@ -463,18 +593,199 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 		api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
 		return
 	}
+	if player.Locked {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.account_locked", "account is locked"))
+		return
+	}
+	if ban, banned := s.activeBanForPlayer(r.Context(), player); banned {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
+			"reason":     "banned",
+			"server_id":  server.ID,
+			"ban_id":     ban.ID,
+			"ban_scope":  ban.Scope,
+			"expires_at": ban.ExpiresAt,
+		}))
+		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.banned", ban.Reason))
+		return
+	}
+	passport, err := s.store.GetPassportForProfile(r.Context(), player.ID)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "passport.not_bound", "profile is not bound to a passport"))
+		return
+	}
+	now := time.Now()
+	presence, err := s.store.UpsertPresence(r.Context(), store.PlayerPresence{
+		PassportID:   passport.ID,
+		ProfileID:    player.ID,
+		ServerID:     server.ID,
+		NodeID:       n.ID,
+		ProtocolName: protocolName,
+		UUID:         uuid,
+		RemoteAddr:   clientIP(r),
+		ConnectedAt:  now,
+		LastSeenAt:   now,
+	})
+	if err != nil {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "presence.reject", playerEventDetails(player, map[string]any{
+			"reason":    "profile_already_online_on_server",
+			"server_id": server.ID,
+			"node_id":   n.ID,
+		}))
+		api.WriteError(w, api.NewError(http.StatusConflict, "presence.profile_already_online", "profile is already online on this server"))
+		return
+	}
+	s.recordPlayerSeen(r, player, server.ID, now)
 	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.consume", map[string]any{
 		"server_id":     server.ID,
 		"protocol_name": protocolName,
 		"uuid":          uuid,
 		"source":        req.Source,
 		"portal_source": grant.PortalSource,
+		"presence_id":   presence.ID,
 	})
 	api.WriteJSON(w, http.StatusOK, map[string]any{
-		"allowed": true,
-		"grant":   transferGrantData(grant),
-		"player":  playerData(player),
-		"target":  store.DownstreamTargetData(target),
+		"allowed":  true,
+		"grant":    transferGrantData(grant),
+		"player":   playerData(player),
+		"presence": presenceRows([]store.PlayerPresence{presence})[0],
+		"target":   store.DownstreamTargetData(target),
+	}, nil)
+}
+
+func (s *Server) handleNodeEndPresence(w http.ResponseWriter, r *http.Request) {
+	n, nodeErr := s.requireNode(r)
+	if nodeErr != nil {
+		api.WriteError(w, nodeErr)
+		return
+	}
+	var req endPresenceRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = "disconnect"
+	}
+	if strings.TrimSpace(req.PresenceID) != "" {
+		presence, err := s.store.EndPresence(r.Context(), req.PresenceID, reason, time.Now())
+		if err != nil {
+			api.WriteError(w, api.NewError(http.StatusNotFound, "presence.not_found", "presence not found"))
+			return
+		}
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, presence.ProfileID, "presence.end", map[string]any{
+			"presence_id": presence.ID,
+			"passport_id": presence.PassportID,
+			"profile_id":  presence.ProfileID,
+			"server_id":   presence.ServerID,
+			"node_id":     presence.NodeID,
+			"reason":      reason,
+		})
+		api.WriteJSON(w, http.StatusOK, presenceRows([]store.PlayerPresence{presence})[0], nil)
+		return
+	}
+	profileID := strings.TrimSpace(req.ProfileID)
+	serverID := strings.TrimSpace(req.ServerID)
+	if profileID == "" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "presence.profile_required", "profile id is required"))
+		return
+	}
+	ended := 0
+	for _, presence := range s.store.ListProfilePresences(r.Context(), profileID) {
+		if serverID != "" && presence.ServerID != serverID {
+			continue
+		}
+		if _, err := s.store.EndPresence(r.Context(), presence.ID, reason, time.Now()); err == nil {
+			ended++
+		}
+	}
+	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, profileID, "presence.end", map[string]any{
+		"profile_id":      profileID,
+		"server_id":       serverID,
+		"reason":          reason,
+		"ended_presences": ended,
+	})
+	api.WriteJSON(w, http.StatusOK, map[string]any{"ended_presences": ended}, nil)
+}
+
+func (s *Server) handleNodeCreateProfileBan(w http.ResponseWriter, r *http.Request) {
+	n, nodeErr := s.requireNode(r)
+	if nodeErr != nil {
+		api.WriteError(w, nodeErr)
+		return
+	}
+	var req nodeBanRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	player, apiErr := s.playerFromNodeBanRequest(r.Context(), req)
+	if apiErr != nil {
+		api.WriteError(w, apiErr)
+		return
+	}
+	ban, apiErr := banFromNodeRequest(req, store.BanScopeProfile, player.ID, n.ID)
+	if apiErr != nil {
+		api.WriteError(w, apiErr)
+		return
+	}
+	ban, err := s.store.CreateBan(r.Context(), ban)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "ban.create_failed", "failed to create ban"))
+		return
+	}
+	ended := s.store.EndProfilePresences(r.Context(), player.ID, "profile banned", time.Now())
+	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "profile.ban.create", playerEventDetails(player, map[string]any{
+		"ban_id":          ban.ID,
+		"reason":          ban.Reason,
+		"expires_at":      ban.ExpiresAt,
+		"ended_presences": ended,
+		"server_id":       n.ServerID,
+	}))
+	api.WriteJSON(w, http.StatusCreated, map[string]any{
+		"ban":             banRows([]store.PlayerBan{ban})[0],
+		"ended_presences": ended,
+	}, nil)
+}
+
+func (s *Server) handleNodeCreatePassportBan(w http.ResponseWriter, r *http.Request) {
+	n, nodeErr := s.requireNode(r)
+	if nodeErr != nil {
+		api.WriteError(w, nodeErr)
+		return
+	}
+	var req nodeBanRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	passport, apiErr := s.passportFromNodeBanRequest(r.Context(), req)
+	if apiErr != nil {
+		api.WriteError(w, apiErr)
+		return
+	}
+	ban, apiErr := banFromNodeRequest(req, store.BanScopePassport, passport.ID, n.ID)
+	if apiErr != nil {
+		api.WriteError(w, apiErr)
+		return
+	}
+	ban, err := s.store.CreateBan(r.Context(), ban)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "ban.create_failed", "failed to create ban"))
+		return
+	}
+	ended := s.store.EndPassportPresences(r.Context(), passport.ID, "passport banned", time.Now())
+	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, passport.ID, "passport.ban.create", map[string]any{
+		"ban_id":          ban.ID,
+		"reason":          ban.Reason,
+		"expires_at":      ban.ExpiresAt,
+		"ended_presences": ended,
+		"server_id":       n.ServerID,
+		"username":        passport.Username,
+	})
+	api.WriteJSON(w, http.StatusCreated, map[string]any{
+		"ban":             banRows([]store.PlayerBan{ban})[0],
+		"ended_presences": ended,
 	}, nil)
 }
 
@@ -578,6 +889,80 @@ func (s *Server) playerFromTransferGrantRequest(ctx context.Context, req createT
 	return player, nil
 }
 
+func (s *Server) activeBanForPlayer(ctx context.Context, player identity.Player) (store.PlayerBan, bool) {
+	passport, err := s.store.GetPassportForProfile(ctx, player.ID)
+	if err != nil {
+		return store.PlayerBan{}, false
+	}
+	return s.store.ActiveBanFor(ctx, passport.ID, player.ID, time.Now())
+}
+
+func (s *Server) playerFromNodeBanRequest(ctx context.Context, req nodeBanRequest) (identity.Player, *api.Error) {
+	if strings.TrimSpace(req.ProfileID) != "" {
+		player, err := s.store.GetPlayerByID(ctx, strings.TrimSpace(req.ProfileID))
+		if err != nil {
+			return identity.Player{}, api.NewError(http.StatusNotFound, "player.not_found", "player not found")
+		}
+		return player, nil
+	}
+	username := strings.TrimSpace(req.Username)
+	if username == "" {
+		return identity.Player{}, api.NewError(http.StatusBadRequest, "player.required", "player is required")
+	}
+	player, err := s.store.GetOfflinePlayer(ctx, normalizeNodeUsername(username))
+	if err != nil {
+		player, err = s.store.GetPlayerByProtocolName(ctx, username)
+		if err != nil {
+			return identity.Player{}, api.NewError(http.StatusNotFound, "player.not_found", "player not found")
+		}
+	}
+	return player, nil
+}
+
+func (s *Server) passportFromNodeBanRequest(ctx context.Context, req nodeBanRequest) (identity.Passport, *api.Error) {
+	if strings.TrimSpace(req.PassportID) != "" {
+		passport, err := s.store.GetPassportByID(ctx, strings.TrimSpace(req.PassportID))
+		if err != nil {
+			return identity.Passport{}, api.NewError(http.StatusNotFound, "passport.not_found", "passport not found")
+		}
+		return passport, nil
+	}
+	player, apiErr := s.playerFromNodeBanRequest(ctx, req)
+	if apiErr != nil {
+		return identity.Passport{}, apiErr
+	}
+	passport, err := s.store.GetPassportForProfile(ctx, player.ID)
+	if err != nil {
+		return identity.Passport{}, api.NewError(http.StatusNotFound, "passport.not_found", "passport not found")
+	}
+	return passport, nil
+}
+
+func banFromNodeRequest(req nodeBanRequest, scope store.BanScope, targetID string, createdBy string) (store.PlayerBan, *api.Error) {
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		return store.PlayerBan{}, api.NewError(http.StatusBadRequest, "ban.reason_required", "ban reason is required")
+	}
+	if len(reason) > 500 {
+		return store.PlayerBan{}, api.NewError(http.StatusBadRequest, "ban.reason_too_long", "ban reason is too long")
+	}
+	expiresAt, apiErr := parseBanExpiry(banRequest{
+		ExpiresAt:        req.ExpiresAt,
+		ExpiresInSeconds: req.ExpiresInSeconds,
+	})
+	if apiErr != nil {
+		return store.PlayerBan{}, apiErr
+	}
+	return store.PlayerBan{
+		Scope:     scope,
+		TargetID:  targetID,
+		Reason:    reason,
+		CreatedBy: createdBy,
+		CreatedAt: time.Now(),
+		ExpiresAt: expiresAt,
+	}, nil
+}
+
 func (s *Server) resolveDownstreamTarget(ctx context.Context, n node.Node, serverID string, slug string, requestedHost string) (store.DownstreamServer, store.DownstreamTarget, *api.Error) {
 	candidate := strings.TrimSpace(serverID)
 	if candidate == "" {
@@ -678,6 +1063,28 @@ func stringSliceFromAnyServer(value any) []string {
 	}
 }
 
+func stringFromAnyServer(value any) string {
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	return ""
+}
+
+func boolFromAnyServer(value any, fallback bool) bool {
+	if flag, ok := value.(bool); ok {
+		return flag
+	}
+	if text, ok := value.(string); ok {
+		switch strings.ToLower(strings.TrimSpace(text)) {
+		case "true", "1", "yes", "on":
+			return true
+		case "false", "0", "no", "off":
+			return false
+		}
+	}
+	return fallback
+}
+
 type createPortalLinkRequest struct {
 	Username string `json:"username"`
 	ServerID string `json:"server_id"`
@@ -697,7 +1104,21 @@ func (s *Server) handleNodeCreatePortalLink(w http.ResponseWriter, r *http.Reque
 	}
 	player, err := s.store.GetOfflinePlayer(r.Context(), normalizeNodeUsername(req.Username))
 	if err != nil {
+		s.audit(r, audit.ActorNode, node.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "portal_link.create_failure", map[string]any{
+			"reason":    "player_not_found",
+			"username":  strings.TrimSpace(req.Username),
+			"server_id": req.ServerID,
+		})
 		api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
+		return
+	}
+	passport, err := s.store.GetPassportForProfile(r.Context(), player.ID)
+	if err != nil {
+		s.audit(r, audit.ActorNode, node.ID, audit.TargetPlayer, player.ID, "portal_link.create_failure", playerEventDetails(player, map[string]any{
+			"reason":    "passport_not_found",
+			"server_id": req.ServerID,
+		}))
+		api.WriteError(w, api.NewError(http.StatusNotFound, "passport.not_found", "passport not found"))
 		return
 	}
 	ttl := 10 * time.Minute
@@ -706,7 +1127,7 @@ func (s *Server) handleNodeCreatePortalLink(w http.ResponseWriter, r *http.Reque
 			ttl = parsed
 		}
 	}
-	link, rawToken, err := auth.NewPortalLink(auth.PortalLinkOffline, player.ID, req.ServerID, ttl, time.Now())
+	link, rawToken, err := auth.NewPortalLink(auth.PortalLinkOffline, passport.ID, req.ServerID, ttl, time.Now())
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "portal_link.create_failed", "failed to create portal link"))
 		return
@@ -715,9 +1136,11 @@ func (s *Server) handleNodeCreatePortalLink(w http.ResponseWriter, r *http.Reque
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "portal_link.create_failed", "failed to save portal link"))
 		return
 	}
-	s.audit(r, audit.ActorNode, node.ID, audit.TargetPlayer, player.ID, "portal_link.create", map[string]any{
-		"server_id":  req.ServerID,
-		"expires_at": link.ExpiresAt,
+	s.audit(r, audit.ActorNode, node.ID, audit.TargetPlayer, passport.ID, "portal_link.create", map[string]any{
+		"server_id":     req.ServerID,
+		"expires_at":    link.ExpiresAt,
+		"profile_id":    player.ID,
+		"protocol_name": player.ProtocolName,
 	})
 	api.WriteJSON(w, http.StatusCreated, map[string]any{
 		"link": map[string]any{
@@ -753,8 +1176,10 @@ func (s *Server) nodeData(ctx context.Context, n node.Node) map[string]any {
 	return map[string]any{
 		"id":                   n.ID,
 		"name":                 n.Name,
+		"mode":                 node.NormalizeMode(n.Mode),
 		"server_id":            serverID,
 		"server_label":         serverLabel,
+		"runtime_config":       s.nodeRuntimeConfig(ctx, n),
 		"status":               nodeStatus(n),
 		"token_fingerprint":    n.TokenFingerprint,
 		"instance_fingerprint": n.InstanceFingerprint,
@@ -764,6 +1189,82 @@ func (s *Server) nodeData(ctx context.Context, n node.Node) map[string]any {
 		"created_at":           n.CreatedAt,
 		"last_seen_at":         n.LastHeartbeatAt,
 		"last_heartbeat_at":    n.LastHeartbeatAt,
+	}
+}
+
+func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]any {
+	mode := node.NormalizeMode(n.Mode)
+	base := map[string]any{
+		"node_name":                    strings.TrimSpace(n.Name),
+		"server_id":                    strings.TrimSpace(n.ServerID),
+		"heartbeat_interval_seconds":   60,
+		"resolve_raw_offline_names":    true,
+		"max_password_attempts":        3,
+		"chat_cooldown_millis":         150,
+		"auth_timeout_seconds":         90,
+		"completion_delay_seconds":     3,
+		"transfer_cookie_key":          "authman:transfer_grant",
+		"dialog_enabled":               true,
+		"dialog_fallback_chat_enabled": true,
+		"email_verification_mode":      "disabled",
+	}
+	if mode == "gate" {
+		base["gate_initial_server"] = ""
+		base["gate_holding_server"] = ""
+		base["gate_validation_timeout_seconds"] = 10
+		mergeRuntimeConfig(base, n.RuntimeConfig, []string{
+			"node_name",
+			"server_id",
+			"heartbeat_interval_seconds",
+			"resolve_raw_offline_names",
+			"transfer_cookie_key",
+			"gate_initial_server",
+			"gate_holding_server",
+			"gate_validation_timeout_seconds",
+		})
+		return base
+	}
+	base["portal_requested_server_id"] = ""
+	base["portal_requested_host"] = ""
+	base["portal_source_id"] = strings.TrimSpace(n.Name)
+	base["default_target_server"] = ""
+	base["holding_server"] = ""
+	if server, err := s.store.GetDownstreamServer(ctx, "default"); err == nil {
+		target := store.DownstreamTargetFromServer(server)
+		base["portal_requested_server_id"] = target.ServerID
+		base["default_target_server"] = stringFromAnyServer(server.PortalConfig["default_target_server"])
+		base["holding_server"] = stringFromAnyServer(server.PortalConfig["holding_server"])
+		base["portal_requested_host"] = stringFromAnyServer(server.PortalConfig["requested_host"])
+		base["portal_source_id"] = stringFromAnyServer(server.PortalConfig["source_id"])
+		if cookieKey := stringFromAnyServer(server.PortalConfig["transfer_cookie_key"]); cookieKey != "" {
+			base["transfer_cookie_key"] = cookieKey
+		}
+		base["dialog_enabled"] = boolFromAnyServer(server.PortalConfig["dialog_enabled"], true)
+		base["dialog_fallback_chat_enabled"] = boolFromAnyServer(server.PortalConfig["dialog_fallback_chat_enabled"], true)
+	}
+	return base
+}
+
+func mergeRuntimeConfig(base map[string]any, overrides map[string]any, allowed []string) {
+	if len(overrides) == 0 {
+		return
+	}
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, key := range allowed {
+		allowedSet[key] = struct{}{}
+	}
+	for key, value := range overrides {
+		if _, ok := allowedSet[key]; !ok {
+			continue
+		}
+		switch v := value.(type) {
+		case string:
+			base[key] = strings.TrimSpace(v)
+		case bool:
+			base[key] = v
+		case float64, float32, int, int32, int64, json.Number:
+			base[key] = v
+		}
 	}
 }
 

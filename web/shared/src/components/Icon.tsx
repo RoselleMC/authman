@@ -6,6 +6,7 @@ const PATHS: Record<string, string> = {
   check: "M4 10.5l4 4 8-9",
   copy: "M7 7h7v9H7zM5 11H3V3h8v2",
   chevronDown: "M5 8l5 5 5-5",
+  chevronUp: "M5 12l5-5 5 5",
   chevronRight: "M8 5l5 5-5 5",
   chevronLeft: "M12 5l-5 5 5 5",
   sun: "M10 3v2 M10 15v2 M3 10h2 M15 10h2 M5.2 5.2l1.4 1.4 M13.4 13.4l1.4 1.4 M14.8 5.2l-1.4 1.4 M6.6 13.4l-1.4 1.4 M10 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z",
@@ -45,6 +46,7 @@ const PATHS: Record<string, string> = {
   box: "M10 3l7 3.5v7L10 17l-7-3.5v-7L10 3Z M3 6.5l7 3.5 7-3.5 M10 10v7",
   database:
     "M10 6.5c3.6 0 6.5-1 6.5-2.2S13.6 2 10 2 3.5 3 3.5 4.3 6.4 6.5 10 6.5Z M3.5 4.3v11.4C3.5 17 6.4 18 10 18s6.5-1 6.5-2.3V4.3 M3.5 10c0 1.3 2.9 2.3 6.5 2.3s6.5-1 6.5-2.3",
+  globe: "M10 17a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z M3.5 10h13 M10 3c2 1.9 3 4.2 3 7s-1 5.1-3 7 M10 3c-2 1.9-3 4.2-3 7s1 5.1 3 7",
 };
 
 export type IconName = keyof typeof PATHS;

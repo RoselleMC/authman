@@ -7,7 +7,7 @@ import (
 
 const (
 	OfflineNameMinLength = 3
-	OfflineNameMaxLength = 15
+	OfflineNameMaxLength = 16
 )
 
 var reservedOfflineNames = map[string]struct{}{
@@ -27,21 +27,29 @@ type OfflineName struct {
 }
 
 func NormalizeOfflineName(raw string) (OfflineName, error) {
+	return normalizeMinecraftName(raw, "offline username")
+}
+
+func NormalizeProtocolName(raw string) (OfflineName, error) {
+	return normalizeMinecraftName(raw, "profile protocol name")
+}
+
+func normalizeMinecraftName(raw string, label string) (OfflineName, error) {
 	name := strings.TrimSpace(raw)
 	if name != raw {
-		return OfflineName{}, fmt.Errorf("offline username must not contain leading or trailing whitespace")
+		return OfflineName{}, fmt.Errorf("%s must not contain leading or trailing whitespace", label)
 	}
 	if len(name) < OfflineNameMinLength || len(name) > OfflineNameMaxLength {
-		return OfflineName{}, fmt.Errorf("offline username length must be between %d and %d", OfflineNameMinLength, OfflineNameMaxLength)
+		return OfflineName{}, fmt.Errorf("%s length must be between %d and %d", label, OfflineNameMinLength, OfflineNameMaxLength)
 	}
 	for _, r := range name {
 		if !isOfflineNameRune(r) {
-			return OfflineName{}, fmt.Errorf("offline username contains invalid character %q", r)
+			return OfflineName{}, fmt.Errorf("%s contains invalid character %q", label, r)
 		}
 	}
 	normalized := strings.ToLower(name)
 	if _, ok := reservedOfflineNames[normalized]; ok {
-		return OfflineName{}, fmt.Errorf("offline username is reserved")
+		return OfflineName{}, fmt.Errorf("%s is reserved", label)
 	}
 	return OfflineName{
 		Raw:        name,

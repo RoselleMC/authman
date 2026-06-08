@@ -46,13 +46,25 @@
 .mini-audit { list-style: none; margin: 0; padding: 0; }
 .mini-audit-item { display: flex; align-items: center; gap: 12px; padding: 11px 20px; border-bottom: 1px solid var(--color-border); }
 .mini-audit-item:last-child { border-bottom: 0; }
-.mini-audit-event { font-size: 13px; color: var(--color-text); }
+.mini-audit-event { display: inline-flex; flex-direction: column; gap: 3px; min-width: 190px; font-size: 13px; color: var(--color-text); }
 .mini-audit-target { font-size: 12.5px; color: var(--color-text-muted); font-family: var(--font-mono); }
 .mini-audit-time { margin-left: auto; font-size: 12px; color: var(--color-text-subtle); white-space: nowrap; }
 
 /* ---------- table row actions ---------- */
 .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
 .row-actions [disabled], .row-actions [aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+.identity-meta-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.state-cell { display: inline-flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
+.passport-profile-list { display: grid; grid-template-columns: minmax(140px, 1.1fr) minmax(300px, 2fr) minmax(86px, auto) auto; gap: 0 18px; margin: -4px 0; align-items: center; }
+.passport-profile-row { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; min-width: 0; padding: 12px 0; border-bottom: 1px solid var(--color-border); }
+.passport-profile-row--head { padding: 8px 0 9px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--color-text-subtle); }
+.passport-profile-row:last-child { border-bottom: 0; }
+.passport-profile-main { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.passport-profile-name { color: var(--color-text); text-decoration: none; font-weight: 600; font-size: 14px; width: fit-content; }
+.passport-profile-name:hover { color: var(--color-primary); }
+.passport-profile-uuid { min-width: 0; }
+.passport-profile-uuid .copyable { max-width: 100%; }
+.passport-profile-uuid .copyable span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-name { display: flex; align-items: center; gap: 10px; font-weight: 540; }
 .node-ico { width: 28px; height: 28px; border-radius: 7px; background: var(--color-surface-muted); color: var(--color-text-muted); display: flex; align-items: center; justify-content: center; }
 .fingerprint { font-size: 12.5px; color: var(--color-text-muted); background: var(--color-surface-muted); padding: 2px 8px; border-radius: 5px; }
@@ -66,6 +78,12 @@
 .event-list { list-style: none; margin: 0; padding: 0; }
 .event-item { display: flex; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--color-border); }
 .event-item:last-child { border-bottom: 0; }
+.presence-list, .ban-list { display: flex; flex-direction: column; gap: 0; margin: -4px 0; }
+.presence-row, .ban-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--color-border); }
+.presence-row:last-child, .ban-row:last-child { border-bottom: 0; }
+.presence-row strong, .ban-row strong { font-size: 13.5px; font-weight: 620; color: var(--color-text); }
+.presence-row p, .ban-row p { margin: 3px 0 0; }
+.form-grid.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .event-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; }
 .event-dot--success { background: var(--color-success); }
 .event-dot--warning { background: var(--color-warning); }
@@ -184,6 +202,10 @@
 .dialog-form { display: flex; flex-direction: column; gap: 14px; }
 .settings-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .settings-form-grid--single { grid-template-columns: minmax(0, 360px); }
+.toggle-row { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; align-items: start; padding: 10px 0; color: var(--color-text); cursor: pointer; }
+.toggle-row input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--color-primary); }
+.toggle-row strong { display: block; font-size: 13.5px; font-weight: 620; }
+.toggle-row small { display: block; margin-top: 2px; color: var(--color-text-muted); font-size: 12px; line-height: 1.45; }
 .security-status-row { display: flex; align-items: center; gap: 10px; color: var(--color-text-muted); font-size: 13px; }
 .security-method-list { display: flex; flex-direction: column; gap: 0; margin-top: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; }
 .security-method-row { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 14px; border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
@@ -241,12 +263,16 @@
   .config-grid, .placeholder-grid { grid-template-columns: 1fr; }
   .roles-layout { grid-template-columns: 1fr; }
   .roles-sidebar-card { position: static; }
-  .settings-form-grid, .settings-form-grid--single, .profile-settings, .profile-settings__fields, .account-profile-form, .account-profile-form__fields, .passkey-add-row, .totp-dialog-grid { grid-template-columns: 1fr; }
+  .settings-form-grid, .settings-form-grid--single, .profile-settings, .profile-settings__fields, .account-profile-form, .account-profile-form__fields, .passkey-add-row, .totp-dialog-grid, .form-grid.two { grid-template-columns: 1fr; }
   .account-profile-form__actions { justify-content: stretch; }
   .account-profile-form__actions .btn { width: 100%; }
   .security-method-row { grid-template-columns: 38px minmax(0, 1fr); }
   .security-method-row .badge, .security-method-row .btn { grid-column: 2; width: fit-content; }
   .profile-settings__actions { justify-content: stretch; }
+  .passport-profile-list { display: flex; flex-direction: column; gap: 0; }
+  .passport-profile-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 12px; }
+  .passport-profile-row--head { display: none; }
+  .passport-profile-uuid { grid-column: 1 / -1; }
   .profile-settings__actions .btn { width: 100%; }
 }
 @media (max-width: 720px) {

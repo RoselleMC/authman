@@ -111,105 +111,202 @@ export async function fetchOverview(): Promise<AdminOverview> {
   return res.data;
 }
 
-export interface PlayerRow {
-  id: string;
-  uuid: string;
-  raw_name: string;
-  protocol_name: string;
-  kind: "premium" | "offline";
-  status: "active" | "locked" | "pending_verification" | "deleted";
-  last_seen_at: string | null;
-  last_seen_server_label: string | null;
-}
-
 export interface PlayerListMeta {
   total: number;
   page: number;
   page_size: number;
 }
 
-export interface PlayerListFilters extends Record<string, string | number | undefined> {
-  q?: string;
-  kind?: "premium" | "offline";
-  status?: "active" | "locked" | "pending_verification";
-  page?: number;
-  page_size?: number;
-}
-
-export async function fetchPlayers(filters: PlayerListFilters, signal?: AbortSignal) {
-  const res = await apiFetch<PlayerRow[]>("/admin/players", {
-    method: "GET",
-    query: filters,
-    signal,
-  });
-  return { rows: res.data, meta: (res.meta as unknown as PlayerListMeta) ?? { total: res.data.length, page: 1, page_size: res.data.length } };
-}
-
-export interface PlayerDetail {
+export interface ProfileSummary {
   id: string;
   uuid: string;
-  raw_name: string;
   protocol_name: string;
-  kind: "premium" | "offline";
-  status: PlayerRow["status"];
-  registration_server_label: string | null;
-  last_seen_server_label: string | null;
-  last_seen_at: string | null;
+  normalized_name: string;
+  display_name: string;
+  status: "active" | "locked" | "archived";
+  online: boolean;
+  presence_count: number;
+  last_seen_ip?: string | null;
+  last_seen_geo?: import("@authman/shared").IPGeo | null;
+  active_ban?: PlayerBan | null;
+  ban_expires_at?: string | null;
+  locked_until?: string | null;
+}
+
+export interface PlayerPresence {
+  id: string;
+  passport_id: string;
+  profile_id: string;
+  server_id: string;
+  node_id: string;
+  protocol_name: string;
+  uuid: string;
+  remote_addr: string;
+  connected_at: string;
+  last_seen_at: string;
+}
+
+export interface PlayerBan {
+  id: string;
+  scope: "passport" | "profile";
+  target_id: string;
+  reason: string;
+  created_by: string;
   created_at: string;
-  profile: {
-    skin_source: "mojang" | "offline_custom" | "none";
-    properties: Array<{ name: string; value: string }>;
-  };
-  offline_credentials: {
+  expires_at: string | null;
+  revoked_by: string;
+  revoked_at: string | null;
+  revoke_reason: string;
+}
+
+export interface PassportRow {
+  id: string;
+  kind: "premium" | "offline";
+  uuid: string;
+  username: string;
+  username_normalized: string;
+  raw_offline_name: string;
+  status: "active" | "locked" | "pending_verification" | "deleted";
+  profile_count: number;
+  online: boolean;
+  presence_count: number;
+  primary_profile: ProfileSummary | null;
+  last_seen_at: string | null;
+  last_seen_ip: string | null;
+  last_seen_geo: import("@authman/shared").IPGeo | null;
+  active_ban: PlayerBan | null;
+  ban_expires_at: string | null;
+  locked_until: string | null;
+  created_at: string;
+}
+
+export interface PassportDetail extends PassportRow {
+  profiles: ProfileSummary[];
+  credential: {
     password_updated_at: string | null;
     failed_attempts: number;
     locked_until: string | null;
   } | null;
-  identities: Array<{
-    id: string;
-    provider: string;
-    provider_subject: string;
-    verified_at: string | null;
-  }>;
-  sessions: Array<{
-    id: string;
-    created_at: string;
-    server_label: string | null;
-    result: "success" | "failure";
-    failure_reason?: string;
-  }>;
+  presences: PlayerPresence[];
+  bans: PlayerBan[];
   audit_events: AuditEventSummary[];
-  extension_data: Array<{
-    server_slug: string;
-    server_display_name: string;
-    provider: string;
-    schema: import("@authman/shared").ExtensionSchema;
-    values: Record<string, unknown>;
-    updated_at: string;
-  }>;
 }
 
-export async function fetchPlayer(id: string): Promise<PlayerDetail> {
-  const res = await apiFetch<PlayerDetail>(`/admin/players/${encodeURIComponent(id)}`);
+export interface ProfileRow extends ProfileSummary {
+  uuid_compact?: string;
+  skin_source: "mojang" | "offline_custom" | "none";
+  passport: { id: string; kind: "premium" | "offline"; username: string; status: string } | null;
+  last_seen_at: string | null;
+  last_seen_ip: string | null;
+  last_seen_geo: import("@authman/shared").IPGeo | null;
+  created_at: string;
+}
+
+export interface ProfileDetail extends ProfileRow {
+  properties: Array<{ name: string; value: string; signature?: string }>;
+  presences: PlayerPresence[];
+  bans: PlayerBan[];
+  audit_events: AuditEventSummary[];
+  extension_data: Array<Record<string, unknown>>;
+}
+
+export interface IdentityListFilters extends Record<string, string | number | undefined> {
+  q?: string;
+  kind?: "premium" | "offline";
+  status?: string;
+  binding?: "bound" | "unbound";
+  page?: number;
+  page_size?: number;
+  sort?: string;
+  dir?: "asc" | "desc";
+}
+
+export async function fetchPassports(filters: IdentityListFilters, signal?: AbortSignal) {
+  const res = await apiFetch<PassportRow[]>("/admin/passports", { method: "GET", query: filters, signal });
+  return { rows: res.data, meta: (res.meta as unknown as PlayerListMeta) ?? { total: res.data.length, page: 1, page_size: res.data.length } };
+}
+
+export async function fetchPassport(id: string): Promise<PassportDetail> {
+  const res = await apiFetch<PassportDetail>(`/admin/passports/${encodeURIComponent(id)}`);
   return res.data;
 }
 
-export async function lockPlayer(id: string): Promise<void> {
-  await apiFetch<null>(`/admin/players/${encodeURIComponent(id)}/lock`, { method: "POST" });
-}
-export async function unlockPlayer(id: string): Promise<void> {
-  await apiFetch<null>(`/admin/players/${encodeURIComponent(id)}/unlock`, { method: "POST" });
-}
-export async function resetPlayerPassword(id: string): Promise<{ reset_token_hint: string }> {
-  const res = await apiFetch<{ reset_token_hint: string }>(`/admin/players/${encodeURIComponent(id)}/reset-password`, { method: "POST" });
+export async function updatePassportStatus(id: string, status: PassportRow["status"]): Promise<PassportRow> {
+  const res = await apiFetch<PassportRow>(`/admin/passports/${encodeURIComponent(id)}`, { method: "PATCH", body: { status } });
   return res.data;
+}
+
+export async function createPassportBan(id: string, input: { reason: string; expires_at?: string | null; expires_in_seconds?: number }): Promise<{ ban: PlayerBan; ended_presences: number }> {
+  const res = await apiFetch<{ ban: PlayerBan; ended_presences: number }>(`/admin/passports/${encodeURIComponent(id)}/bans`, { method: "POST", body: input });
+  return res.data;
+}
+
+export async function kickPassport(id: string, reason: string): Promise<{ ended_presences: number }> {
+  const res = await apiFetch<{ ended_presences: number }>(`/admin/passports/${encodeURIComponent(id)}/kick`, { method: "POST", body: { reason } });
+  return res.data;
+}
+
+export async function fetchProfiles(filters: IdentityListFilters, signal?: AbortSignal) {
+  const res = await apiFetch<ProfileRow[]>("/admin/profiles", { method: "GET", query: filters, signal });
+  return { rows: res.data, meta: (res.meta as unknown as PlayerListMeta) ?? { total: res.data.length, page: 1, page_size: res.data.length } };
+}
+
+export async function fetchProfile(id: string): Promise<ProfileDetail> {
+  const res = await apiFetch<ProfileDetail>(`/admin/profiles/${encodeURIComponent(id)}`);
+  return res.data;
+}
+
+export async function createProfile(input: { protocol_name: string; passport_id?: string }): Promise<ProfileRow> {
+  const res = await apiFetch<ProfileRow>("/admin/profiles", { method: "POST", body: input });
+  return res.data;
+}
+
+export async function updateProfileStatus(id: string, status: ProfileRow["status"]): Promise<ProfileRow> {
+  const res = await apiFetch<ProfileRow>(`/admin/profiles/${encodeURIComponent(id)}`, { method: "PATCH", body: { status } });
+  return res.data;
+}
+
+export async function createProfileBan(id: string, input: { reason: string; expires_at?: string | null; expires_in_seconds?: number }): Promise<{ ban: PlayerBan; ended_presences: number }> {
+  const res = await apiFetch<{ ban: PlayerBan; ended_presences: number }>(`/admin/profiles/${encodeURIComponent(id)}/bans`, { method: "POST", body: input });
+  return res.data;
+}
+
+export async function kickProfile(id: string, reason: string): Promise<{ ended_presences: number }> {
+  const res = await apiFetch<{ ended_presences: number }>(`/admin/profiles/${encodeURIComponent(id)}/kick`, { method: "POST", body: { reason } });
+  return res.data;
+}
+
+export async function kickPresence(id: string, reason: string): Promise<PlayerPresence> {
+  const res = await apiFetch<PlayerPresence>(`/admin/presences/${encodeURIComponent(id)}/kick`, { method: "POST", body: { reason } });
+  return res.data;
+}
+
+export async function revokeBan(id: string, reason: string): Promise<PlayerBan> {
+  const res = await apiFetch<PlayerBan>(`/admin/bans/${encodeURIComponent(id)}`, { method: "DELETE", body: { reason } });
+  return res.data;
+}
+
+export async function extendBan(id: string, input: { expires_in_seconds: number; reason?: string }): Promise<PlayerBan> {
+  const res = await apiFetch<PlayerBan>(`/admin/bans/${encodeURIComponent(id)}/extend`, { method: "POST", body: input });
+  return res.data;
+}
+
+export async function bindProfile(id: string, passport_id: string, primary = true): Promise<ProfileRow> {
+  const res = await apiFetch<ProfileRow>(`/admin/profiles/${encodeURIComponent(id)}/bind`, { method: "POST", body: { passport_id, primary } });
+  return res.data;
+}
+
+export async function unbindProfile(id: string): Promise<void> {
+  await apiFetch<null>(`/admin/profiles/${encodeURIComponent(id)}/unbind`, { method: "POST" });
 }
 
 export interface VelocityNode {
   id: string;
   name: string;
+  mode: "portal" | "gate";
   server_id: string;
   server_label: string;
+  runtime_config?: PortalRuntimeConfig;
   status: "active" | "disabled" | "stale";
   last_seen_at: string | null;
   token_fingerprint: string;
@@ -224,6 +321,16 @@ export async function fetchNodes(): Promise<VelocityNode[]> {
   return res.data;
 }
 
+export async function fetchNode(id: string): Promise<VelocityNode> {
+  const res = await apiFetch<VelocityNode>(`/admin/velocity/nodes/${encodeURIComponent(id)}`);
+  return res.data;
+}
+
+export async function updateNode(id: string, input: { name: string; runtime_config: Record<string, unknown> }): Promise<VelocityNode> {
+  const res = await apiFetch<VelocityNode>(`/admin/velocity/nodes/${encodeURIComponent(id)}`, { method: "PUT", body: input });
+  return res.data;
+}
+
 export async function rotateNodeToken(id: string): Promise<{ token_once: string; token_fingerprint: string }> {
   const res = await apiFetch<{ token_once: string; token_fingerprint: string }>(`/admin/velocity/nodes/${encodeURIComponent(id)}/rotate`, { method: "POST" });
   return res.data;
@@ -234,8 +341,51 @@ export async function disableNode(id: string): Promise<void> {
 export async function deleteNode(id: string): Promise<void> {
   await apiFetch<null>(`/admin/velocity/nodes/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
-export async function createNode(input: { name: string; server_id: string }): Promise<{ token_once: string; token_fingerprint: string; node: VelocityNode }> {
+export async function createNode(input: { name: string }): Promise<{ token_once: string; token_fingerprint: string; node: VelocityNode }> {
   const res = await apiFetch<{ token_once: string; token_fingerprint: string; node: VelocityNode }>("/admin/velocity/nodes", { method: "POST", body: input });
+  return res.data;
+}
+
+export interface PortalRuntimeConfig {
+  node_name?: string;
+  server_id?: string;
+  heartbeat_interval_seconds?: number;
+  resolve_raw_offline_names?: boolean;
+  max_password_attempts?: number;
+  chat_cooldown_millis?: number;
+  auth_timeout_seconds?: number;
+  completion_delay_seconds?: number;
+  default_target_server?: string;
+  holding_server?: string;
+  transfer_cookie_key?: string;
+  gate_initial_server?: string;
+  gate_holding_server?: string;
+  gate_validation_timeout_seconds?: number;
+  portal_requested_server_id?: string;
+  portal_requested_host?: string;
+  portal_source_id?: string;
+  dialog_enabled?: boolean;
+  dialog_fallback_chat_enabled?: boolean;
+  email_verification_mode?: string;
+}
+
+export interface PortalSettings {
+  default_target_server: string;
+  holding_server: string;
+  requested_host: string;
+  source_id: string;
+  transfer_cookie_key: string;
+  dialog_enabled: boolean;
+  dialog_fallback_chat_enabled: boolean;
+}
+
+export async function fetchPortalSettings(): Promise<PortalSettings> {
+  const res = await apiFetch<PortalSettings>("/admin/portal-settings");
+  return res.data;
+}
+
+export async function updatePortalSettings(input: PortalSettings): Promise<PortalSettings> {
+  const res = await apiFetch<PortalSettings>("/admin/portal-settings", { method: "PUT", body: input });
   return res.data;
 }
 
@@ -300,8 +450,63 @@ export async function createMojangRoute(input: CreateMojangRouteInput): Promise<
   });
   return res.data;
 }
+export async function updateMojangRoute(id: string, input: CreateMojangRouteInput & { disabled?: boolean }): Promise<MojangProxy> {
+  const res = await apiFetch<MojangProxy>(`/admin/mojang/routes/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: input,
+  });
+  return res.data;
+}
 export async function deleteMojangRoute(id: string): Promise<void> {
   await apiFetch<null>(`/admin/mojang/routes/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export interface RouteChoice {
+  id: string;
+  kind: "direct" | "http" | "socks5";
+  url_masked: string;
+  weight: number;
+  disabled?: boolean;
+}
+
+export interface MojangRuntimeSettings {
+  enabled_route_ids: string[];
+  load_balance_strategy: string;
+  request_timeout_seconds: number;
+  failure_cooldown_seconds: number;
+  cache_fresh_seconds: number;
+  cache_stale_seconds: number;
+  available_routes: RouteChoice[];
+}
+
+export async function fetchMojangSettings(): Promise<MojangRuntimeSettings> {
+  const res = await apiFetch<MojangRuntimeSettings>("/admin/settings/mojang");
+  return res.data;
+}
+
+export async function updateMojangSettings(input: MojangRuntimeSettings): Promise<MojangRuntimeSettings> {
+  const { available_routes: _availableRoutes, ...body } = input;
+  const res = await apiFetch<MojangRuntimeSettings>("/admin/settings/mojang", { method: "PUT", body });
+  return res.data;
+}
+
+export interface IPGeoSettings {
+  enabled_route_ids: string[];
+  cache_ttl_seconds: number;
+  request_timeout_seconds: number;
+  provider: string;
+  available_routes: RouteChoice[];
+}
+
+export async function fetchIPGeoSettings(): Promise<IPGeoSettings> {
+  const res = await apiFetch<IPGeoSettings>("/admin/settings/ip-geo");
+  return res.data;
+}
+
+export async function updateIPGeoSettings(input: IPGeoSettings): Promise<IPGeoSettings> {
+  const { available_routes: _availableRoutes, ...body } = input;
+  const res = await apiFetch<IPGeoSettings>("/admin/settings/ip-geo", { method: "PUT", body });
+  return res.data;
 }
 
 export interface DownstreamServer {
@@ -396,11 +601,21 @@ export async function fetchExtensions(): Promise<ExtensionRegistryEntry[]> {
 export interface AuditEvent {
   id: string;
   event_type: string;
+  schema_version?: number;
+  category?: string;
+  outcome?: string;
+  source?: string;
+  session_id?: string;
+  correlation_id?: string;
   actor_type: string;
+  actor_id?: string;
   actor_label: string;
   target_type: string;
+  target_id?: string;
   target_label: string;
-  metadata: Record<string, unknown>;
+  client_ip?: string | null;
+  client_geo?: import("@authman/shared").IPGeo | null;
+  details: Record<string, unknown>;
   created_at: string;
 }
 
@@ -410,6 +625,7 @@ export interface AuditFilters extends Record<string, string | number | undefined
   event_type?: string;
   since?: string;
   until?: string;
+  related_id?: string;
   page?: number;
   page_size?: number;
 }
@@ -417,6 +633,11 @@ export interface AuditFilters extends Record<string, string | number | undefined
 export async function fetchAuditEvents(filters: AuditFilters) {
   const res = await apiFetch<AuditEvent[]>("/admin/audit-events", { query: filters });
   return res;
+}
+
+export async function fetchAuditEvent(id: string): Promise<AuditEvent> {
+  const res = await apiFetch<AuditEvent>(`/admin/audit-events/${encodeURIComponent(id)}`);
+  return res.data;
 }
 
 export interface AdminUser {

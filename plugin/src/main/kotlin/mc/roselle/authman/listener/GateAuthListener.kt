@@ -10,6 +10,7 @@ import com.velocitypowered.api.event.player.ServerConnectedEvent
 import com.velocitypowered.api.event.player.ServerPreConnectEvent
 import com.velocitypowered.api.proxy.Player
 import com.velocitypowered.api.proxy.ProxyServer
+import mc.roselle.authman.AuthmanPlugin
 import mc.roselle.authman.api.AuthmanClient
 import mc.roselle.authman.config.AuthmanConfig
 import mc.roselle.authman.message.AuthmanMessages
@@ -21,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 class GateAuthListener(
-    private val plugin: Any,
+    private val plugin: AuthmanPlugin,
     private val server: ProxyServer,
     private val logger: Logger,
     private val config: AuthmanConfig,
@@ -31,13 +32,17 @@ class GateAuthListener(
     private val pending: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
     private val allowed: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
     private val validating: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
-    private val cookieKey: Key = Key.key(config.transferCookieKey)
+    private val presences: MutableMap<UUID, String> = ConcurrentHashMap()
 
     @Subscribe
     fun onGameProfileRequest(event: GameProfileRequestEvent) {
+        if (plugin.isCoreAccessRevoked()) {
+            return
+        }
         val resolved = try {
             client.resolvePlayer(event.username)
         } catch (ex: Exception) {
+            plugin.lockIfCoreRejected(ex)
             logger.warn("Failed to resolve Authman gate profile {}", event.username, ex)
             return
         }
@@ -51,6 +56,10 @@ class GateAuthListener(
 
     @Subscribe
     fun onLogin(event: LoginEvent) {
+        if (plugin.isCoreAccessRevoked()) {
+            event.setResult(com.velocitypowered.api.event.ResultedEvent.ComponentResult.denied(messages.temporaryUnavailable()))
+            return
+        }
         val player = event.player
         pending.add(player.uniqueId)
         requestGrantCookie(player)
@@ -59,11 +68,15 @@ class GateAuthListener(
 
     @Subscribe
     fun onCookieReceive(event: CookieReceiveEvent) {
-        if (event.originalKey != cookieKey) {
+        if (event.originalKey != cookieKey()) {
             return
         }
         event.result = CookieReceiveEvent.ForwardResult.handled()
         val player = event.player
+        if (plugin.isCoreAccessRevoked()) {
+            reject(player, "Authman node access is revoked")
+            return
+        }
         if (allowed.contains(player.uniqueId)) {
             return
         }
@@ -92,11 +105,15 @@ class GateAuthListener(
                 source = source,
             )
         } catch (ex: Exception) {
+            plugin.lockIfCoreRejected(ex)
             validating.remove(player.uniqueId)
             reject(player, "invalid Authman transfer grant: ${ex.message}")
             return
         }
         allowed.add(player.uniqueId)
+        if (result.presenceId.isNotBlank()) {
+            presences[player.uniqueId] = result.presenceId
+        }
         validating.remove(player.uniqueId)
         pending.remove(player.uniqueId)
         logger.info("Accepted Authman gate grant for {} / {}", result.resolved.protocolName, result.resolved.uuid)
@@ -106,6 +123,10 @@ class GateAuthListener(
     @Subscribe
 	fun onChooseInitialServer(event: PlayerChooseInitialServerEvent) {
 		val player = event.player
+        if (plugin.isCoreAccessRevoked()) {
+            event.setInitialServer(null)
+            return
+        }
 		if (!allowed.contains(player.uniqueId)) {
 			requestGrantCookie(player)
             val holding = config.gateHoldingServer
@@ -124,6 +145,11 @@ class GateAuthListener(
 
     @Subscribe
 	fun onServerPreConnect(event: ServerPreConnectEvent) {
+        if (plugin.isCoreAccessRevoked()) {
+            event.setResult(ServerPreConnectEvent.ServerResult.denied())
+            event.player.disconnect(messages.temporaryUnavailable())
+            return
+        }
 		if (!allowed.contains(event.player.uniqueId)) {
             val holding = config.gateHoldingServer
             if (holding.isNotBlank() && event.originalServer.serverInfo.name == holding) {
@@ -140,6 +166,17 @@ class GateAuthListener(
         pending.remove(event.player.uniqueId)
         allowed.remove(event.player.uniqueId)
         validating.remove(event.player.uniqueId)
+        val presenceId = presences.remove(event.player.uniqueId)
+        if (!presenceId.isNullOrBlank()) {
+            server.scheduler.buildTask(plugin, Runnable {
+                try {
+                    client.endPresence(presenceId, "disconnect")
+                } catch (ex: Exception) {
+                    plugin.lockIfCoreRejected(ex)
+                    logger.warn("Failed to end Authman presence {} for {}", presenceId, event.player.username, ex)
+                }
+            }).schedule()
+        }
     }
 
     @Subscribe
@@ -185,11 +222,13 @@ class GateAuthListener(
 
     private fun requestGrantCookie(player: Player) {
         try {
-            player.requestCookie(cookieKey)
+            player.requestCookie(cookieKey())
         } catch (ex: IllegalArgumentException) {
             reject(player, "client does not support transfer cookies")
         }
     }
+
+    private fun cookieKey(): Key = Key.key(config.transferCookieKey)
 
     private fun scheduleValidationTimeout(player: Player) {
         server.scheduler.buildTask(plugin, Runnable {

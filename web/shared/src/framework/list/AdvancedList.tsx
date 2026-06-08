@@ -1,11 +1,14 @@
-import { useMemo, type CSSProperties, type ReactNode } from "react";
+import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { Icon } from "../../components/Icon";
 import { Select } from "../../components/Select";
 import { useI18n } from "../../i18n/I18nProvider";
+import { cx } from "../../utils/cx";
 import { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
 import { Pagination } from "./Pagination";
 import {
   applyClientFilters,
   paginateClient,
+  sortClientRows,
   totalPagesFor,
   visibleColumns,
   withPageReset,
@@ -18,6 +21,15 @@ const ALIGN: Record<NonNullable<ListColumn<unknown>["align"]>, CSSProperties> = 
   center: { textAlign: "center" },
 };
 
+function cellStyle<T>(column: ListColumn<T>, head = false): CSSProperties {
+  return {
+    width: column.width,
+    minWidth: column.minWidth ?? column.width,
+    ...(column.align ? ALIGN[column.align] : null),
+    ...(column.sticky === "right" ? { position: "sticky", right: 0, zIndex: head ? 4 : 2 } : null),
+  };
+}
+
 interface BaseProps<T> {
   columns: ReadonlyArray<ListColumn<T>>;
   rowKey: (row: T) => string;
@@ -27,8 +39,12 @@ interface BaseProps<T> {
   onRowClick?: (row: T) => void;
   empty?: ReactNode;
   loading?: boolean;
+  /** Permanent list-level actions, rendered on the toolbar left. */
+  primaryActions?: ReactNode;
   /** Extra controls rendered next to the column-visibility menu on the toolbar right. */
   toolbarActions?: ReactNode;
+  selectable?: boolean | ((row: T) => boolean);
+  selectionActions?: (selectedRows: T[]) => ReactNode;
   /** Stable test ID prefix. Children controls derive their own IDs from it. */
   testId?: string;
 }
@@ -83,11 +99,16 @@ export function AdvancedList<T>(props: AdvancedListProps<T>) {
     onRowClick,
     empty,
     loading,
+    primaryActions,
     toolbarActions,
+    selectable,
+    selectionActions,
     testId,
   } = props;
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
 
   const visible = useMemo(() => visibleColumns(columns, state), [columns, state]);
+  const selectionEnabled = !!selectable || !!selectionActions;
 
   // Client mode applies filters + pagination locally; server mode trusts the
   // caller to have done that already.
@@ -96,7 +117,8 @@ export function AdvancedList<T>(props: AdvancedListProps<T>) {
       return { rowsToRender: props.rows.slice(), total: props.total };
     }
     const filtered = applyClientFilters(props.rows, columns, state);
-    return { rowsToRender: paginateClient(filtered, state), total: filtered.length };
+    const sorted = sortClientRows(filtered, columns, state);
+    return { rowsToRender: paginateClient(sorted, state), total: filtered.length };
   }, [props, columns, state]);
 
   const totalPages = totalPagesFor(total, state.pageSize);
@@ -119,9 +141,40 @@ export function AdvancedList<T>(props: AdvancedListProps<T>) {
     else set.add(columnKey);
     onStateChange({ ...state, hidden: Array.from(set) });
   }
+  function toggleSort(column: ListColumn<T>) {
+    if (!column.sortable) return;
+    const sortDir = state.sortKey === column.key && state.sortDir === "asc" ? "desc" : "asc";
+    onStateChange(withPageReset({ ...state, sortKey: column.key, sortDir }));
+  }
+  function rowSelectable(row: T) {
+    if (!selectionEnabled) return false;
+    if (typeof selectable === "function") return selectable(row);
+    return selectable !== false;
+  }
+  function toggleRow(row: T) {
+    const key = rowKey(row);
+    const set = new Set(selectedKeys);
+    if (set.has(key)) set.delete(key);
+    else set.add(key);
+    setSelectedKeys(Array.from(set));
+  }
+  function toggleAllVisible() {
+    const visibleKeys = rowsToRender.filter(rowSelectable).map(rowKey);
+    const selected = new Set(selectedKeys);
+    const allSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selected.has(key));
+    for (const key of visibleKeys) {
+      if (allSelected) selected.delete(key);
+      else selected.add(key);
+    }
+    setSelectedKeys(Array.from(selected));
+  }
 
   const hasFilterRow = visible.some((c) => c.filter);
   const activeFilters = Object.entries(state.filters).filter(([k, v]) => v && visible.some((c) => c.key === k));
+  const selectedRows = rowsToRender.filter((row) => selectedKeys.includes(rowKey(row)));
+  const selectableVisibleRows = rowsToRender.filter(rowSelectable);
+  const allVisibleSelected = selectableVisibleRows.length > 0 && selectableVisibleRows.every((row) => selectedKeys.includes(rowKey(row)));
+  const someVisibleSelected = selectableVisibleRows.some((row) => selectedKeys.includes(rowKey(row)));
 
   return (
     <div className="adv-list" data-testid={testId}>
@@ -139,6 +192,13 @@ export function AdvancedList<T>(props: AdvancedListProps<T>) {
           ) : null}
         </div>
         <div className="adv-list-toolbar__right">
+          {primaryActions ? <div className="adv-list-primary-actions">{primaryActions}</div> : null}
+          {selectedRows.length > 0 && selectionActions ? (
+            <div className="adv-list-selection-actions" data-testid={testId ? `${testId}-selection-actions` : undefined}>
+              <span className="adv-list-selection-count">{selectedRows.length}</span>
+              {selectionActions(selectedRows)}
+            </div>
+          ) : null}
           {toolbarActions}
           <ColumnVisibilityMenu
             columns={columns}
@@ -152,20 +212,53 @@ export function AdvancedList<T>(props: AdvancedListProps<T>) {
         <table className="tbl">
           <thead>
             <tr>
+              {selectionEnabled ? (
+                <th className="adv-list-select-cell" style={{ width: 42, minWidth: 42 }} data-testid={testId ? `${testId}-th-select` : undefined}>
+                  <label className="adv-list-select-hit" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = !allVisibleSelected && someVisibleSelected;
+                      }}
+                      disabled={selectableVisibleRows.length === 0}
+                      onChange={toggleAllVisible}
+                      aria-label={t("list.selectAll")}
+                      data-testid={testId ? `${testId}-select-all` : undefined}
+                    />
+                  </label>
+                </th>
+              ) : null}
               {visible.map((c) => (
                 <th
                   key={c.key}
-                  style={{ width: c.width, ...(c.align ? ALIGN[c.align] : null) }}
+                  className={cx(c.sticky === "right" && "is-sticky-right", c.sortable && "sortable")}
+                  style={cellStyle(c, true)}
                   data-testid={testId ? `${testId}-th-${c.key}` : undefined}
                 >
-                  {c.header}
+                  {c.sortable ? (
+                    <button
+                      type="button"
+                      className="tbl-sort"
+                      onClick={() => toggleSort(c)}
+                      data-testid={testId ? `${testId}-sort-${c.key}` : undefined}
+                    >
+                      <span>{c.header}</span>
+                      {state.sortKey === c.key ? <Icon name={state.sortDir === "desc" ? "chevronDown" : "chevronUp"} size={13} /> : null}
+                    </button>
+                  ) : c.header}
                 </th>
               ))}
             </tr>
             {hasFilterRow ? (
               <tr className="adv-list-filter-row" data-testid={testId ? `${testId}-filter-row` : undefined}>
+                {selectionEnabled ? <th className="adv-list-select-cell" style={{ width: 42, minWidth: 42 }} /> : null}
                 {visible.map((c) => (
-                  <th key={c.key} className="adv-list-filter-cell">
+                  <th
+                    key={c.key}
+                    className={cx("adv-list-filter-cell", c.sticky === "right" && "is-sticky-right")}
+                    style={cellStyle(c, true)}
+                  >
                     {c.filter ? (
                       <ColumnFilterControl
                         column={c}
@@ -182,13 +275,13 @@ export function AdvancedList<T>(props: AdvancedListProps<T>) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={visible.length} style={{ padding: 20 }} data-testid={testId ? `${testId}-loading` : "list-loading"}>
+                <td colSpan={visible.length + (selectionEnabled ? 1 : 0)} style={{ padding: 20 }} data-testid={testId ? `${testId}-loading` : "list-loading"}>
                   {t("common.loading")}
                 </td>
               </tr>
             ) : rowsToRender.length === 0 ? (
               <tr>
-                <td colSpan={visible.length} data-testid={testId ? `${testId}-empty` : "list-empty"}>
+                <td colSpan={visible.length + (selectionEnabled ? 1 : 0)} data-testid={testId ? `${testId}-empty` : "list-empty"}>
                   {empty ?? <DefaultEmpty />}
                 </td>
               </tr>
@@ -200,8 +293,22 @@ export function AdvancedList<T>(props: AdvancedListProps<T>) {
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                   style={{ cursor: onRowClick ? "pointer" : "default" }}
                 >
+                  {selectionEnabled ? (
+                    <td className="adv-list-select-cell" onClick={(e) => e.stopPropagation()}>
+                      <label className="adv-list-select-hit">
+                        <input
+                          type="checkbox"
+                          checked={selectedKeys.includes(rowKey(row))}
+                          disabled={!rowSelectable(row)}
+                          onChange={() => toggleRow(row)}
+                          aria-label={t("list.selectRow")}
+                          data-testid={testId ? `${testId}-select-${rowKey(row)}` : undefined}
+                        />
+                      </label>
+                    </td>
+                  ) : null}
                   {visible.map((c) => (
-                    <td key={c.key} style={c.align ? ALIGN[c.align] : undefined}>
+                    <td key={c.key} className={c.sticky === "right" ? "is-sticky-right" : undefined} style={cellStyle(c)}>
                       {c.render(row)}
                     </td>
                   ))}

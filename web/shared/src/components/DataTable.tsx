@@ -6,7 +6,9 @@ export interface DataColumn<T> {
   header: ReactNode;
   render: (row: T) => ReactNode;
   width?: string;
+  minWidth?: string;
   align?: "left" | "right" | "center";
+  sticky?: "right";
   /** Hide on narrow viewports. */
   hideOnNarrow?: boolean;
 }
@@ -26,6 +28,15 @@ const ALIGN: Record<NonNullable<DataColumn<unknown>["align"]>, CSSProperties> = 
   right: { textAlign: "right" },
   center: { textAlign: "center" },
 };
+
+function cellStyle<T>(column: DataColumn<T>, head = false): CSSProperties {
+  return {
+    width: column.width,
+    minWidth: column.minWidth ?? column.width,
+    ...(column.align ? ALIGN[column.align] : null),
+    ...(column.sticky === "right" ? { position: "sticky", right: 0, zIndex: head ? 4 : 2 } : null),
+  };
+}
 
 export function DataTable<T>({
   rows,
@@ -57,7 +68,7 @@ export function DataTable<T>({
         <thead>
           <tr>
             {columns.map((c) => (
-              <th key={c.key} style={{ width: c.width, ...(c.align ? ALIGN[c.align] : null) }}>
+              <th key={c.key} className={c.sticky === "right" ? "is-sticky-right" : undefined} style={cellStyle(c, true)}>
                 {c.header}
               </th>
             ))}
@@ -72,7 +83,7 @@ export function DataTable<T>({
               style={{ cursor: onRowClick ? "pointer" : "default" }}
             >
               {columns.map((c) => (
-                <td key={c.key} style={c.align ? ALIGN[c.align] : undefined}>
+                <td key={c.key} className={c.sticky === "right" ? "is-sticky-right" : undefined} style={cellStyle(c)}>
                   {c.render(row)}
                 </td>
               ))}

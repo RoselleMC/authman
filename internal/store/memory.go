@@ -20,6 +20,11 @@ type Memory struct {
 	mu                  sync.RWMutex
 	nextID              int
 	nextAuditID         int
+	passportsByID       map[string]identity.Passport
+	profilesByID        map[string]identity.Profile
+	passportByUsername  map[string]string
+	profileLinks        map[string]identity.ProfilePassportLink
+	profilesByPassport  map[string]map[string]struct{}
 	playersByID         map[string]identity.Player
 	offlineByNormalized map[string]string
 	protocolNameIndex   map[string]string
@@ -28,6 +33,9 @@ type Memory struct {
 	portalLinksByToken  map[string]auth.PortalLink
 	auditEvents         []audit.Event
 	mojangRoutes        map[string]mojang.Route
+	systemSettings      map[string]map[string]any
+	presencesByID       map[string]PlayerPresence
+	bansByID            map[string]PlayerBan
 	downstreamServers   map[string]DownstreamServer
 	transferGrants      map[string]auth.TransferGrant
 	extensionData       map[string]ExtensionPlayerData
@@ -42,6 +50,11 @@ type Memory struct {
 
 func NewMemory() *Memory {
 	m := &Memory{
+		passportsByID:       make(map[string]identity.Passport),
+		profilesByID:        make(map[string]identity.Profile),
+		passportByUsername:  make(map[string]string),
+		profileLinks:        make(map[string]identity.ProfilePassportLink),
+		profilesByPassport:  make(map[string]map[string]struct{}),
 		playersByID:         make(map[string]identity.Player),
 		offlineByNormalized: make(map[string]string),
 		protocolNameIndex:   make(map[string]string),
@@ -49,6 +62,9 @@ func NewMemory() *Memory {
 		sessionsByID:        make(map[string]auth.Session),
 		portalLinksByToken:  make(map[string]auth.PortalLink),
 		mojangRoutes:        make(map[string]mojang.Route),
+		systemSettings:      make(map[string]map[string]any),
+		presencesByID:       make(map[string]PlayerPresence),
+		bansByID:            make(map[string]PlayerBan),
 		downstreamServers:   make(map[string]DownstreamServer),
 		transferGrants:      make(map[string]auth.TransferGrant),
 		extensionData:       make(map[string]ExtensionPlayerData),
@@ -65,54 +81,358 @@ func NewMemory() *Memory {
 	return m
 }
 
-func (m *Memory) CreateOfflinePlayer(ctx context.Context, rawName string, passwordHash string) (identity.Player, error) {
+func (m *Memory) CreateOfflinePassportProfile(ctx context.Context, rawName string, protocolName string, passwordHash string) (identity.PassportProfile, error) {
 	name, err := identity.NormalizeOfflineName(rawName)
 	if err != nil {
-		return identity.Player{}, err
+		return identity.PassportProfile{}, err
+	}
+	if strings.TrimSpace(protocolName) == "" {
+		protocolName = rawName
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.offlineByNormalized[name.Normalized]; ok {
-		return identity.Player{}, fmt.Errorf("offline player already exists")
+	if _, ok := m.passportByUsername[name.Normalized]; ok {
+		return identity.PassportProfile{}, fmt.Errorf("offline passport already exists")
 	}
-	m.nextID++
-	player, err := identity.NewOfflinePlayer(fmt.Sprintf("player-%d", m.nextID), rawName)
+	passport, err := identity.NewOfflinePassport("", rawName)
+	if err != nil {
+		return identity.PassportProfile{}, err
+	}
+	uniqueName, err := m.uniqueProtocolNameLocked(protocolName)
+	if err != nil {
+		return identity.PassportProfile{}, err
+	}
+	profile, err := identity.NewOfflineProfile("", uniqueName.Protocol, passport.ID)
+	if err != nil {
+		return identity.PassportProfile{}, err
+	}
+	pp := m.storePassportProfileLocked(passport, profile, true)
+	m.credentialsByPlayer[passport.ID] = OfflineCredential{
+		PlayerID:     passport.ID,
+		PassportID:   passport.ID,
+		PasswordHash: passwordHash,
+	}
+	return pp, nil
+}
+
+func (m *Memory) UpsertPremiumPassportProfile(ctx context.Context, name string, uuid identity.UUID, properties []identity.ProfileProperty) (identity.PassportProfile, error) {
+	protocolName := strings.TrimSpace(name)
+	if protocolName == "" {
+		return identity.PassportProfile{}, fmt.Errorf("premium name is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, passport := range m.passportsByID {
+		if passport.Kind == identity.PassportKindPremium && passport.UUID.String() == uuid.String() {
+			passport.Username = protocolName
+			passport.UsernameNormalized = strings.ToLower(protocolName)
+			passport.UpdatedAt = time.Now().UTC()
+			m.passportsByID[passport.ID] = passport
+			profile, err := m.primaryProfileForPassportLocked(passport.ID)
+			if err != nil {
+				return identity.PassportProfile{}, err
+			}
+			profile.SkinSource = "mojang"
+			profile.ProfileProperties = append([]identity.ProfileProperty(nil), properties...)
+			profile.UpdatedAt = time.Now().UTC()
+			m.profilesByID[profile.ID] = profile
+			m.protocolNameIndex[strings.ToLower(profile.ProtocolName)] = profile.ID
+			player := identity.PlayerFromPassportProfile(passport, profile)
+			m.playersByID[player.ID] = player
+			return identity.PassportProfile{Passport: passport, Profile: profile, Link: m.profileLinks[profile.ID]}, nil
+		}
+	}
+	passport := identity.NewPremiumPassport("", protocolName, uuid)
+	uniqueName, err := m.uniqueProtocolNameLocked(protocolName)
+	if err != nil {
+		return identity.PassportProfile{}, err
+	}
+	profile, err := identity.NewPremiumProfile("", uniqueName.Protocol, uuid, properties, passport.ID)
+	if err != nil {
+		return identity.PassportProfile{}, err
+	}
+	return m.storePassportProfileLocked(passport, profile, true), nil
+}
+
+func (m *Memory) GetPassportByID(ctx context.Context, id string) (identity.Passport, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	passport, ok := m.passportsByID[id]
+	if !ok {
+		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	return passport, nil
+}
+
+func (m *Memory) GetPassportByUsername(ctx context.Context, username string) (identity.Passport, error) {
+	name, err := identity.NormalizeOfflineName(username)
+	if err != nil {
+		return identity.Passport{}, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	id, ok := m.passportByUsername[name.Normalized]
+	if !ok {
+		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	return m.passportsByID[id], nil
+}
+
+func (m *Memory) GetProfileByID(ctx context.Context, id string) (identity.Profile, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	profile, ok := m.profilesByID[id]
+	if !ok {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	return profile, nil
+}
+
+func (m *Memory) GetProfileByProtocolName(ctx context.Context, protocolName string) (identity.Profile, error) {
+	key := strings.ToLower(strings.TrimSpace(protocolName))
+	if key == "" {
+		return identity.Profile{}, fmt.Errorf("protocol name is required")
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	id, ok := m.protocolNameIndex[key]
+	if !ok {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	return m.profilesByID[id], nil
+}
+
+func (m *Memory) GetPassportForProfile(ctx context.Context, profileID string) (identity.Passport, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	link, ok := m.profileLinks[profileID]
+	if !ok {
+		return identity.Passport{}, fmt.Errorf("profile link not found: %w", ErrNotFound)
+	}
+	passport, ok := m.passportsByID[link.PassportID]
+	if !ok {
+		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	return passport, nil
+}
+
+func (m *Memory) GetPrimaryProfileForPassport(ctx context.Context, passportID string) (identity.Profile, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.primaryProfileForPassportLocked(passportID)
+}
+
+func (m *Memory) ListProfilesForPassport(ctx context.Context, passportID string) []identity.Profile {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ids := m.profilesByPassport[passportID]
+	out := make([]identity.Profile, 0, len(ids))
+	for id := range ids {
+		if profile, ok := m.profilesByID[id]; ok {
+			out = append(out, profile)
+		}
+	}
+	return out
+}
+
+func (m *Memory) ListPassports(ctx context.Context) []identity.Passport {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]identity.Passport, 0, len(m.passportsByID))
+	for _, passport := range m.passportsByID {
+		out = append(out, passport)
+	}
+	return out
+}
+
+func (m *Memory) ListProfiles(ctx context.Context) []identity.Profile {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]identity.Profile, 0, len(m.profilesByID))
+	for _, profile := range m.profilesByID {
+		out = append(out, profile)
+	}
+	return out
+}
+
+func (m *Memory) CreateProfile(ctx context.Context, profile identity.Profile) (identity.Profile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.protocolNameIndex[strings.ToLower(profile.ProtocolName)]; ok {
+		return identity.Profile{}, fmt.Errorf("profile protocol name already exists")
+	}
+	if profile.UUID == (identity.UUID{}) {
+		uuid, err := identity.RandomProfileUUID()
+		if err != nil {
+			return identity.Profile{}, err
+		}
+		profile.UUID = uuid
+	}
+	profile.ID = profile.UUID.String()
+	now := time.Now().UTC()
+	if profile.CreatedAt.IsZero() {
+		profile.CreatedAt = now
+	}
+	profile.UpdatedAt = now
+	m.profilesByID[profile.ID] = profile
+	m.protocolNameIndex[strings.ToLower(profile.ProtocolName)] = profile.ID
+	return profile, nil
+}
+
+func (m *Memory) BindProfileToPassport(ctx context.Context, profileID string, passportID string, primary bool) (identity.PassportProfile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	passport, ok := m.passportsByID[passportID]
+	if !ok {
+		return identity.PassportProfile{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	profile, ok := m.profilesByID[profileID]
+	if !ok {
+		return identity.PassportProfile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	if existing, ok := m.profileLinks[profileID]; ok && existing.PassportID != passportID {
+		return identity.PassportProfile{}, fmt.Errorf("profile is already bound")
+	}
+	return m.linkProfileLocked(passport, profile, primary), nil
+}
+
+func (m *Memory) UnbindProfile(ctx context.Context, profileID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	link, ok := m.profileLinks[profileID]
+	if !ok {
+		return fmt.Errorf("profile link not found: %w", ErrNotFound)
+	}
+	delete(m.profileLinks, profileID)
+	delete(m.playersByID, profileID)
+	if ids := m.profilesByPassport[link.PassportID]; ids != nil {
+		delete(ids, profileID)
+	}
+	return nil
+}
+
+func (m *Memory) SetPassportStatus(ctx context.Context, id string, status identity.PassportStatus) (identity.Passport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	passport, ok := m.passportsByID[id]
+	if !ok {
+		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	passport.Status = status
+	passport.UpdatedAt = time.Now().UTC()
+	m.passportsByID[id] = passport
+	m.refreshPassportPlayersLocked(passport.ID)
+	return passport, nil
+}
+
+func (m *Memory) SetProfileStatus(ctx context.Context, id string, status identity.ProfileStatus) (identity.Profile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	profile, ok := m.profilesByID[id]
+	if !ok {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	profile.Status = status
+	profile.UpdatedAt = time.Now().UTC()
+	m.profilesByID[id] = profile
+	m.refreshProfilePlayerLocked(profile.ID)
+	return profile, nil
+}
+
+func (m *Memory) GetPassportCredential(ctx context.Context, username string) (identity.Passport, PassportCredential, error) {
+	passport, err := m.GetPassportByUsername(ctx, username)
+	if err != nil {
+		return identity.Passport{}, PassportCredential{}, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	credential, ok := m.credentialsByPlayer[passport.ID]
+	if !ok {
+		return identity.Passport{}, PassportCredential{}, fmt.Errorf("passport credential not found: %w", ErrNotFound)
+	}
+	return passport, passportCredentialFromOffline(credential), nil
+}
+
+func (m *Memory) RecordPassportLoginFailure(ctx context.Context, passportID string, now time.Time) (PassportCredential, error) {
+	credential, err := m.RecordOfflineLoginFailure(ctx, passportID, now)
+	return passportCredentialFromOffline(credential), err
+}
+
+func (m *Memory) RecordPassportLoginSuccess(ctx context.Context, passportID string) error {
+	return m.RecordOfflineLoginSuccess(ctx, passportID)
+}
+
+func (m *Memory) RecordPlayerSeen(ctx context.Context, passportID string, profileID string, serverID string, ip string, geo *identity.IPGeo, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	passportID = strings.TrimSpace(passportID)
+	profileID = strings.TrimSpace(profileID)
+	serverID = strings.TrimSpace(serverID)
+	ip = strings.TrimSpace(ip)
+	if passportID == "" && profileID != "" {
+		if link, ok := m.profileLinks[profileID]; ok {
+			passportID = link.PassportID
+		}
+	}
+	seenAt := now.UTC()
+	if passportID != "" {
+		passport, ok := m.passportsByID[passportID]
+		if ok {
+			passport.LastSeenServer = serverID
+			passport.LastSeenAt = &seenAt
+			passport.LastSeenIP = ip
+			passport.LastSeenGeo = cloneIPGeo(geo)
+			passport.UpdatedAt = seenAt
+			m.passportsByID[passportID] = passport
+		}
+	}
+	if profileID != "" {
+		profile, ok := m.profilesByID[profileID]
+		if ok {
+			profile.LastSeenServer = serverID
+			profile.LastSeenAt = &seenAt
+			profile.LastSeenIP = ip
+			profile.LastSeenGeo = cloneIPGeo(geo)
+			profile.UpdatedAt = seenAt
+			m.profilesByID[profileID] = profile
+			m.refreshProfilePlayerLocked(profileID)
+		}
+	} else if passportID != "" {
+		m.refreshPassportPlayersLocked(passportID)
+	}
+	return nil
+}
+
+func (m *Memory) UpdatePassportPassword(ctx context.Context, passportID string, passwordHash string) error {
+	return m.UpdateOfflinePassword(ctx, passportID, passwordHash)
+}
+
+func cloneIPGeo(geo *identity.IPGeo) *identity.IPGeo {
+	if geo == nil {
+		return nil
+	}
+	out := *geo
+	out.Locales = map[string]identity.IPGeoLocale{}
+	for key, value := range geo.Locales {
+		out.Locales[key] = value
+	}
+	return &out
+}
+
+func (m *Memory) CreateOfflinePlayer(ctx context.Context, rawName string, passwordHash string) (identity.Player, error) {
+	pp, err := m.CreateOfflinePassportProfile(ctx, rawName, rawName, passwordHash)
 	if err != nil {
 		return identity.Player{}, err
 	}
-	m.playersByID[player.ID] = player
-	m.offlineByNormalized[name.Normalized] = player.ID
-	m.protocolNameIndex[strings.ToLower(player.ProtocolName)] = player.ID
-	m.credentialsByPlayer[player.ID] = OfflineCredential{
-		PlayerID:     player.ID,
-		PasswordHash: passwordHash,
-	}
-	return player, nil
+	return identity.PlayerFromPassportProfileLink(pp), nil
 }
 
 func (m *Memory) UpsertPremiumPlayer(ctx context.Context, name string, uuid identity.UUID, properties []identity.ProfileProperty) (identity.Player, error) {
-	protocolName := strings.TrimSpace(name)
-	if protocolName == "" {
-		return identity.Player{}, fmt.Errorf("premium name is required")
+	pp, err := m.UpsertPremiumPassportProfile(ctx, name, uuid, properties)
+	if err != nil {
+		return identity.Player{}, err
 	}
-	key := strings.ToLower(protocolName)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for id, player := range m.playersByID {
-		if player.Kind == identity.PlayerKindPremium && player.PremiumUUID != nil && player.PremiumUUID.String() == uuid.String() {
-			player.ProtocolName = protocolName
-			player.NormalizedName = protocolName
-			player.ProfileProperties = append([]identity.ProfileProperty(nil), properties...)
-			m.playersByID[id] = player
-			m.protocolNameIndex[key] = id
-			return player, nil
-		}
-	}
-	m.nextID++
-	player := identity.NewPremiumPlayer(fmt.Sprintf("player-%d", m.nextID), protocolName, uuid, properties)
-	m.playersByID[player.ID] = player
-	m.protocolNameIndex[key] = player.ID
-	return player, nil
+	return identity.PlayerFromPassportProfileLink(pp), nil
 }
 
 func (m *Memory) GetOfflinePlayer(ctx context.Context, rawName string) (identity.Player, error) {
@@ -159,8 +479,8 @@ func (m *Memory) PremiumNameExists(ctx context.Context, rawName string) bool {
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	for _, player := range m.playersByID {
-		if player.Kind == identity.PlayerKindPremium && strings.EqualFold(player.ProtocolName, name.Normalized) {
+	for _, passport := range m.passportsByID {
+		if passport.Kind == identity.PassportKindPremium && strings.EqualFold(passport.UsernameNormalized, name.Normalized) {
 			return true
 		}
 	}
@@ -172,9 +492,13 @@ func (m *Memory) GetOfflineCredential(ctx context.Context, rawName string) (iden
 	if err != nil {
 		return identity.Player{}, OfflineCredential{}, err
 	}
+	passport, err := m.GetPassportForProfile(ctx, player.ID)
+	if err != nil {
+		return identity.Player{}, OfflineCredential{}, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	credential, ok := m.credentialsByPlayer[player.ID]
+	credential, ok := m.credentialsByPlayer[passport.ID]
 	if !ok {
 		return identity.Player{}, OfflineCredential{}, fmt.Errorf("offline credential not found: %w", ErrNotFound)
 	}
@@ -185,10 +509,18 @@ func (m *Memory) GetPlayerByID(ctx context.Context, id string) (identity.Player,
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	player, ok := m.playersByID[id]
-	if !ok {
-		return identity.Player{}, fmt.Errorf("player not found: %w", ErrNotFound)
+	if ok {
+		return player, nil
 	}
-	return player, nil
+	passport, ok := m.passportsByID[id]
+	if ok {
+		profile, err := m.primaryProfileForPassportLocked(id)
+		if err != nil {
+			return identity.Player{}, err
+		}
+		return identity.PlayerFromPassportProfile(passport, profile), nil
+	}
+	return identity.Player{}, fmt.Errorf("player not found: %w", ErrNotFound)
 }
 
 func (m *Memory) ListPlayers(ctx context.Context) []identity.Player {
@@ -204,27 +536,53 @@ func (m *Memory) ListPlayers(ctx context.Context) []identity.Player {
 func (m *Memory) SetPlayerLocked(ctx context.Context, id string, locked bool) (identity.Player, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	player, ok := m.playersByID[id]
+	if passport, ok := m.passportsByID[id]; ok {
+		if locked {
+			passport.Status = identity.PassportStatusLocked
+		} else {
+			passport.Status = identity.PassportStatusActive
+		}
+		passport.UpdatedAt = time.Now().UTC()
+		m.passportsByID[id] = passport
+		m.refreshPassportPlayersLocked(id)
+		profile, err := m.primaryProfileForPassportLocked(id)
+		if err != nil {
+			return identity.Player{}, err
+		}
+		return identity.PlayerFromPassportProfile(passport, profile), nil
+	}
+	profile, ok := m.profilesByID[id]
 	if !ok {
 		return identity.Player{}, fmt.Errorf("player not found: %w", ErrNotFound)
 	}
-	player.Locked = locked
-	m.playersByID[id] = player
-	return player, nil
+	if locked {
+		profile.Status = identity.ProfileStatusLocked
+	} else {
+		profile.Status = identity.ProfileStatusActive
+	}
+	profile.UpdatedAt = time.Now().UTC()
+	m.profilesByID[id] = profile
+	return m.refreshProfilePlayerLocked(id), nil
 }
 
 func (m *Memory) UpdateOfflinePassword(ctx context.Context, id string, passwordHash string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	player, ok := m.playersByID[id]
-	if !ok {
-		return fmt.Errorf("player not found: %w", ErrNotFound)
+	passportID := id
+	if _, ok := m.passportsByID[passportID]; !ok {
+		link, ok := m.profileLinks[id]
+		if !ok {
+			return fmt.Errorf("player not found: %w", ErrNotFound)
+		}
+		passportID = link.PassportID
 	}
-	if player.Kind != identity.PlayerKindOffline {
+	passport := m.passportsByID[passportID]
+	if passport.Kind != identity.PassportKindOffline {
 		return fmt.Errorf("player is not offline")
 	}
-	m.credentialsByPlayer[id] = OfflineCredential{
-		PlayerID:          id,
+	m.credentialsByPlayer[passportID] = OfflineCredential{
+		PlayerID:          passportID,
+		PassportID:        passportID,
 		PasswordHash:      passwordHash,
 		PasswordUpdatedAt: ptrTime(time.Now().UTC()),
 	}
@@ -234,7 +592,8 @@ func (m *Memory) UpdateOfflinePassword(ctx context.Context, id string, passwordH
 func (m *Memory) RecordOfflineLoginFailure(ctx context.Context, playerID string, now time.Time) (OfflineCredential, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	credential, ok := m.credentialsByPlayer[playerID]
+	passportID := m.passportIDForCredentialLocked(playerID)
+	credential, ok := m.credentialsByPlayer[passportID]
 	if !ok {
 		return OfflineCredential{}, fmt.Errorf("offline credential not found: %w", ErrNotFound)
 	}
@@ -243,21 +602,144 @@ func (m *Memory) RecordOfflineLoginFailure(ctx context.Context, playerID string,
 		lockedUntil := now.UTC().Add(15 * time.Minute)
 		credential.LockedUntil = &lockedUntil
 	}
-	m.credentialsByPlayer[playerID] = credential
+	credential.PlayerID = passportID
+	credential.PassportID = passportID
+	m.credentialsByPlayer[passportID] = credential
 	return credential, nil
 }
 
 func (m *Memory) RecordOfflineLoginSuccess(ctx context.Context, playerID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	credential, ok := m.credentialsByPlayer[playerID]
+	passportID := m.passportIDForCredentialLocked(playerID)
+	credential, ok := m.credentialsByPlayer[passportID]
 	if !ok {
 		return fmt.Errorf("offline credential not found: %w", ErrNotFound)
 	}
 	credential.FailedAttempts = 0
 	credential.LockedUntil = nil
-	m.credentialsByPlayer[playerID] = credential
+	credential.PlayerID = passportID
+	credential.PassportID = passportID
+	m.credentialsByPlayer[passportID] = credential
 	return nil
+}
+
+func (m *Memory) nextMemoryID(prefix string) string {
+	m.nextID++
+	return fmt.Sprintf("%s-%d", prefix, m.nextID)
+}
+
+func (m *Memory) uniqueProtocolNameLocked(raw string) (identity.OfflineName, error) {
+	for attempt := 1; attempt <= 9999; attempt++ {
+		name, err := uniqueProtocolCandidate(raw, attempt)
+		if err != nil {
+			return identity.OfflineName{}, err
+		}
+		if _, ok := m.protocolNameIndex[name.Normalized]; !ok {
+			return name, nil
+		}
+	}
+	return identity.OfflineName{}, fmt.Errorf("profile protocol name has no available unique variant")
+}
+
+func (m *Memory) storePassportProfileLocked(passport identity.Passport, profile identity.Profile, primary bool) identity.PassportProfile {
+	m.passportsByID[passport.ID] = passport
+	if passport.Kind == identity.PassportKindOffline {
+		m.passportByUsername[passport.UsernameNormalized] = passport.ID
+	}
+	m.profilesByID[profile.ID] = profile
+	m.protocolNameIndex[strings.ToLower(profile.ProtocolName)] = profile.ID
+	return m.linkProfileLocked(passport, profile, primary)
+}
+
+func (m *Memory) linkProfileLocked(passport identity.Passport, profile identity.Profile, primary bool) identity.PassportProfile {
+	if primary {
+		for profileID, link := range m.profileLinks {
+			if link.PassportID == passport.ID && link.IsPrimary {
+				link.IsPrimary = false
+				m.profileLinks[profileID] = link
+			}
+		}
+	}
+	link := identity.ProfilePassportLink{
+		ProfileID:  profile.ID,
+		PassportID: passport.ID,
+		IsPrimary:  primary,
+		LinkedAt:   time.Now().UTC(),
+	}
+	m.profileLinks[profile.ID] = link
+	if m.profilesByPassport[passport.ID] == nil {
+		m.profilesByPassport[passport.ID] = make(map[string]struct{})
+	}
+	m.profilesByPassport[passport.ID][profile.ID] = struct{}{}
+	player := identity.PlayerFromPassportProfile(passport, profile)
+	m.playersByID[player.ID] = player
+	if passport.Kind == identity.PassportKindOffline {
+		m.offlineByNormalized[passport.UsernameNormalized] = profile.ID
+	}
+	return identity.PassportProfile{Passport: passport, Profile: profile, Link: link}
+}
+
+func (m *Memory) primaryProfileForPassportLocked(passportID string) (identity.Profile, error) {
+	ids := m.profilesByPassport[passportID]
+	for profileID := range ids {
+		if link, ok := m.profileLinks[profileID]; ok && link.IsPrimary {
+			if profile, ok := m.profilesByID[profileID]; ok {
+				return profile, nil
+			}
+		}
+	}
+	for profileID := range ids {
+		if profile, ok := m.profilesByID[profileID]; ok {
+			return profile, nil
+		}
+	}
+	return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+}
+
+func (m *Memory) refreshPassportPlayersLocked(passportID string) {
+	passport, ok := m.passportsByID[passportID]
+	if !ok {
+		return
+	}
+	for profileID := range m.profilesByPassport[passportID] {
+		if profile, ok := m.profilesByID[profileID]; ok {
+			m.playersByID[profileID] = identity.PlayerFromPassportProfile(passport, profile)
+		}
+	}
+}
+
+func (m *Memory) refreshProfilePlayerLocked(profileID string) identity.Player {
+	profile := m.profilesByID[profileID]
+	link := m.profileLinks[profileID]
+	passport := m.passportsByID[link.PassportID]
+	player := identity.PlayerFromPassportProfile(passport, profile)
+	m.playersByID[player.ID] = player
+	return player
+}
+
+func (m *Memory) passportIDForCredentialLocked(id string) string {
+	if _, ok := m.credentialsByPlayer[id]; ok {
+		return id
+	}
+	if link, ok := m.profileLinks[id]; ok {
+		return link.PassportID
+	}
+	return id
+}
+
+func passportCredentialFromOffline(credential OfflineCredential) PassportCredential {
+	passportID := credential.PassportID
+	if passportID == "" {
+		passportID = credential.PlayerID
+	}
+	return PassportCredential{
+		PassportID:        passportID,
+		PasswordHash:      credential.PasswordHash,
+		PasswordUpdatedAt: credential.PasswordUpdatedAt,
+		FailedAttempts:    credential.FailedAttempts,
+		LockedUntil:       credential.LockedUntil,
+	}
 }
 
 func (m *Memory) SaveSession(ctx context.Context, session auth.Session) error {
@@ -334,6 +816,17 @@ func (m *Memory) AppendAuditEvent(ctx context.Context, event audit.Event) (audit
 	return event, nil
 }
 
+func (m *Memory) GetAuditEvent(ctx context.Context, id string) (audit.Event, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, event := range m.auditEvents {
+		if event.ID == id {
+			return event, nil
+		}
+	}
+	return audit.Event{}, fmt.Errorf("audit event not found: %w", ErrNotFound)
+}
+
 func (m *Memory) ListAuditEvents(ctx context.Context, limit int) []audit.Event {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -353,6 +846,91 @@ func (m *Memory) ListAuditEvents(ctx context.Context, limit int) []audit.Event {
 	return events
 }
 
+func (m *Memory) ListAuditEventsPage(ctx context.Context, query AuditEventQuery) ([]audit.Event, int, error) {
+	if query.Page <= 0 {
+		query.Page = 1
+	}
+	if query.PageSize <= 0 {
+		query.PageSize = 25
+	} else if query.PageSize > 100 {
+		query.PageSize = 100
+	}
+	related := map[string]struct{}{}
+	for _, id := range query.RelatedIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			related[id] = struct{}{}
+		}
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	filtered := make([]audit.Event, 0, len(m.auditEvents))
+	for i := len(m.auditEvents) - 1; i >= 0; i-- {
+		event := m.auditEvents[i]
+		if query.ActorType != "" && string(event.ActorType) != query.ActorType {
+			continue
+		}
+		if query.TargetType != "" && string(event.Target) != query.TargetType {
+			continue
+		}
+		if query.EventType != "" && !strings.Contains(strings.ToLower(event.Type), strings.ToLower(query.EventType)) {
+			continue
+		}
+		if query.Since != nil && event.Occurred.Before(*query.Since) {
+			continue
+		}
+		if query.Until != nil && event.Occurred.After(*query.Until) {
+			continue
+		}
+		if len(related) > 0 && !memoryAuditEventMatchesIDs(event, related) {
+			continue
+		}
+		filtered = append(filtered, event)
+	}
+	total := len(filtered)
+	start := (query.Page - 1) * query.PageSize
+	if start >= total {
+		return []audit.Event{}, total, nil
+	}
+	end := start + query.PageSize
+	if end > total {
+		end = total
+	}
+	return append([]audit.Event(nil), filtered[start:end]...), total, nil
+}
+
+func memoryAuditEventMatchesIDs(event audit.Event, ids map[string]struct{}) bool {
+	if _, ok := ids[event.ActorID]; ok {
+		return true
+	}
+	if _, ok := ids[event.TargetID]; ok {
+		return true
+	}
+	for _, value := range event.Details {
+		switch typed := value.(type) {
+		case string:
+			if _, ok := ids[typed]; ok {
+				return true
+			}
+		case []string:
+			for _, item := range typed {
+				if _, ok := ids[item]; ok {
+					return true
+				}
+			}
+		case []any:
+			for _, item := range typed {
+				if text, ok := item.(string); ok {
+					if _, exists := ids[text]; exists {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 func (m *Memory) ListMojangRoutes(ctx context.Context) []mojang.Route {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -361,6 +939,16 @@ func (m *Memory) ListMojangRoutes(ctx context.Context) []mojang.Route {
 		routes = append(routes, route)
 	}
 	return routes
+}
+
+func (m *Memory) GetMojangRoute(ctx context.Context, id string) (mojang.Route, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	route, ok := m.mojangRoutes[strings.TrimSpace(id)]
+	if !ok {
+		return mojang.Route{}, fmt.Errorf("mojang route not found: %w", ErrNotFound)
+	}
+	return route, nil
 }
 
 func (m *Memory) UpsertMojangRoute(ctx context.Context, route mojang.Route) (mojang.Route, error) {
@@ -377,6 +965,205 @@ func (m *Memory) DeleteMojangRoute(ctx context.Context, id string) error {
 		return fmt.Errorf("mojang route not found: %w", ErrNotFound)
 	}
 	delete(m.mojangRoutes, id)
+	return nil
+}
+
+func (m *Memory) ListProfilePresences(ctx context.Context, profileID string) []PlayerPresence {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []PlayerPresence{}
+	for _, presence := range m.presencesByID {
+		if presence.ProfileID == profileID && presence.EndedAt == nil {
+			out = append(out, presence)
+		}
+	}
+	return out
+}
+
+func (m *Memory) ListPassportPresences(ctx context.Context, passportID string) []PlayerPresence {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []PlayerPresence{}
+	for _, presence := range m.presencesByID {
+		if presence.PassportID == passportID && presence.EndedAt == nil {
+			out = append(out, presence)
+		}
+	}
+	return out
+}
+
+func (m *Memory) UpsertPresence(ctx context.Context, presence PlayerPresence) (PlayerPresence, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	if presence.ID == "" {
+		m.nextID++
+		presence.ID = "presence-" + strconv.Itoa(m.nextID)
+	}
+	if presence.ConnectedAt.IsZero() {
+		presence.ConnectedAt = now
+	}
+	if presence.LastSeenAt.IsZero() {
+		presence.LastSeenAt = now
+	}
+	for _, existing := range m.presencesByID {
+		if existing.EndedAt == nil && existing.ID != presence.ID && existing.ProfileID == presence.ProfileID && existing.ServerID == presence.ServerID {
+			return PlayerPresence{}, fmt.Errorf("profile already online on server")
+		}
+	}
+	m.presencesByID[presence.ID] = presence
+	return presence, nil
+}
+
+func (m *Memory) EndPresence(ctx context.Context, id string, reason string, endedAt time.Time) (PlayerPresence, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	presence, ok := m.presencesByID[id]
+	if !ok {
+		return PlayerPresence{}, fmt.Errorf("presence not found: %w", ErrNotFound)
+	}
+	when := endedAt.UTC()
+	presence.EndedAt = &when
+	presence.EndReason = strings.TrimSpace(reason)
+	m.presencesByID[id] = presence
+	return presence, nil
+}
+
+func (m *Memory) EndProfilePresences(ctx context.Context, profileID string, reason string, endedAt time.Time) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.endPresencesLocked(func(p PlayerPresence) bool { return p.ProfileID == profileID }, reason, endedAt)
+}
+
+func (m *Memory) EndPassportPresences(ctx context.Context, passportID string, reason string, endedAt time.Time) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.endPresencesLocked(func(p PlayerPresence) bool { return p.PassportID == passportID }, reason, endedAt)
+}
+
+func (m *Memory) endPresencesLocked(match func(PlayerPresence) bool, reason string, endedAt time.Time) int {
+	count := 0
+	when := endedAt.UTC()
+	for id, presence := range m.presencesByID {
+		if presence.EndedAt == nil && match(presence) {
+			presence.EndedAt = &when
+			presence.EndReason = strings.TrimSpace(reason)
+			m.presencesByID[id] = presence
+			count++
+		}
+	}
+	return count
+}
+
+func (m *Memory) ListBans(ctx context.Context, scope BanScope, targetID string, includeInactive bool, now time.Time) []PlayerBan {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []PlayerBan{}
+	for _, ban := range m.bansByID {
+		if ban.Scope != scope || ban.TargetID != targetID {
+			continue
+		}
+		if !includeInactive && !banActive(ban, now) {
+			continue
+		}
+		out = append(out, ban)
+	}
+	return out
+}
+
+func (m *Memory) CreateBan(ctx context.Context, ban PlayerBan) (PlayerBan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ban.ID == "" {
+		m.nextID++
+		ban.ID = "ban-" + strconv.Itoa(m.nextID)
+	}
+	if ban.CreatedAt.IsZero() {
+		ban.CreatedAt = time.Now().UTC()
+	}
+	m.bansByID[ban.ID] = ban
+	return ban, nil
+}
+
+func (m *Memory) GetBan(ctx context.Context, id string) (PlayerBan, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ban, ok := m.bansByID[strings.TrimSpace(id)]
+	if !ok {
+		return PlayerBan{}, fmt.Errorf("ban not found: %w", ErrNotFound)
+	}
+	return ban, nil
+}
+
+func (m *Memory) ExtendBan(ctx context.Context, id string, expiresAt time.Time) (PlayerBan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ban, ok := m.bansByID[strings.TrimSpace(id)]
+	if !ok {
+		return PlayerBan{}, fmt.Errorf("ban not found: %w", ErrNotFound)
+	}
+	when := expiresAt.UTC()
+	ban.ExpiresAt = &when
+	m.bansByID[id] = ban
+	return ban, nil
+}
+
+func (m *Memory) RevokeBan(ctx context.Context, id string, revokedBy string, reason string, now time.Time) (PlayerBan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ban, ok := m.bansByID[id]
+	if !ok {
+		return PlayerBan{}, fmt.Errorf("ban not found: %w", ErrNotFound)
+	}
+	when := now.UTC()
+	ban.RevokedAt = &when
+	ban.RevokedBy = strings.TrimSpace(revokedBy)
+	ban.RevokeReason = strings.TrimSpace(reason)
+	m.bansByID[id] = ban
+	return ban, nil
+}
+
+func (m *Memory) ActiveBanFor(ctx context.Context, passportID string, profileID string, now time.Time) (PlayerBan, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, ban := range m.bansByID {
+		if ban.Scope == BanScopePassport && ban.TargetID == passportID && banActive(ban, now) {
+			return ban, true
+		}
+	}
+	for _, ban := range m.bansByID {
+		if ban.Scope == BanScopeProfile && ban.TargetID == profileID && banActive(ban, now) {
+			return ban, true
+		}
+	}
+	return PlayerBan{}, false
+}
+
+func banActive(ban PlayerBan, now time.Time) bool {
+	if ban.RevokedAt != nil {
+		return false
+	}
+	return ban.ExpiresAt == nil || ban.ExpiresAt.After(now.UTC())
+}
+
+func (m *Memory) GetSystemSetting(ctx context.Context, key string) (map[string]any, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, ok := m.systemSettings[strings.TrimSpace(key)]
+	if !ok {
+		return nil, fmt.Errorf("system setting not found: %w", ErrNotFound)
+	}
+	return cloneMap(value), nil
+}
+
+func (m *Memory) SetSystemSetting(ctx context.Context, key string, value map[string]any) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("system setting key is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.systemSettings[key] = cloneMap(value)
 	return nil
 }
 

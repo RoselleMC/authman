@@ -19,6 +19,12 @@ export interface UseListStateOptions {
   urlSync?: boolean;
   /** Default pageSize, default hidden columns, default filter values. */
   defaults?: ListStateDefaults;
+  /**
+   * Optional persistence scope, normally the current admin user id.
+   * Layout preferences (page size + hidden columns) are saved per scope and
+   * URL prefix, while filters/page remain transient.
+   */
+  storageScope?: string;
 }
 
 export interface UseListStateReturn {
@@ -41,11 +47,16 @@ export interface UseListStateReturn {
  *   <AdvancedList state={players.state} onStateChange={players.setState} ... />
  */
 export function useListState(opts: UseListStateOptions = {}): UseListStateReturn {
-  const { urlPrefix = "", urlSync = true, defaults } = opts;
+  const { urlPrefix = "", urlSync = true, defaults, storageScope } = opts;
   const [params, setParams] = useSearchParams();
+  const storageKey = useMemo(() => makeStorageKey(storageScope, urlPrefix), [storageScope, urlPrefix]);
+  const effectiveDefaults = useMemo(
+    () => mergeStoredDefaults(defaults, readStoredLayout(storageKey)),
+    [defaults, storageKey],
+  );
 
   const initial = useMemo(
-    () => (urlSync ? readStateFromParams(params, urlPrefix, defaults) : makeDefaultState(defaults)),
+    () => (urlSync ? readStateFromParams(params, urlPrefix, effectiveDefaults) : makeDefaultState(effectiveDefaults)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
@@ -59,29 +70,32 @@ export function useListState(opts: UseListStateOptions = {}): UseListStateReturn
   // External URL changes (back button / shared link) update our local state.
   useEffect(() => {
     if (!urlSync) return;
-    const decoded = readStateFromParams(params, urlPrefix, defaults);
+    const decoded = readStateFromParams(params, urlPrefix, effectiveDefaults);
     const last = lastWriteRef.current;
     if (
       decoded.page !== last.page ||
       decoded.pageSize !== last.pageSize ||
       decoded.hidden.join(",") !== last.hidden.join(",") ||
+      decoded.sortKey !== last.sortKey ||
+      decoded.sortDir !== last.sortDir ||
       JSON.stringify(decoded.filters) !== JSON.stringify(last.filters)
     ) {
       lastWriteRef.current = decoded;
       setMemState(decoded);
     }
-  }, [params, urlPrefix, urlSync, defaults]);
+  }, [params, urlPrefix, urlSync, effectiveDefaults]);
 
   const setState = useCallback(
     (next: ListState) => {
       lastWriteRef.current = next;
       setMemState(next);
+      writeStoredLayout(storageKey, next);
       if (!urlSync) return;
       const nextParams = new URLSearchParams(params);
-      writeStateToParams(next, nextParams, urlPrefix, defaults);
+      writeStateToParams(next, nextParams, urlPrefix, effectiveDefaults);
       setParams(nextParams, { replace: true });
     },
-    [params, setParams, urlPrefix, urlSync, defaults],
+    [params, setParams, storageKey, urlPrefix, urlSync, effectiveDefaults],
   );
 
   const setPage = useCallback((page: number) => setState({ ...memState, page }), [memState, setState]);
@@ -107,7 +121,52 @@ export function useListState(opts: UseListStateOptions = {}): UseListStateReturn
     },
     [memState, setState],
   );
-  const reset = useCallback(() => setState(makeDefaultState(defaults)), [defaults, setState]);
+  const reset = useCallback(() => setState(makeDefaultState(effectiveDefaults)), [effectiveDefaults, setState]);
 
   return { state: memState, setState, setPage, setPageSize, setFilter, setHidden, toggleHidden, reset };
+}
+
+interface StoredLayout {
+  pageSize?: number;
+  hidden?: string[];
+}
+
+function makeStorageKey(scope: string | undefined, prefix: string) {
+  const cleanScope = scope?.trim();
+  if (!cleanScope || typeof window === "undefined") return "";
+  return `authman.list.layout.v1.${encodeURIComponent(cleanScope)}.${encodeURIComponent(prefix || "default")}`;
+}
+
+function readStoredLayout(key: string): StoredLayout | null {
+  if (!key || typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredLayout;
+    const pageSize = typeof parsed.pageSize === "number" ? parsed.pageSize : Number.NaN;
+    return {
+      pageSize: Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : undefined,
+      hidden: Array.isArray(parsed.hidden) ? parsed.hidden.filter((v): v is string => typeof v === "string") : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredLayout(key: string, state: ListState) {
+  if (!key || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify({ pageSize: state.pageSize, hidden: state.hidden }));
+  } catch {
+    // localStorage can be disabled; URL state still works.
+  }
+}
+
+function mergeStoredDefaults(defaults: ListStateDefaults | undefined, stored: StoredLayout | null): ListStateDefaults | undefined {
+  if (!stored) return defaults;
+  return {
+    ...defaults,
+    pageSize: stored.pageSize ?? defaults?.pageSize,
+    hidden: stored.hidden ?? defaults?.hidden,
+  };
 }

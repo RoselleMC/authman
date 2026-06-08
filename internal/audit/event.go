@@ -1,6 +1,9 @@
 package audit
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type ActorType string
 type TargetType string
@@ -23,24 +26,43 @@ const (
 )
 
 type Event struct {
-	ID        string
-	Occurred  time.Time
-	ActorType ActorType
-	ActorID   string
-	Target    TargetType
-	TargetID  string
-	Type      string
-	Details   map[string]any
+	ID            string
+	Occurred      time.Time
+	SchemaVersion int
+	Category      string
+	Outcome       string
+	Source        string
+	SessionID     string
+	CorrelationID string
+	ActorType     ActorType
+	ActorID       string
+	Target        TargetType
+	TargetID      string
+	Type          string
+	Details       map[string]any
 }
 
 func NewEvent(now time.Time, actorType ActorType, actorID string, target TargetType, targetID string, eventType string, details map[string]any) Event {
 	return Event{
-		Occurred:  now.UTC(),
-		ActorType: actorType,
-		ActorID:   actorID,
-		Target:    target,
-		TargetID:  targetID,
-		Type:      eventType,
-		Details:   details,
+		Occurred:      now.UTC(),
+		SchemaVersion: 1,
+		Category:      CategoryFromType(eventType),
+		ActorType:     actorType,
+		ActorID:       actorID,
+		Target:        target,
+		TargetID:      targetID,
+		Type:          eventType,
+		Details:       details,
 	}
+}
+
+func CategoryFromType(eventType string) string {
+	eventType = strings.TrimSpace(eventType)
+	if eventType == "" {
+		return "unknown"
+	}
+	if idx := strings.IndexByte(eventType, '.'); idx > 0 {
+		return eventType[:idx]
+	}
+	return eventType
 }

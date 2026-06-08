@@ -108,7 +108,7 @@
 
 /* ---------- Players table ---------- */
 .table-card { overflow: hidden; }
-.table-scroll { overflow-x: auto; }
+.table-scroll { overflow-x: auto; max-width: 100%; }
 .players-tbl tbody tr td:last-child { width: 30px; text-align: right; }
 .player-cell { display: flex; align-items: center; gap: 10px; }
 .pa-avatar { width: 30px; height: 30px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 13px; flex-shrink: 0; text-transform: uppercase; }
@@ -129,6 +129,9 @@
 /* ---------- Detail ---------- */
 .back-link { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; color: var(--color-text-muted); font-family: var(--font-sans); font-size: 13.5px; font-weight: 520; cursor: pointer; padding: 4px 0; margin-bottom: 16px; }
 .back-link:hover { color: var(--color-text); }
+.detail-toolbar { display: grid; grid-template-columns: 320px minmax(0, 1fr); align-items: flex-start; gap: 20px; margin-bottom: 16px; }
+.detail-toolbar .back-link { min-height: 38px; margin-bottom: 0; }
+.detail-toolbar .tabs { min-height: 38px; margin-bottom: 0; justify-self: start; }
 .detail-grid { display: grid; grid-template-columns: 320px 1fr; gap: 20px; align-items: start; }
 .detail-aside { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 0; }
 .id-summary { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-bottom: 16px; border-bottom: 1px solid var(--color-border); }
@@ -139,7 +142,7 @@
 .action-stack { display: flex; flex-direction: column; gap: 9px; }
 .action-note { display: flex; gap: 7px; align-items: flex-start; font-size: 12px; color: var(--color-text-subtle); line-height: 1.5; margin: 4px 0 0; }
 .action-note svg { margin-top: 1px; flex-shrink: 0; }
-.detail-body { min-width: 0; }
+.detail-body { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
 .tab-panel { padding-top: 18px; }
 
 /* confirm dialog target */
@@ -284,6 +287,8 @@
   .players-tbl { display: none; }
   .card-list { display: flex; }
   .detail-grid { grid-template-columns: 1fr; }
+  .detail-toolbar { grid-template-columns: 1fr; gap: 10px; }
+  .detail-toolbar .tabs { justify-self: stretch; }
   .detail-aside { position: static; }
   .pcard-grid { grid-template-columns: 1fr; }
   .admin-content { padding: 20px 16px; }

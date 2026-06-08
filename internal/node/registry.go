@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 type Node struct {
 	ID                  string
 	ServerID            string
+	Mode                string
 	Name                string
 	TokenHash           string
 	TokenFingerprint    string
@@ -19,11 +21,13 @@ type Node struct {
 	PluginVersion       string
 	VelocityVersion     string
 	Disabled            bool
+	RuntimeConfig       map[string]any
 	CreatedAt           time.Time
 	LastHeartbeatAt     *time.Time
 }
 
 type Registration struct {
+	Mode                string
 	Name                string
 	ServerID            string
 	InstanceFingerprint string
@@ -56,9 +60,11 @@ func (r *Registry) Create(ctx context.Context, name string, now time.Time) (Node
 	node := Node{
 		ID:               fmt.Sprintf("node-%d", r.nextID),
 		ServerID:         "default",
+		Mode:             "portal",
 		Name:             name,
 		TokenHash:        auth.HashToken("node", token),
 		TokenFingerprint: auth.TokenFingerprint(token),
+		RuntimeConfig:    map[string]any{},
 		CreatedAt:        now.UTC(),
 	}
 	r.nodes[node.ID] = node
@@ -90,6 +96,9 @@ func (r *Registry) Rotate(ctx context.Context, id string, now time.Time) (Node, 
 	if !ok {
 		return Node{}, "", fmt.Errorf("node not found")
 	}
+	if node.Disabled {
+		return Node{}, "", fmt.Errorf("node is revoked")
+	}
 	node.TokenHash = auth.HashToken("node", token)
 	node.TokenFingerprint = auth.TokenFingerprint(token)
 	r.nodes[id] = node
@@ -117,6 +126,7 @@ func (r *Registry) Register(ctx context.Context, registration Registration, now 
 	if name == "" {
 		name = "velocity-" + registration.InstanceFingerprint[:min(8, len(registration.InstanceFingerprint))]
 	}
+	mode := NormalizeMode(registration.Mode)
 	serverID := registration.ServerID
 	if serverID == "" {
 		serverID = "default"
@@ -126,7 +136,11 @@ func (r *Registry) Register(ctx context.Context, registration Registration, now 
 	now = now.UTC()
 	for id, node := range r.nodes {
 		if node.InstanceFingerprint == registration.InstanceFingerprint {
+			if node.Disabled {
+				return Node{}, fmt.Errorf("node is revoked")
+			}
 			node.Name = name
+			node.Mode = mode
 			node.ServerID = serverID
 			node.TokenFingerprint = registration.AccessFingerprint
 			node.PluginVersion = registration.PluginVersion
@@ -140,11 +154,13 @@ func (r *Registry) Register(ctx context.Context, registration Registration, now 
 	node := Node{
 		ID:                  fmt.Sprintf("node-%d", r.nextID),
 		ServerID:            serverID,
+		Mode:                mode,
 		Name:                name,
 		TokenFingerprint:    registration.AccessFingerprint,
 		InstanceFingerprint: registration.InstanceFingerprint,
 		PluginVersion:       registration.PluginVersion,
 		VelocityVersion:     registration.VelocityVersion,
+		RuntimeConfig:       map[string]any{},
 		CreatedAt:           now,
 		LastHeartbeatAt:     &now,
 	}
@@ -152,24 +168,78 @@ func (r *Registry) Register(ctx context.Context, registration Registration, now 
 	return node, nil
 }
 
+func NormalizeMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "gate":
+		return "gate"
+	default:
+		return "portal"
+	}
+}
+
 func (r *Registry) List(ctx context.Context) []Node {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	nodes := make([]Node, 0, len(r.nodes))
 	for _, node := range r.nodes {
-		nodes = append(nodes, node)
+		nodes = append(nodes, cloneNode(node))
 	}
 	return nodes
+}
+
+func (r *Registry) Get(ctx context.Context, id string) (Node, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	node, ok := r.nodes[id]
+	if !ok {
+		return Node{}, fmt.Errorf("node not found")
+	}
+	return cloneNode(node), nil
+}
+
+func (r *Registry) Update(ctx context.Context, id string, name string, runtime map[string]any) (Node, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	node, ok := r.nodes[id]
+	if !ok {
+		return Node{}, fmt.Errorf("node not found")
+	}
+	if strings.TrimSpace(name) != "" {
+		node.Name = strings.TrimSpace(name)
+	}
+	node.RuntimeConfig = CloneRuntimeConfig(runtime)
+	r.nodes[id] = node
+	return cloneNode(node), nil
 }
 
 func (r *Registry) Delete(ctx context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.nodes[id]; !ok {
+	node, ok := r.nodes[id]
+	if !ok {
 		return fmt.Errorf("node not found")
 	}
-	delete(r.nodes, id)
+	node.Disabled = true
+	node.TokenHash = ""
+	node.TokenFingerprint = ""
+	r.nodes[id] = node
 	return nil
+}
+
+func CloneRuntimeConfig(value map[string]any) map[string]any {
+	if len(value) == 0 {
+		return map[string]any{}
+	}
+	cloned := make(map[string]any, len(value))
+	for key, item := range value {
+		cloned[key] = item
+	}
+	return cloned
+}
+
+func cloneNode(n Node) Node {
+	n.RuntimeConfig = CloneRuntimeConfig(n.RuntimeConfig)
+	return n
 }
 
 func min(a, b int) int {

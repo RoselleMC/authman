@@ -99,22 +99,6 @@ class AuthSessionStore(private val config: AuthmanConfig) {
         }
     }
 
-    fun outgoingNameFor(protocolName: String): String? {
-        val resolved = offlineProfilesByProtocolName[protocolName] ?: return null
-        if (!shouldStripOfflinePrefix(resolved)) {
-            return null
-        }
-        return resolved.publicName
-    }
-
-    fun outgoingNameFor(playerId: UUID, protocolName: String): String? {
-        val resolved = offlineProfilesByUUID[playerId] ?: offlineProfilesByProtocolName[protocolName] ?: return null
-        if (!shouldStripOfflinePrefix(resolved)) {
-            return null
-        }
-        return resolved.publicName
-    }
-
     fun clear(playerId: UUID) {
         val session = sessions.remove(playerId)
         val resolved = session?.resolved ?: offlineProfilesByUUID[playerId]
@@ -124,13 +108,5 @@ class AuthSessionStore(private val config: AuthmanConfig) {
         }
         authenticatedPlayers.remove(playerId)
         pendingServers.remove(playerId)
-    }
-
-    private fun shouldStripOfflinePrefix(resolved: ResolvedPlayer): Boolean {
-        val strip = config.stripOfflinePrefix
-        if (!strip.enabled) {
-            return false
-        }
-        return resolved.stripOfflinePrefix || strip.stripWhenPremiumNameExists
     }
 }

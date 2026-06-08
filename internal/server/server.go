@@ -36,6 +36,8 @@ type nodeStore interface {
 	Rotate(ctx context.Context, id string, now time.Time) (node.Node, string, error)
 	Heartbeat(ctx context.Context, token string, now time.Time) (node.Node, error)
 	Register(ctx context.Context, registration node.Registration, now time.Time) (node.Node, error)
+	Get(ctx context.Context, id string) (node.Node, error)
+	Update(ctx context.Context, id string, name string, runtime map[string]any) (node.Node, error)
 	Delete(ctx context.Context, id string) error
 	List(ctx context.Context) []node.Node
 }
@@ -50,6 +52,7 @@ type Server struct {
 	passwordParams auth.Argon2idParams
 	mojangVerifier *mojang.SessionVerifier
 	webAuthn       *webauthn.WebAuthn
+	ipGeo          *ipGeoResolver
 }
 
 func New(options Options) *Server {
@@ -66,6 +69,7 @@ func New(options Options) *Server {
 		extensions:     options.Extensions,
 		passwordParams: options.PasswordParams,
 		mojangVerifier: newMojangVerifier(options.Config),
+		ipGeo:          newIPGeoResolver(),
 	}
 	s.webAuthn = newWebAuthn(options.Config, logger)
 	if s.store == nil {
@@ -78,6 +82,7 @@ func New(options Options) *Server {
 		s.extensions = extensions.DefaultRegistry()
 	}
 	s.reloadMojangRoutes(context.Background())
+	s.reloadIPGeoSettings(context.Background())
 	s.routes()
 	return s
 }
@@ -125,6 +130,25 @@ func newMojangVerifier(cfg config.Config) *mojang.SessionVerifier {
 }
 
 func (s *Server) configuredMojangRoutes(ctx context.Context) []mojang.Route {
+	settings := s.mojangRuntimeSettings(ctx)
+	routes := s.allMojangRoutes(ctx)
+	if len(settings.EnabledRouteIDs) == 0 {
+		return routes
+	}
+	enabled := make(map[string]struct{}, len(settings.EnabledRouteIDs))
+	for _, id := range settings.EnabledRouteIDs {
+		enabled[id] = struct{}{}
+	}
+	filtered := make([]mojang.Route, 0, len(routes))
+	for _, route := range routes {
+		if _, ok := enabled[route.ID]; ok {
+			filtered = append(filtered, route)
+		}
+	}
+	return filtered
+}
+
+func (s *Server) allMojangRoutes(ctx context.Context) []mojang.Route {
 	routes := append([]mojang.Route(nil), s.cfg.MojangRoutes...)
 	custom := s.store.ListMojangRoutes(ctx)
 	seen := make(map[string]int, len(routes)+len(custom))
@@ -144,10 +168,22 @@ func (s *Server) configuredMojangRoutes(ctx context.Context) []mojang.Route {
 
 func (s *Server) reloadMojangRoutes(ctx context.Context) {
 	routes := s.configuredMojangRoutes(ctx)
+	settings := s.mojangRuntimeSettings(ctx)
 	if s.mojangVerifier == nil {
 		s.mojangVerifier = newMojangVerifier(s.cfg)
 	}
-	s.mojangVerifier.SetRoutes(routes, s.cfg.MojangCooldown)
+	s.mojangVerifier.Timeout = time.Duration(settings.RequestTimeoutSeconds) * time.Second
+	s.mojangVerifier.Cache = mojang.NewProfileCache(time.Duration(settings.CacheFreshSeconds)*time.Second, time.Duration(settings.CacheStaleSeconds)*time.Second)
+	s.mojangVerifier.SetRoutes(routes, time.Duration(settings.FailureCooldownSeconds)*time.Second)
+}
+
+func (s *Server) reloadIPGeoSettings(ctx context.Context) {
+	if s.ipGeo == nil {
+		s.ipGeo = newIPGeoResolver()
+	}
+	settings := s.ipGeoSettings(ctx)
+	routes := routesByIDs(s.allMojangRoutes(ctx), settings.EnabledRouteIDs)
+	s.ipGeo.configure(routes, time.Duration(settings.CacheTTLSeconds)*time.Second, time.Duration(settings.RequestTimeoutSeconds)*time.Second)
 }
 
 func (s *Server) Handler() http.Handler {
@@ -168,6 +204,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/portal/session/login", s.handlePortalLogin)
 	s.mux.HandleFunc("POST /api/portal/session/login-with-link", s.handlePortalLinkLogin)
 	s.mux.HandleFunc("GET /api/portal/session/me", s.handlePortalMe)
+	s.mux.HandleFunc("POST /api/portal/session/select-profile", s.handlePortalSelectProfile)
 	s.mux.HandleFunc("POST /api/portal/session/logout", s.handlePortalLogout)
 	s.mux.HandleFunc("POST /api/portal/security/password", s.handlePortalChangePassword)
 	s.mux.HandleFunc("POST /api/portal/offline/password/change", s.handlePortalChangePassword)
@@ -185,6 +222,22 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/admin/session/me", s.handleAdminMe)
 	s.mux.HandleFunc("POST /api/admin/session/logout", s.handleAdminLogout)
 	s.mux.HandleFunc("GET /api/admin/overview", s.handleAdminOverview)
+	s.mux.HandleFunc("GET /api/admin/passports", s.handleAdminPassports)
+	s.mux.HandleFunc("GET /api/admin/passports/{id}", s.handleAdminPassportDetail)
+	s.mux.HandleFunc("PATCH /api/admin/passports/{id}", s.handleAdminUpdatePassport)
+	s.mux.HandleFunc("POST /api/admin/passports/{id}/bans", s.handleAdminCreatePassportBan)
+	s.mux.HandleFunc("POST /api/admin/passports/{id}/kick", s.handleAdminKickPassport)
+	s.mux.HandleFunc("GET /api/admin/profiles", s.handleAdminProfiles)
+	s.mux.HandleFunc("POST /api/admin/profiles", s.handleAdminCreateProfile)
+	s.mux.HandleFunc("GET /api/admin/profiles/{id}", s.handleAdminProfileDetail)
+	s.mux.HandleFunc("PATCH /api/admin/profiles/{id}", s.handleAdminUpdateProfile)
+	s.mux.HandleFunc("POST /api/admin/profiles/{id}/bind", s.handleAdminBindProfile)
+	s.mux.HandleFunc("POST /api/admin/profiles/{id}/unbind", s.handleAdminUnbindProfile)
+	s.mux.HandleFunc("POST /api/admin/profiles/{id}/bans", s.handleAdminCreateProfileBan)
+	s.mux.HandleFunc("POST /api/admin/profiles/{id}/kick", s.handleAdminKickProfile)
+	s.mux.HandleFunc("DELETE /api/admin/bans/{id}", s.handleAdminRevokeBan)
+	s.mux.HandleFunc("POST /api/admin/bans/{id}/extend", s.handleAdminExtendBan)
+	s.mux.HandleFunc("POST /api/admin/presences/{id}/kick", s.handleAdminKickPresence)
 	s.mux.HandleFunc("GET /api/admin/players", s.handleAdminPlayers)
 	s.mux.HandleFunc("GET /api/admin/players/{id}", s.handleAdminPlayerDetail)
 	s.mux.HandleFunc("PATCH /api/admin/players/{id}", s.handleAdminUpdatePlayer)
@@ -196,19 +249,24 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/admin/nodes/{id}/rotate", s.handleAdminRotateNode)
 	s.mux.HandleFunc("POST /api/admin/velocity/nodes", s.handleAdminCreateNode)
 	s.mux.HandleFunc("GET /api/admin/velocity/nodes", s.handleAdminListNodes)
+	s.mux.HandleFunc("GET /api/admin/velocity/nodes/{id}", s.handleAdminGetNode)
+	s.mux.HandleFunc("PUT /api/admin/velocity/nodes/{id}", s.handleAdminUpdateNode)
 	s.mux.HandleFunc("POST /api/admin/velocity/nodes/{id}/rotate", s.handleAdminRotateNode)
 	s.mux.HandleFunc("POST /api/admin/velocity/nodes/{id}/disable", s.handleAdminDisableNode)
 	s.mux.HandleFunc("DELETE /api/admin/velocity/nodes/{id}", s.handleAdminDeleteNode)
+	s.mux.HandleFunc("GET /api/admin/portal-settings", s.handleAdminPortalSettings)
+	s.mux.HandleFunc("PUT /api/admin/portal-settings", s.handleAdminUpdatePortalSettings)
 	s.mux.HandleFunc("GET /api/admin/audit-events", s.handleAdminAuditEvents)
+	s.mux.HandleFunc("GET /api/admin/audit-events/{id}", s.handleAdminAuditEventDetail)
 	s.mux.HandleFunc("GET /api/admin/mojang/routes", s.handleAdminMojangRoutes)
 	s.mux.HandleFunc("POST /api/admin/mojang/routes", s.handleAdminCreateMojangRoute)
+	s.mux.HandleFunc("PUT /api/admin/mojang/routes/{id}", s.handleAdminUpdateMojangRoute)
 	s.mux.HandleFunc("DELETE /api/admin/mojang/routes/{id}", s.handleAdminDeleteMojangRoute)
 	s.mux.HandleFunc("GET /api/admin/mojang/upstream/status", s.handleAdminMojangRoutes)
-	s.mux.HandleFunc("GET /api/admin/downstream-servers", s.handleAdminDownstreamServers)
-	s.mux.HandleFunc("POST /api/admin/downstream-servers", s.handleAdminCreateDownstreamServer)
-	s.mux.HandleFunc("GET /api/admin/downstream-servers/{id}", s.handleAdminDownstreamServerDetail)
-	s.mux.HandleFunc("PUT /api/admin/downstream-servers/{id}", s.handleAdminUpdateDownstreamServer)
-	s.mux.HandleFunc("DELETE /api/admin/downstream-servers/{id}", s.handleAdminDeleteDownstreamServer)
+	s.mux.HandleFunc("GET /api/admin/settings/mojang", s.handleAdminMojangSettings)
+	s.mux.HandleFunc("PUT /api/admin/settings/mojang", s.handleAdminUpdateMojangSettings)
+	s.mux.HandleFunc("GET /api/admin/settings/ip-geo", s.handleAdminIPGeoSettings)
+	s.mux.HandleFunc("PUT /api/admin/settings/ip-geo", s.handleAdminUpdateIPGeoSettings)
 	s.mux.HandleFunc("GET /api/admin/extensions", s.handleAdminExtensions)
 	s.mux.HandleFunc("GET /api/admin/account", s.handleAdminAccount)
 	s.mux.HandleFunc("PUT /api/admin/account/profile", s.handleAdminAccountProfile)
@@ -236,6 +294,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/node/portal/targets/resolve", s.handleNodeResolvePortalTarget)
 	s.mux.HandleFunc("POST /api/node/portal/transfer-grants", s.handleNodeCreateTransferGrant)
 	s.mux.HandleFunc("POST /api/node/gate/transfer-grants/consume", s.handleNodeConsumeTransferGrant)
+	s.mux.HandleFunc("POST /api/node/presences/end", s.handleNodeEndPresence)
+	s.mux.HandleFunc("POST /api/node/bans/profile", s.handleNodeCreateProfileBan)
+	s.mux.HandleFunc("POST /api/node/bans/passport", s.handleNodeCreatePassportBan)
 	s.mux.HandleFunc("POST /api/node/players/extension-data", s.handleNodeUpsertExtensionData)
 	s.mux.HandleFunc("POST /api/node/portal-links", s.handleNodeCreatePortalLink)
 }
@@ -261,6 +322,9 @@ func playerData(player identity.Player) map[string]any {
 		"locked":              player.Locked,
 		"registration_server": player.RegistrationServer,
 		"last_seen_server":    player.LastSeenServer,
+		"last_seen_at":        player.LastSeenAt,
+		"last_seen_ip":        emptyStringNil(player.LastSeenIP),
+		"last_seen_geo":       ipGeoData(player.LastSeenGeo),
 	}
 }
 

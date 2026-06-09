@@ -108,7 +108,9 @@ export function ProfilesPage() {
       filter: { type: "text", placeholder: t("admin.profiles.searchPlaceholder") },
       render: (r) => (
         <div className="player-cell">
-          <span className="pa-avatar">{(r.protocol_name || "?")[0]}</span>
+          <span className={r.avatar_url ? "pa-avatar has-image" : "pa-avatar"}>
+            {r.avatar_url ? <img src={r.avatar_url} alt="" aria-hidden="true" /> : (r.protocol_name || "?")[0]}
+          </span>
           <span className="player-name">{r.protocol_name}</span>
         </div>
       ),

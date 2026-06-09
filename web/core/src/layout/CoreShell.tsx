@@ -16,8 +16,8 @@ const NAV: Array<{ to: string; key: string; icon: string; permission?: string }>
   { to: "/", key: "nav.admin.overview", icon: "gauge", permission: "admin.overview.read" },
   { to: "/passports", key: "nav.admin.passports", icon: "key", permission: "players.read" },
   { to: "/profiles", key: "nav.admin.profiles", icon: "users", permission: "players.read" },
-  { to: "/nodes", key: "nav.admin.nodes", icon: "server", permission: "nodes.read" },
-  { to: "/portal", key: "nav.admin.portal", icon: "layers", permission: "servers.read" },
+  { to: "/login-portals", key: "nav.admin.loginPortals", icon: "layers", permission: "nodes.read" },
+  { to: "/nodes", key: "nav.admin.nodes", icon: "server", permission: "servers.read" },
   { to: "/proxies", key: "nav.admin.proxies", icon: "activity", permission: "mojang.read" },
   { to: "/audit", key: "nav.admin.audit", icon: "list", permission: "audit.read" },
   { to: "/settings", key: "nav.admin.settings", icon: "settings", permission: "settings.read" },
@@ -27,6 +27,9 @@ function titleFor(pathname: string, t: (k: string) => string): string {
   if (pathname.startsWith("/passports/")) return t("admin.passports.identity");
   if (pathname.startsWith("/profiles/")) return t("admin.profiles.identity");
   if (pathname.startsWith("/audit/")) return t("admin.audit.detail");
+  if (pathname.startsWith("/login-portals")) return t("nav.admin.loginPortals");
+  if (pathname.startsWith("/nodes/")) return t("nav.admin.nodes");
+  if (pathname.startsWith("/servers/")) return t("nav.admin.nodes");
   for (const item of NAV) {
     if (item.to === "/" ? pathname === "/" : pathname.startsWith(item.to)) return t(item.key);
   }

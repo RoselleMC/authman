@@ -33,6 +33,7 @@ func passportRowData(passport identity.Passport, profiles []identity.Profile, pr
 		"uuid":                passport.UUID.String(),
 		"uuid_compact":        passport.UUID.Compact(),
 		"username":            passport.Username,
+		"avatar_url":          "/api/assets/passports/" + passport.ID + "/avatar.png",
 		"username_normalized": passport.UsernameNormalized,
 		"raw_offline_name":    passport.RawOfflineName,
 		"status":              passport.Status,
@@ -142,6 +143,7 @@ func profileSummaryData(profile identity.Profile, presences []store.PlayerPresen
 	return map[string]any{
 		"id":              profile.ID,
 		"uuid":            profile.UUID.String(),
+		"avatar_url":      "/api/assets/profiles/" + profile.ID + "/avatar.png",
 		"protocol_name":   profile.ProtocolName,
 		"normalized_name": profile.NormalizedName,
 		"display_name":    profile.DisplayName,

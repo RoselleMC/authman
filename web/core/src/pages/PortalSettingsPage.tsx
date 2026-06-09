@@ -25,7 +25,7 @@ const EMPTY: PortalSettings = {
   dialog_fallback_chat_enabled: true,
 };
 
-export function PortalSettingsPage() {
+export function PortalSettingsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { t, tError } = useI18n();
   const toast = useToast();
   const qc = useQueryClient();
@@ -54,23 +54,32 @@ export function PortalSettingsPage() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  return (
-    <PageShell>
-      <PageHeader
-        title={t("admin.portal.heading")}
-        desc={t("admin.portal.desc")}
-        action={(
-          <Button
-            variant="primary"
-            icon="save"
-            loading={save.isPending}
-            onClick={() => save.mutate(form)}
-            data-testid="portal-settings-save"
-          >
-            {t("common.save")}
-          </Button>
-        )}
-      />
+  const saveButton = (
+    <Button
+      variant="primary"
+      icon="save"
+      loading={save.isPending}
+      onClick={() => save.mutate(form)}
+      data-testid="portal-settings-save"
+    >
+      {t("common.save")}
+    </Button>
+  );
+
+  const content = (
+    <>
+      {embedded ? (
+        <div className="section-toolbar">
+          <span />
+          {saveButton}
+        </div>
+      ) : (
+        <PageHeader
+          title={t("admin.portal.heading")}
+          desc={t("admin.portal.desc")}
+          action={saveButton}
+        />
+      )}
       {q.error ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : null}
       <div className="settings-grid">
         <Card title={t("admin.portal.card.routing")}>
@@ -155,6 +164,8 @@ export function PortalSettingsPage() {
           </p>
         </Card>
       </div>
-    </PageShell>
+    </>
   );
+
+  return embedded ? content : <PageShell>{content}</PageShell>;
 }

@@ -7,6 +7,8 @@ import {
   Copyable,
   DefList,
   DefRow,
+  DetailActions,
+  DetailSummary,
   Dialog,
   Field,
   Icon,
@@ -20,12 +22,13 @@ import {
   useI18n,
   useToast,
 } from "@authman/shared";
-import { bindProfile, createProfileBan, extendBan, fetchPassports, fetchProfile, kickPresence, revokeBan, unbindProfile, updateProfileStatus, type PlayerBan, type ProfileRow } from "../api/admin";
+import { bindProfile, createProfileBan, deleteProfileSkin, extendBan, fetchPassports, fetchProfile, kickPresence, revokeBan, unbindProfile, updateProfileStatus, uploadProfileSkin, type PlayerBan, type ProfileRow } from "../api/admin";
 import { AuditEventList } from "../components/AuditEventList";
 import { ErrorBlock } from "../components/ErrorBlock";
+import { MinecraftSkinPreview } from "../components/MinecraftSkinPreview";
 
 type DialogState = null | "status" | "bind" | "unbind" | "ban" | "extendBan" | "revokeBan";
-type DetailTab = "overview" | "audit";
+type DetailTab = "overview" | "skin" | "audit";
 type DurationUnit = "s" | "min" | "h" | "d" | "w" | "m" | "y";
 
 const DEFAULT_BAN_VALUE = "1";
@@ -45,6 +48,10 @@ export function ProfileDetailPage() {
   const [banDurationValue, setBanDurationValue] = useState(DEFAULT_BAN_VALUE);
   const [banDurationUnit, setBanDurationUnit] = useState<DurationUnit>(DEFAULT_BAN_UNIT);
   const [revokeTarget, setRevokeTarget] = useState<PlayerBan | null>(null);
+  const [skinFile, setSkinFile] = useState<File | null>(null);
+  const [capeFile, setCapeFile] = useState<File | null>(null);
+  const [elytraFile, setElytraFile] = useState<File | null>(null);
+  const [skinModel, setSkinModel] = useState<"wide" | "slim">("wide");
   const q = useQuery({ queryKey: ["admin.profile", id], queryFn: () => fetchProfile(id), enabled: !!id });
   const passportsQ = useQuery({
     queryKey: ["admin.passports.bind-options"],
@@ -123,6 +130,30 @@ export function ProfileDetailPage() {
     },
     onError: () => toast.danger(t("common.unknown")),
   });
+  const skinMut = useMutation({
+    mutationFn: () => {
+      if (!skinFile) throw new Error("skin file missing");
+      return uploadProfileSkin(id, { skin: skinFile, cape: capeFile, elytra: elytraFile, model: skinModel });
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.skins.saved") });
+      setSkinFile(null);
+      setCapeFile(null);
+      setElytraFile(null);
+      void qc.invalidateQueries({ queryKey: ["admin.profile", id] });
+      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const skinDeleteMut = useMutation({
+    mutationFn: () => deleteProfileSkin(id),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.skins.resetDone") });
+      void qc.invalidateQueries({ queryKey: ["admin.profile", id] });
+      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
 
   if (q.isLoading) return <div className="page"><Card>{t("common.loading")}</Card></div>;
   if (q.error || !q.data) return <div className="page"><ErrorBlock error={q.error} onRetry={() => q.refetch()} /></div>;
@@ -146,43 +177,36 @@ export function ProfileDetailPage() {
           onChange={setTab}
           tabs={[
             { value: "overview", label: t("common.overview"), icon: "gauge" },
+            { value: "skin", label: t("admin.skins.heading"), icon: "user" },
             { value: "audit", label: t("admin.player.audit"), icon: "list" },
           ]}
         />
       </div>
       <div className="detail-grid">
         <div className="detail-aside">
-          <Card>
-            <div className="id-summary">
-              <span className="pa-avatar pa-lg">{(p.protocol_name || "?")[0]}</span>
-              <div className="id-name-row">
-                <h2 className="id-raw">{p.protocol_name}</h2>
-                <StatusBadge status={p.online ? "online" : "offline_status"} />
-              </div>
-              <div className="identity-meta-row">
-                <span className="muted-cell">{t("admin.profiles.profileIdentity")}</span>
-                <StatusBadge status={p.status} />
-              </div>
-            </div>
-          </Card>
-          <Card title={t("admin.player.actions")}>
-            <div className="action-stack">
-              {activeBan ? (
-                <>
-                  <Button variant="secondary" icon="unlock" block onClick={() => { setRevokeTarget(activeBan); setDialog("revokeBan"); }}>{t("admin.bans.unban")}</Button>
-                  <Button variant="danger-soft" icon="alert" block onClick={() => { setBanReason(""); resetDuration(setBanDurationValue, setBanDurationUnit); setDialog("extendBan"); }}>{t("admin.bans.append")}</Button>
-                </>
-              ) : (
-                <Button variant="danger-soft" icon="alert" block onClick={() => { setBanReason(""); resetDuration(setBanDurationValue, setBanDurationUnit); setDialog("ban"); }}>{t("admin.bans.banProfile")}</Button>
-              )}
-              <Button variant="secondary" icon={p.status === "locked" ? "unlock" : "lock"} block onClick={() => { setStatus(p.status === "locked" ? "active" : "locked"); setDialog("status"); }}>
-                {p.status === "locked" ? t("admin.player.unlock") : t("admin.player.lock")}
-              </Button>
-              <Button variant="secondary" icon="box" block onClick={() => { setStatus("archived"); setDialog("status"); }}>{t("admin.profiles.archive")}</Button>
-              <Button variant="secondary" icon="link" block onClick={() => { setPassportID(""); setDialog("bind"); }}>{t("admin.profiles.bind")}</Button>
-              {p.passport ? <Button variant="danger" icon="link" block onClick={() => setDialog("unbind")}>{t("admin.profiles.unbind")}</Button> : null}
-            </div>
-          </Card>
+          <DetailSummary
+            title={p.protocol_name}
+            avatarUrl={p.skin?.avatar_url ?? p.avatar_url}
+            icon="user"
+            titleMeta={<StatusBadge status={p.online ? "online" : "offline_status"} />}
+            meta={<><span className="muted-cell">{t("admin.profiles.profileIdentity")}</span><StatusBadge status={p.status} /></>}
+          />
+          <DetailActions title={t("admin.player.actions")}>
+            {activeBan ? (
+              <>
+                <Button variant="secondary" icon="unlock" block onClick={() => { setRevokeTarget(activeBan); setDialog("revokeBan"); }}>{t("admin.bans.unban")}</Button>
+                <Button variant="danger-soft" icon="alert" block onClick={() => { setBanReason(""); resetDuration(setBanDurationValue, setBanDurationUnit); setDialog("extendBan"); }}>{t("admin.bans.append")}</Button>
+              </>
+            ) : (
+              <Button variant="danger-soft" icon="alert" block onClick={() => { setBanReason(""); resetDuration(setBanDurationValue, setBanDurationUnit); setDialog("ban"); }}>{t("admin.bans.banProfile")}</Button>
+            )}
+            <Button variant="secondary" icon={p.status === "locked" ? "unlock" : "lock"} block onClick={() => { setStatus(p.status === "locked" ? "active" : "locked"); setDialog("status"); }}>
+              {p.status === "locked" ? t("admin.player.unlock") : t("admin.player.lock")}
+            </Button>
+            <Button variant="secondary" icon="box" block onClick={() => { setStatus("archived"); setDialog("status"); }}>{t("admin.profiles.archive")}</Button>
+            <Button variant="secondary" icon="link" block onClick={() => { setPassportID(""); setDialog("bind"); }}>{t("admin.profiles.bind")}</Button>
+            {p.passport ? <Button variant="danger" icon="link" block onClick={() => setDialog("unbind")}>{t("admin.profiles.unbind")}</Button> : null}
+          </DetailActions>
         </div>
         <div className="detail-body">
           {tab === "overview" ? (
@@ -267,6 +291,51 @@ export function ProfileDetailPage() {
                 )}
               </Card>
             </>
+          ) : tab === "skin" ? (
+            <div className="skin-detail-grid">
+              <Card title={t("admin.skins.preview")}>
+                <MinecraftSkinPreview
+                  skinUrl={p.skin.skin_url}
+                  capeUrl={p.skin.cape_url}
+                  elytraUrl={p.skin.elytra_url}
+                  model={p.skin.model}
+                  name={p.protocol_name}
+                />
+              </Card>
+              <Card title={t("admin.skins.state")}>
+                <DefList>
+                  <DefRow k={t("admin.skins.effectiveSource")}>{t(`admin.skins.source.${p.skin.effective_source}`)}</DefRow>
+                  <DefRow k={t("admin.skins.model")}>{t(`admin.skins.model.${p.skin.model === "slim" ? "slim" : "wide"}`)}</DefRow>
+                  <DefRow k={t("admin.skins.defaultVariant")}>{p.skin.default_variant} · {p.skin.default_model}</DefRow>
+                  <DefRow k={t("admin.skins.customSkin")}>{p.skin.has_custom_skin ? t("common.yes") : t("common.no")}</DefRow>
+                  <DefRow k={t("admin.skins.customCape")}>{p.skin.has_custom_cape ? t("common.yes") : t("common.no")}</DefRow>
+                  <DefRow k={t("admin.skins.customElytra")}>{p.skin.has_custom_elytra ? t("common.yes") : t("common.no")}</DefRow>
+                  <DefRow k={t("common.updated")}>{formatAbsTime(p.skin.updated_at)}</DefRow>
+                </DefList>
+              </Card>
+              <Card title={t("admin.skins.upload")}>
+                <div className="skin-upload-grid">
+                  <Field label={t("admin.skins.model")}>
+                    <Select<"wide" | "slim">
+                      value={skinModel}
+                      onChange={setSkinModel}
+                      options={[
+                        { value: "wide", label: t("admin.skins.model.wide") },
+                        { value: "slim", label: t("admin.skins.model.slim") },
+                      ]}
+                    />
+                  </Field>
+                  <SkinFilePicker id="profile-skin-file" label={t("admin.skins.file.skin")} file={skinFile} onChange={setSkinFile} required />
+                  <SkinFilePicker id="profile-cape-file" label={t("admin.skins.file.cape")} file={capeFile} onChange={setCapeFile} />
+                  <SkinFilePicker id="profile-elytra-file" label={t("admin.skins.file.elytra")} file={elytraFile} onChange={setElytraFile} />
+                </div>
+                <div className="skin-actions">
+                  <Button icon="check" loading={skinMut.isPending} disabled={!skinFile} onClick={() => skinMut.mutate()}>{t("admin.skins.saveCustom")}</Button>
+                  <Button variant="secondary" icon="refresh" loading={skinDeleteMut.isPending} disabled={!p.skin.has_custom_skin} onClick={() => skinDeleteMut.mutate()}>{t("admin.skins.reset")}</Button>
+                </div>
+                <p className="muted-cell">{t("admin.skins.uploadHint")}</p>
+              </Card>
+            </div>
           ) : (
             <Card noBody className="table-card" title={t("admin.player.audit")}>
               <AuditEventList baseFilters={{ related_id: relatedAuditIDs }} filterable={false} testId="profile-audit" urlPrefix="profileAudit" />
@@ -366,6 +435,44 @@ function banTimeText(ban: PlayerBan, t: (key: string, fallback?: string) => stri
   if (ban.revoked_at) return t("admin.bans.revokedAt").replace("{time}", formatAbsTime(ban.revoked_at));
   if (ban.expires_at) return t("admin.bans.expiresAt").replace("{time}", formatAbsTime(ban.expires_at));
   return t("admin.bans.permanent");
+}
+
+function SkinFilePicker({
+  id,
+  label,
+  file,
+  onChange,
+  required,
+}: {
+  id: string;
+  label: string;
+  file: File | null;
+  onChange: (file: File | null) => void;
+  required?: boolean;
+}) {
+  return (
+    <Field label={label}>
+      <div className="skin-file-picker">
+        <input
+          id={id}
+          className="skin-file-picker__input"
+          type="file"
+          accept="image/png"
+          onChange={(event) => onChange(event.currentTarget.files?.[0] ?? null)}
+          required={required}
+        />
+        <label className="skin-file-picker__button" htmlFor={id}>
+          <Icon name="plus" size={14} />
+          {file ? file.name : label}
+        </label>
+        {file ? (
+          <button type="button" className="skin-file-picker__clear" onClick={() => onChange(null)} aria-label="Clear">
+            <Icon name="close" size={13} />
+          </button>
+        ) : null}
+      </div>
+    </Field>
+  );
 }
 
 function DurationField({

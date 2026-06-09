@@ -114,7 +114,14 @@ func normalizeDownstreamServer(server DownstreamServer) DownstreamServer {
 		server.PortalConfig["motd"] = stringFromAny(server.PortalTheme["portal_message"], "Welcome to Authman")
 	}
 	if _, ok := server.PortalConfig["gate_enabled"]; !ok {
-		server.PortalConfig["gate_enabled"] = true
+		if _, ok := server.PortalConfig["grant_required"]; ok {
+			server.PortalConfig["gate_enabled"] = boolFromAny(server.PortalConfig["grant_required"], true)
+		} else {
+			server.PortalConfig["gate_enabled"] = true
+		}
+	}
+	if _, ok := server.PortalConfig["grant_required"]; !ok {
+		server.PortalConfig["grant_required"] = boolFromAny(server.PortalConfig["gate_enabled"], true)
 	}
 	if _, ok := server.PortalConfig["grant_ttl_seconds"]; !ok {
 		server.PortalConfig["grant_ttl_seconds"] = DefaultTransferGrantTTLSeconds
@@ -124,6 +131,9 @@ func normalizeDownstreamServer(server DownstreamServer) DownstreamServer {
 	}
 	if _, ok := server.PortalConfig["portal_hosts"]; !ok {
 		server.PortalConfig["portal_hosts"] = []string{}
+	}
+	if _, ok := server.PortalConfig["limbo_blueprint_id"]; !ok {
+		server.PortalConfig["limbo_blueprint_id"] = ""
 	}
 	if server.ExtensionProviders == nil {
 		server.ExtensionProviders = []string{}
@@ -170,7 +180,7 @@ func DownstreamTargetFromServer(server DownstreamServer) DownstreamTarget {
 		TransferHost:         transferHost,
 		TransferPort:         transferPort,
 		MOTD:                 motd,
-		GateEnabled:          boolFromAny(server.PortalConfig["gate_enabled"], true),
+		GateEnabled:          boolFromAny(server.PortalConfig["grant_required"], boolFromAny(server.PortalConfig["gate_enabled"], true)),
 		GrantTTLSeconds:      ttl,
 		AllowedPortalSources: stringSliceFromAny(server.PortalConfig["allowed_portal_sources"]),
 		RegistrationOpen:     server.RegistrationOpen,
@@ -189,12 +199,20 @@ func DownstreamTargetData(target DownstreamTarget) map[string]any {
 		"transfer_host":          target.TransferHost,
 		"transfer_port":          target.TransferPort,
 		"motd":                   target.MOTD,
+		"grant_required":         target.GateEnabled,
 		"gate_enabled":           target.GateEnabled,
 		"grant_ttl_seconds":      target.GrantTTLSeconds,
 		"allowed_portal_sources": target.AllowedPortalSources,
 		"registration_open":      target.RegistrationOpen,
 		"extension_providers":    target.ExtensionProviders,
 	}
+}
+
+func cloneLimboBlueprint(blueprint LimboBlueprint) LimboBlueprint {
+	blueprint.Schematic = append([]byte(nil), blueprint.Schematic...)
+	blueprint.Preview = cloneMap(blueprint.Preview)
+	blueprint.Config = cloneMap(blueprint.Config)
+	return blueprint
 }
 
 func cloneDownstreamServer(server DownstreamServer) DownstreamServer {

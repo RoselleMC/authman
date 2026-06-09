@@ -4,14 +4,22 @@ go 1.25.0
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
+	go.minekube.com/common v0.3.0
 	golang.org/x/crypto v0.52.0
 	golang.org/x/net v0.54.0
 )
 
 require (
+	github.com/Tnze/go-mc v1.20.2 // indirect
+	github.com/francoispqt/gojay v1.2.13 // indirect
+	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
+)
+
+require (
+	github.com/RoselleMC/limbgo v0.0.0
 	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
-	github.com/go-webauthn/webauthn v0.17.4 // indirect
+	github.com/go-webauthn/webauthn v0.17.4
 	github.com/go-webauthn/x v0.2.6 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
@@ -26,3 +34,5 @@ require (
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 )
+
+replace github.com/RoselleMC/limbgo => ../limbgo

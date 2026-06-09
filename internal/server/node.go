@@ -15,10 +15,12 @@ import (
 	"github.com/RoselleMC/authman/internal/identity"
 	"github.com/RoselleMC/authman/internal/node"
 	"github.com/RoselleMC/authman/internal/store"
+	"github.com/RoselleMC/authman/internal/yggdrasil"
 )
 
 type createNodeRequest struct {
 	Name string `json:"name"`
+	Kind string `json:"kind"`
 }
 
 type updateNodeRequest struct {
@@ -28,7 +30,9 @@ type updateNodeRequest struct {
 
 type nodeHeartbeatRequest struct {
 	Name                string `json:"name"`
+	ServerID            string `json:"server_id"`
 	Mode                string `json:"mode"`
+	Kind                string `json:"kind"`
 	InstanceFingerprint string `json:"instance_fingerprint"`
 	PluginVersion       string `json:"plugin_version"`
 	VelocityVersion     string `json:"velocity_version"`
@@ -49,19 +53,25 @@ func (s *Server) handleAdminCreateNode(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, err)
 		return
 	}
-	node, token, err := s.nodes.Create(r.Context(), req.Name, time.Now())
+	s.createAdminNode(w, r, session.SubjectID, req)
+}
+
+func (s *Server) createAdminNode(w http.ResponseWriter, r *http.Request, adminID string, req createNodeRequest) {
+	nodeKind := node.NormalizeKind(req.Kind)
+	created, token, err := s.nodes.CreateKind(r.Context(), req.Name, nodeKind, time.Now())
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "node.create_failed", err.Error()))
 		return
 	}
-	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetNode, node.ID, "node.create", map[string]any{
-		"name": node.Name,
+	s.audit(r, audit.ActorAdmin, adminID, audit.TargetNode, created.ID, "node.create", map[string]any{
+		"name": created.Name,
+		"kind": node.NormalizeKind(created.Mode),
 	})
 	api.WriteJSON(w, http.StatusCreated, map[string]any{
-		"node":              s.nodeData(r.Context(), node),
+		"node":              s.nodeData(r.Context(), created),
 		"token":             token,
 		"token_once":        token,
-		"token_fingerprint": node.TokenFingerprint,
+		"token_fingerprint": created.TokenFingerprint,
 	}, nil)
 }
 
@@ -70,12 +80,61 @@ func (s *Server) handleAdminListNodes(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, err)
 		return
 	}
+	s.writeAdminNodes(w, r, "")
+}
+
+func (s *Server) handleAdminCreateLimboPortalNode(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminCreateNodeWithKind(w, r, "limbo_portal")
+}
+
+func (s *Server) handleAdminCreateDownstreamNode(w http.ResponseWriter, r *http.Request) {
+	s.handleAdminCreateNodeWithKind(w, r, "downstream_velocity")
+}
+
+func (s *Server) handleAdminListLimboPortalNodes(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireAdmin(r, false); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	s.writeAdminNodes(w, r, "limbo_portal")
+}
+
+func (s *Server) handleAdminListDownstreamNodes(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireAdmin(r, false); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	s.writeAdminNodes(w, r, "downstream_velocity")
+}
+
+func (s *Server) writeAdminNodes(w http.ResponseWriter, r *http.Request, kind string) {
 	nodes := s.nodes.List(r.Context())
 	data := make([]map[string]any, 0, len(nodes))
-	for _, node := range nodes {
-		data = append(data, s.nodeData(r.Context(), node))
+	kind = strings.TrimSpace(kind)
+	for _, n := range nodes {
+		if kind != "" && node.NormalizeKind(n.Mode) != kind {
+			continue
+		}
+		data = append(data, s.nodeData(r.Context(), n))
 	}
 	api.WriteJSON(w, http.StatusOK, data, map[string]any{"count": len(data)})
+}
+
+func (s *Server) handleAdminCreateNodeWithKind(w http.ResponseWriter, r *http.Request, kind string) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	var req createNodeRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	if strings.TrimSpace(req.Kind) == "" {
+		req.Kind = kind
+	}
+	s.createAdminNode(w, r, session.SubjectID, req)
 }
 
 func (s *Server) handleAdminGetNode(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +169,7 @@ func (s *Server) handleAdminUpdateNode(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetNode, n.ID, "node.update", map[string]any{
 		"name": n.Name,
-		"mode": node.NormalizeMode(n.Mode),
+		"kind": node.NormalizeKind(n.Mode),
 	})
 	api.WriteJSON(w, http.StatusOK, s.nodeData(r.Context(), n), nil)
 }
@@ -188,7 +247,9 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		}
 		node, err := s.nodes.Register(r.Context(), node.Registration{
 			Name:                req.Name,
+			ServerID:            req.ServerID,
 			Mode:                req.Mode,
+			Kind:                req.Kind,
 			InstanceFingerprint: req.InstanceFingerprint,
 			AccessFingerprint:   auth.TokenFingerprint(token),
 			PluginVersion:       req.PluginVersion,
@@ -233,7 +294,26 @@ func (s *Server) handleNodeAckActions(w http.ResponseWriter, r *http.Request) {
 }
 
 type resolvePlayerRequest struct {
-	Username string `json:"username"`
+	Username          string                       `json:"username"`
+	LoginMode         string                       `json:"login_mode"`
+	AuthSource        string                       `json:"auth_source"`
+	Verified          bool                         `json:"verified"`
+	VerifiedUUID      string                       `json:"verified_uuid"`
+	ProfileProperties []nodeProfilePropertyRequest `json:"profile_properties"`
+}
+
+type nodeProfilePropertyRequest struct {
+	Name      string `json:"name"`
+	Value     string `json:"value"`
+	Signature string `json:"signature"`
+}
+
+type verifyLimboSessionRequest struct {
+	Username        string `json:"username"`
+	ServerID        string `json:"server_id"`
+	RemoteIP        string `json:"remote_ip"`
+	ProtocolVersion int    `json:"protocol_version"`
+	RequestedHost   string `json:"requested_host"`
 }
 
 type resolvePortalTargetRequest struct {
@@ -301,6 +381,75 @@ func (s *Server) requireNode(r *http.Request) (node.Node, *api.Error) {
 	return n, nil
 }
 
+func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Request) {
+	n, nodeErr := s.requireNode(r)
+	if nodeErr != nil {
+		api.WriteError(w, nodeErr)
+		return
+	}
+	if !node.IsLimboPortal(n.Mode) {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "node.kind_forbidden", "only limbo portal nodes can verify premium sessions"))
+		return
+	}
+	var req verifyLimboSessionRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	if strings.TrimSpace(req.Username) == "" || strings.TrimSpace(req.ServerID) == "" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "session.proof_required", "username and server_id are required"))
+		return
+	}
+	if s.mojangVerifier == nil {
+		api.WriteError(w, api.NewError(http.StatusServiceUnavailable, "mojang.verifier_unavailable", "Mojang verifier is not configured"))
+		return
+	}
+	profile, err := s.mojangVerifier.HasJoined(r.Context(), yggdrasil.HasJoinedRequest{
+		Username: strings.TrimSpace(req.Username),
+		ServerID: strings.TrimSpace(req.ServerID),
+		IP:       strings.TrimSpace(req.RemoteIP),
+	})
+	if err != nil {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "limbo.session.verify_failure", map[string]any{
+			"username":        req.Username,
+			"server_id":       req.ServerID,
+			"remote_ip":       req.RemoteIP,
+			"requested_host":  req.RequestedHost,
+			"protocol":        req.ProtocolVersion,
+			"reason":          err.Error(),
+			"verification_by": "mojang",
+		})
+		api.WriteError(w, api.NewError(http.StatusUnauthorized, "session.verify_failed", err.Error()))
+		return
+	}
+	pp, ok := s.persistPremiumProfile(r.Context(), profile)
+	if !ok {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "session.persist_failed", "failed to persist premium profile"))
+		return
+	}
+	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, pp.Profile.ID, "limbo.session.verify_success", map[string]any{
+		"passport_id":     pp.Passport.ID,
+		"profile_id":      pp.Profile.ID,
+		"username":        profile.Name,
+		"uuid":            pp.Passport.UUID.String(),
+		"requested_host":  req.RequestedHost,
+		"protocol":        req.ProtocolVersion,
+		"verification_by": "mojang",
+	})
+	player := identity.PlayerFromPassportProfileLink(pp)
+	player.ProfileProperties = s.effectiveProfilePropertiesByID(r.Context(), player.ID)
+	api.WriteJSON(w, http.StatusOK, map[string]any{
+		"profile": map[string]any{
+			"uuid":       pp.Passport.UUID.String(),
+			"name":       profile.Name,
+			"properties": profilePropertiesData(player.ProfileProperties),
+			"source":     "mojang",
+			"verified":   true,
+		},
+		"player": playerData(player),
+	}, nil)
+}
+
 func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request) {
 	n, nodeErr := s.requireNode(r)
 	if nodeErr != nil {
@@ -312,19 +461,17 @@ func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request)
 		api.WriteError(w, err)
 		return
 	}
-	player, err := s.store.GetOfflinePlayer(r.Context(), normalizeNodeUsername(req.Username))
-	if err != nil {
-		player, err = s.store.GetPlayerByProtocolName(r.Context(), strings.TrimSpace(req.Username))
-		if err != nil {
-			s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "player.resolve_failure", map[string]any{
-				"reason":   "not_found",
-				"username": strings.TrimSpace(req.Username),
-				"mode":     node.NormalizeMode(n.Mode),
-			})
-			api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
-			return
-		}
+	player, apiErr := s.resolveNodePlayer(r.Context(), n, req)
+	if apiErr != nil {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "player.resolve_failure", map[string]any{
+			"reason":   apiErr.Message,
+			"username": strings.TrimSpace(req.Username),
+			"kind":     node.NormalizeKind(n.Mode),
+		})
+		api.WriteError(w, apiErr)
+		return
 	}
+	player.ProfileProperties = s.effectiveProfilePropertiesByID(r.Context(), player.ID)
 	authRequired := player.Kind == identity.PlayerKindOffline && !player.Locked
 	authKind := "premium"
 	if player.Kind == identity.PlayerKindOffline {
@@ -339,7 +486,7 @@ func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request)
 		"auth_required":      authRequired,
 		"auth_kind":          authKind,
 		"auth_username":      authUsername,
-		"mode":               node.NormalizeMode(n.Mode),
+		"kind":               node.NormalizeKind(n.Mode),
 	}))
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"player": playerData(player),
@@ -350,6 +497,34 @@ func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request)
 			"username": authUsername,
 		},
 	}, nil)
+}
+
+func (s *Server) resolveNodePlayer(ctx context.Context, n node.Node, req resolvePlayerRequest) (identity.Player, *api.Error) {
+	if req.Verified {
+		if !node.IsLimboPortal(n.Mode) {
+			return identity.Player{}, api.NewError(http.StatusForbidden, "node.kind_forbidden", "only limbo portal nodes can submit verified session profiles")
+		}
+		if strings.TrimSpace(req.LoginMode) != "online" {
+			return identity.Player{}, api.NewError(http.StatusBadRequest, "session.login_mode_invalid", "verified session must use online login mode")
+		}
+		uuid, err := identity.ParseUUID(req.VerifiedUUID)
+		if err != nil {
+			return identity.Player{}, api.NewError(http.StatusBadRequest, "session.uuid_invalid", "verified UUID is invalid")
+		}
+		pp, err := s.store.UpsertPremiumPassportProfile(ctx, strings.TrimSpace(req.Username), uuid, nodeProfileProperties(req.ProfileProperties))
+		if err != nil {
+			return identity.Player{}, api.NewError(http.StatusInternalServerError, "premium.upsert_failed", "failed to persist premium profile")
+		}
+		return identity.PlayerFromPassportProfileLink(pp), nil
+	}
+	player, err := s.store.GetOfflinePlayer(ctx, normalizeNodeUsername(req.Username))
+	if err != nil {
+		player, err = s.store.GetPlayerByProtocolName(ctx, strings.TrimSpace(req.Username))
+		if err != nil {
+			return identity.Player{}, api.NewError(http.StatusNotFound, "player.not_found", "player not found")
+		}
+	}
+	return player, nil
 }
 
 type authenticatePlayerRequest struct {
@@ -444,10 +619,18 @@ func (s *Server) handleNodeResolvePortalTarget(w http.ResponseWriter, r *http.Re
 		"target_host":    target.TransferHost,
 		"target_port":    target.TransferPort,
 	})
-	api.WriteJSON(w, http.StatusOK, map[string]any{
+	data := map[string]any{
 		"server": downstreamServerData(server),
 		"target": store.DownstreamTargetData(target),
-	}, nil)
+	}
+	if blueprintID := strings.TrimSpace(stringFromAnyServer(server.PortalConfig["limbo_blueprint_id"])); blueprintID != "" {
+		if blueprint, err := s.store.GetLimboBlueprint(r.Context(), blueprintID); err == nil {
+			data["limbo_blueprint"] = limboBlueprintData(blueprint, false)
+		} else {
+			data["limbo_blueprint"] = map[string]any{"id": blueprintID, "missing": true}
+		}
+	}
+	api.WriteJSON(w, http.StatusOK, data, nil)
 }
 
 func (s *Server) handleNodeCreateTransferGrant(w http.ResponseWriter, r *http.Request) {
@@ -1207,7 +1390,8 @@ func (s *Server) nodeData(ctx context.Context, n node.Node) map[string]any {
 	return map[string]any{
 		"id":                   n.ID,
 		"name":                 n.Name,
-		"mode":                 node.NormalizeMode(n.Mode),
+		"kind":                 node.NormalizeKind(n.Mode),
+		"mode":                 node.NormalizeKind(n.Mode),
 		"server_id":            serverID,
 		"server_label":         serverLabel,
 		"runtime_config":       s.nodeRuntimeConfig(ctx, n),
@@ -1224,7 +1408,7 @@ func (s *Server) nodeData(ctx context.Context, n node.Node) map[string]any {
 }
 
 func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]any {
-	mode := node.NormalizeMode(n.Mode)
+	kind := node.NormalizeKind(n.Mode)
 	base := map[string]any{
 		"node_name":                    strings.TrimSpace(n.Name),
 		"server_id":                    strings.TrimSpace(n.ServerID),
@@ -1239,7 +1423,10 @@ func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]
 		"dialog_fallback_chat_enabled": true,
 		"email_verification_mode":      "disabled",
 	}
-	if mode == "gate" {
+	if kind == "downstream_velocity" {
+		base["downstream_initial_server"] = ""
+		base["downstream_holding_server"] = ""
+		base["downstream_validation_timeout_seconds"] = 10
 		base["gate_initial_server"] = ""
 		base["gate_holding_server"] = ""
 		base["gate_validation_timeout_seconds"] = 10
@@ -1249,10 +1436,22 @@ func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]
 			"heartbeat_interval_seconds",
 			"resolve_raw_offline_names",
 			"transfer_cookie_key",
+			"downstream_initial_server",
+			"downstream_holding_server",
+			"downstream_validation_timeout_seconds",
 			"gate_initial_server",
 			"gate_holding_server",
 			"gate_validation_timeout_seconds",
 		})
+		if base["downstream_initial_server"] == "" {
+			base["downstream_initial_server"] = base["gate_initial_server"]
+		}
+		if base["downstream_holding_server"] == "" {
+			base["downstream_holding_server"] = base["gate_holding_server"]
+		}
+		if base["downstream_validation_timeout_seconds"] == 10 {
+			base["downstream_validation_timeout_seconds"] = base["gate_validation_timeout_seconds"]
+		}
 		return base
 	}
 	base["portal_requested_server_id"] = ""
@@ -1260,6 +1459,9 @@ func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]
 	base["portal_source_id"] = strings.TrimSpace(n.Name)
 	base["default_target_server"] = ""
 	base["holding_server"] = ""
+	base["limbo_world"] = ""
+	base["limbo_blueprint_id"] = ""
+	base["limbo_spawn"] = map[string]any{"x": 0, "y": 65, "z": 0, "yaw": 0, "pitch": 0}
 	if server, err := s.store.GetDownstreamServer(ctx, "default"); err == nil {
 		target := store.DownstreamTargetFromServer(server)
 		base["portal_requested_server_id"] = target.ServerID
@@ -1267,6 +1469,7 @@ func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]
 		base["holding_server"] = stringFromAnyServer(server.PortalConfig["holding_server"])
 		base["portal_requested_host"] = stringFromAnyServer(server.PortalConfig["requested_host"])
 		base["portal_source_id"] = stringFromAnyServer(server.PortalConfig["source_id"])
+		base["limbo_blueprint_id"] = strings.TrimSpace(stringFromAnyServer(server.PortalConfig["limbo_blueprint_id"]))
 		if cookieKey := stringFromAnyServer(server.PortalConfig["transfer_cookie_key"]); cookieKey != "" {
 			base["transfer_cookie_key"] = cookieKey
 		}

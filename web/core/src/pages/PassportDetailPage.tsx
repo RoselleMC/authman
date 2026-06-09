@@ -8,6 +8,8 @@ import {
   Copyable,
   DefList,
   DefRow,
+  DetailActions,
+  DetailSummary,
   Dialog,
   Field,
   Icon,
@@ -222,39 +224,31 @@ export function PassportDetailPage() {
       </div>
       <div className="detail-grid">
         <div className="detail-aside">
-          <Card>
-            <div className="id-summary">
-              <span className="pa-avatar pa-lg">{(p.username || "?")[0]}</span>
-              <div className="id-name-row">
-                <h2 className="id-raw">{p.username}</h2>
-                <StatusBadge status={p.online ? "online" : "offline_status"} />
-              </div>
-              <div className="identity-meta-row">
-                <TypeBadge kind={p.kind} />
-                <StatusBadge status={p.status} />
-              </div>
-            </div>
-          </Card>
-          <Card title={t("admin.player.actions")}>
-            <div className="action-stack">
-              {activeBan ? (
-                <>
-                  <Button variant="secondary" icon="unlock" block onClick={() => { setRevokeTarget(activeBan); setDialog("revokeBan"); }}>{t("admin.bans.unban")}</Button>
-                  <Button variant="danger-soft" icon="alert" block onClick={() => { setBanReason(""); resetDuration(setBanDurationValue, setBanDurationUnit); setDialog("extendBan"); }}>{t("admin.bans.append")}</Button>
-                </>
-              ) : (
-                <Button variant="danger-soft" icon="alert" block onClick={() => { setBanReason(""); resetDuration(setBanDurationValue, setBanDurationUnit); setDialog("ban"); }}>{t("admin.bans.banPassport")}</Button>
-              )}
-              {p.status !== "locked" ? (
-                <Button variant="secondary" icon="lock" block onClick={() => { setNextStatus("locked"); setDialog("status"); }}>{t("admin.player.lock")}</Button>
-              ) : (
-                <Button variant="secondary" icon="unlock" block onClick={() => { setNextStatus("active"); setDialog("status"); }}>{t("admin.player.unlock")}</Button>
-              )}
-              {p.status !== "deleted" ? (
-                <Button variant="danger" icon="trash" block onClick={() => { setNextStatus("deleted"); setDialog("status"); }}>{t("common.delete")}</Button>
-              ) : null}
-            </div>
-          </Card>
+          <DetailSummary
+            title={p.username}
+            avatarUrl={p.avatar_url}
+            avatarText={(p.username || "?")[0]}
+            titleMeta={<StatusBadge status={p.online ? "online" : "offline_status"} />}
+            meta={<><TypeBadge kind={p.kind} /><StatusBadge status={p.status} /></>}
+          />
+          <DetailActions title={t("admin.player.actions")}>
+            {activeBan ? (
+              <>
+                <Button variant="secondary" icon="unlock" block onClick={() => { setRevokeTarget(activeBan); setDialog("revokeBan"); }}>{t("admin.bans.unban")}</Button>
+                <Button variant="danger-soft" icon="alert" block onClick={() => { setBanReason(""); resetDuration(setBanDurationValue, setBanDurationUnit); setDialog("extendBan"); }}>{t("admin.bans.append")}</Button>
+              </>
+            ) : (
+              <Button variant="danger-soft" icon="alert" block onClick={() => { setBanReason(""); resetDuration(setBanDurationValue, setBanDurationUnit); setDialog("ban"); }}>{t("admin.bans.banPassport")}</Button>
+            )}
+            {p.status !== "locked" ? (
+              <Button variant="secondary" icon="lock" block onClick={() => { setNextStatus("locked"); setDialog("status"); }}>{t("admin.player.lock")}</Button>
+            ) : (
+              <Button variant="secondary" icon="unlock" block onClick={() => { setNextStatus("active"); setDialog("status"); }}>{t("admin.player.unlock")}</Button>
+            )}
+            {p.status !== "deleted" ? (
+              <Button variant="danger" icon="trash" block onClick={() => { setNextStatus("deleted"); setDialog("status"); }}>{t("common.delete")}</Button>
+            ) : null}
+          </DetailActions>
         </div>
         <div className="detail-body">
           {tab === "overview" ? (

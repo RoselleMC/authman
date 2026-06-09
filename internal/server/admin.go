@@ -536,7 +536,9 @@ func (s *Server) handleAdminProfileDetail(w http.ResponseWriter, r *http.Request
 	eventData := s.relatedAuditSummaries(r.Context(), 20, relatedIDs...)
 	presences := s.store.ListProfilePresences(r.Context(), profile.ID)
 	bans := s.store.ListBans(r.Context(), store.BanScopeProfile, profile.ID, true, time.Now())
-	api.WriteJSON(w, http.StatusOK, profileDetailData(profile, passport, presences, bans, eventData), nil)
+	data := profileDetailData(profile, passport, presences, bans, eventData)
+	data["skin"] = s.profileSkinData(r.Context(), profile, passport)
+	api.WriteJSON(w, http.StatusOK, data, nil)
 }
 
 func (s *Server) handleAdminUpdateProfile(w http.ResponseWriter, r *http.Request) {

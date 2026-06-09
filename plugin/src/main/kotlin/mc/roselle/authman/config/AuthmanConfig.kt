@@ -12,9 +12,6 @@ import java.util.concurrent.atomic.AtomicReference
 
 @ConfigSerializable
 class AuthmanConfig {
-    @field:Setting("mode")
-    var mode: String = "portal"
-
     @field:Setting("api")
     var api: ApiConfig = ApiConfig()
 
@@ -30,9 +27,6 @@ class AuthmanConfig {
     val nodeName: String
         get() = runtime.nodeName
 
-    val runtimeMode: RuntimeMode
-        get() = RuntimeMode.from(mode)
-
     val serverId: String
         get() = runtime.serverId
 
@@ -42,74 +36,33 @@ class AuthmanConfig {
     val requestTimeout: Duration
         get() = Duration.ofSeconds(api.requestTimeoutSeconds.coerceAtLeast(1))
 
-    val resolveRawOfflineNames: Boolean
-        get() = runtime.resolveRawOfflineNames
-
-    val maxPasswordAttempts: Int
-        get() = runtime.maxPasswordAttempts.coerceAtLeast(1)
-
-    val chatCooldownMillis: Long
-        get() = runtime.chatCooldownMillis.coerceAtLeast(0)
-
-    val authTimeoutSeconds: Long
-        get() = runtime.authTimeoutSeconds.coerceAtLeast(10)
-
-    val completionDelaySeconds: Long
-        get() = runtime.completionDelaySeconds.coerceAtLeast(0)
-
-    val defaultTargetServer: String
-        get() = runtime.defaultTargetServer
-
-    val holdingServer: String
-        get() = runtime.holdingServer
-
     val transferCookieKey: String
         get() = runtime.transferCookieKey
 
-    val gateInitialServer: String
-        get() = runtime.gateInitialServer
+    val downstreamInitialServer: String
+        get() = runtime.downstreamInitialServer
 
-    val gateHoldingServer: String
-        get() = runtime.gateHoldingServer
+    val downstreamHoldingServer: String
+        get() = runtime.downstreamHoldingServer
 
-    val gateValidationTimeoutSeconds: Long
-        get() = runtime.gateValidationTimeoutSeconds.coerceAtLeast(3)
-
-    val portalRequestedServerId: String
-        get() = runtime.portalRequestedServerId
-
-    val portalRequestedHost: String
-        get() = runtime.portalRequestedHost
-
-    val portalSourceId: String
-        get() = runtime.portalSourceId.ifEmpty { nodeName }
-
-    val dialogEnabled: Boolean
-        get() = runtime.dialogEnabled
-
-    val dialogFallbackChatEnabled: Boolean
-        get() = runtime.dialogFallbackChatEnabled
-
-    val emailVerificationMode: String
-        get() = runtime.emailVerificationMode
+    val downstreamValidationTimeoutSeconds: Long
+        get() = runtime.downstreamValidationTimeoutSeconds.coerceAtLeast(3)
 
     val runtime: RuntimeConfig
         get() = runtimeRef.get()
 
     fun applyRuntime(next: RuntimeConfig) {
-        runtimeRef.set(next.normalized(runtimeMode))
+        runtimeRef.set(next.normalized())
     }
 
     fun replaceLocal(next: AuthmanConfig) {
-        mode = next.mode
         api = next.api
-        runtimeRef.set(next.runtime.normalized(runtimeMode))
+        runtimeRef.set(next.runtime.normalized())
     }
 
     fun validate(configPath: Path) {
         require(api.baseUrl.isNotBlank()) { "api.base-url must be configured in $configPath" }
         require(nodeToken.isNotEmpty()) { "api.node-token must be configured in $configPath" }
-        RuntimeMode.from(mode)
     }
 
     companion object {
@@ -141,21 +94,6 @@ class AuthmanConfig {
     }
 }
 
-enum class RuntimeMode {
-    PORTAL,
-    GATE;
-
-    companion object {
-        fun from(value: String): RuntimeMode {
-            return when (value.trim().lowercase()) {
-                "", "portal" -> PORTAL
-                "gate" -> GATE
-                else -> error("mode must be portal or gate")
-            }
-        }
-    }
-}
-
 @ConfigSerializable
 class ApiConfig {
     @field:Setting("base-url")
@@ -172,37 +110,18 @@ data class RuntimeConfig(
     val nodeName: String = "velocity",
     val serverId: String = "default",
     val heartbeatIntervalSeconds: Long = 60,
-    val resolveRawOfflineNames: Boolean = true,
-    val maxPasswordAttempts: Int = 3,
-    val chatCooldownMillis: Long = 150,
-    val authTimeoutSeconds: Long = 90,
-    val completionDelaySeconds: Long = 3,
-    val defaultTargetServer: String = "",
-    val holdingServer: String = "",
     val transferCookieKey: String = "authman:transfer_grant",
-    val gateInitialServer: String = "",
-    val gateHoldingServer: String = "",
-    val gateValidationTimeoutSeconds: Long = 10,
-    val portalRequestedServerId: String = "",
-    val portalRequestedHost: String = "",
-    val portalSourceId: String = "",
-    val dialogEnabled: Boolean = true,
-    val dialogFallbackChatEnabled: Boolean = true,
-    val emailVerificationMode: String = "disabled",
+    val downstreamInitialServer: String = "",
+    val downstreamHoldingServer: String = "",
+    val downstreamValidationTimeoutSeconds: Long = 10,
 ) {
-    fun normalized(mode: RuntimeMode): RuntimeConfig {
-        val fallbackName = if (mode == RuntimeMode.PORTAL) "portal" else "gate"
+    fun normalized(): RuntimeConfig {
         return copy(
-            nodeName = nodeName.trim().ifEmpty { fallbackName },
+            nodeName = nodeName.trim().ifEmpty { "downstream" },
             serverId = serverId.trim().ifEmpty { "default" },
             heartbeatIntervalSeconds = heartbeatIntervalSeconds.coerceAtLeast(10),
-            maxPasswordAttempts = maxPasswordAttempts.coerceAtLeast(1),
-            chatCooldownMillis = chatCooldownMillis.coerceAtLeast(0),
-            authTimeoutSeconds = authTimeoutSeconds.coerceAtLeast(10),
-            completionDelaySeconds = completionDelaySeconds.coerceAtLeast(0),
             transferCookieKey = transferCookieKey.trim().ifEmpty { "authman:transfer_grant" },
-            gateValidationTimeoutSeconds = gateValidationTimeoutSeconds.coerceAtLeast(3),
-            emailVerificationMode = emailVerificationMode.trim().lowercase().ifEmpty { "disabled" },
+            downstreamValidationTimeoutSeconds = downstreamValidationTimeoutSeconds.coerceAtLeast(3),
         )
     }
 }

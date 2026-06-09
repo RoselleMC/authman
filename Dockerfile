@@ -1,9 +1,10 @@
 FROM golang:1.25-alpine AS build
-WORKDIR /src
-COPY go.mod ./
-COPY go.sum ./
-COPY cmd ./cmd
-COPY internal ./internal
+WORKDIR /src/authman
+COPY limbgo /src/limbgo
+COPY authman/go.mod ./
+COPY authman/go.sum ./
+COPY authman/cmd ./cmd
+COPY authman/internal ./internal
 RUN go build -trimpath -ldflags="-s -w" -o /out/authman ./cmd/authman
 
 FROM alpine:3.21

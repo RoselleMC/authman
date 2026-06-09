@@ -31,9 +31,9 @@ interface FormState {
   heartbeat_interval_seconds: string;
   resolve_raw_offline_names: boolean;
   transfer_cookie_key: string;
-  gate_initial_server: string;
-  gate_holding_server: string;
-  gate_validation_timeout_seconds: string;
+  downstream_initial_server: string;
+  downstream_holding_server: string;
+  downstream_validation_timeout_seconds: string;
 }
 
 function text(value: unknown, fallback = ""): string {
@@ -56,9 +56,9 @@ function toForm(n: SafeVelocityNode): FormState {
     heartbeat_interval_seconds: numberText(cfg.heartbeat_interval_seconds, 60),
     resolve_raw_offline_names: boolValue(cfg.resolve_raw_offline_names, true),
     transfer_cookie_key: text(cfg.transfer_cookie_key, "authman:transfer_grant"),
-    gate_initial_server: text(cfg.gate_initial_server),
-    gate_holding_server: text(cfg.gate_holding_server),
-    gate_validation_timeout_seconds: numberText(cfg.gate_validation_timeout_seconds, 10),
+    downstream_initial_server: text(cfg.downstream_initial_server, text(cfg.gate_initial_server)),
+    downstream_holding_server: text(cfg.downstream_holding_server, text(cfg.gate_holding_server)),
+    downstream_validation_timeout_seconds: numberText(cfg.downstream_validation_timeout_seconds, 10),
   };
 }
 
@@ -69,9 +69,9 @@ function toRuntime(form: FormState): Record<string, unknown> {
     heartbeat_interval_seconds: Number(form.heartbeat_interval_seconds) || 60,
     resolve_raw_offline_names: form.resolve_raw_offline_names,
     transfer_cookie_key: form.transfer_cookie_key.trim() || "authman:transfer_grant",
-    gate_initial_server: form.gate_initial_server.trim(),
-    gate_holding_server: form.gate_holding_server.trim(),
-    gate_validation_timeout_seconds: Number(form.gate_validation_timeout_seconds) || 10,
+    downstream_initial_server: form.downstream_initial_server.trim(),
+    downstream_holding_server: form.downstream_holding_server.trim(),
+    downstream_validation_timeout_seconds: Number(form.downstream_validation_timeout_seconds) || 10,
   };
 }
 
@@ -107,7 +107,7 @@ export function NodeDetailPage() {
   }, [initial]);
 
   const save = useMutation({
-    mutationFn: (current: FormState) => updateNode(id, { name: current.name.trim(), runtime_config: node?.mode === "gate" ? toRuntime(current) : {} }),
+    mutationFn: (current: FormState) => updateNode(id, { name: current.name.trim(), runtime_config: node?.kind === "downstream_velocity" ? toRuntime(current) : {} }),
     onSuccess: (saved) => {
       const next = coerceVelocityNode(saved);
       setForm(toForm(next));
@@ -135,6 +135,8 @@ export function NodeDetailPage() {
 
   const dirty = !formEquals(form, initial);
   const cfg = node.runtime_config ?? {};
+  const backPath = node.kind === "limbo_portal" ? "/login-portals" : "/nodes";
+  const backLabel = node.kind === "limbo_portal" ? t("admin.loginPortals.heading") : t("admin.nodes.heading");
 
   function patch<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
@@ -142,13 +144,13 @@ export function NodeDetailPage() {
 
   return (
     <PageShell>
-      <BackLink onClick={() => navigate("/nodes")} testId="back-to-nodes">
-        {t("admin.nodes.heading")}
+      <BackLink onClick={() => navigate(backPath)} testId="back-to-nodes">
+        {backLabel}
       </BackLink>
       <PageHeader
-        eyebrow={<Badge tone={node.mode === "gate" ? "warning" : "info"} dot>{t(`admin.nodes.mode.${node.mode}`)}</Badge>}
+        eyebrow={<Badge tone={node.kind === "downstream_velocity" ? "warning" : "info"} dot>{t(`admin.nodes.mode.${node.kind}`)}</Badge>}
         title={node.name}
-        desc={node.mode === "gate" ? t("admin.nodes.detail.gateDesc") : t("admin.nodes.detail.portalDesc")}
+        desc={node.kind === "downstream_velocity" ? t("admin.nodes.detail.downstreamDesc") : t("admin.nodes.detail.limboDesc")}
         action={(
           <Button
             variant="primary"
@@ -170,7 +172,7 @@ export function NodeDetailPage() {
               <DefRow k={t("admin.nodes.col.status")}>
                 <Badge tone={statusTone(node.status)} dot>{t(`admin.nodes.status.${node.status}`, node.status)}</Badge>
               </DefRow>
-              <DefRow k={t("admin.nodes.col.mode")}>{t(`admin.nodes.mode.${node.mode}`)}</DefRow>
+              <DefRow k={t("admin.nodes.col.mode")}>{t(`admin.nodes.mode.${node.kind}`)}</DefRow>
               <DefRow k={t("admin.nodes.col.heartbeat")}>{formatRelativeTime(node.last_seen_at)}</DefRow>
               <DefRow k={t("admin.nodes.col.version")}>
                 <code className="mono">{node.plugin_version || "—"}{node.velocity_version ? ` / ${node.velocity_version}` : ""}</code>
@@ -194,23 +196,23 @@ export function NodeDetailPage() {
             </div>
           </Card>
 
-          {node.mode === "gate" ? (
-            <Card title={t("admin.nodes.detail.gateRuntime")}>
+          {node.kind === "downstream_velocity" ? (
+            <Card title={t("admin.nodes.detail.downstreamRuntime")}>
               <div className="settings-form-grid">
                 <Field label={t("admin.nodes.field.serverId")} hint={t("admin.nodes.field.serverId.hint")}>
                   <Input value={form.server_id} onChange={(e) => patch("server_id", e.target.value)} mono data-testid="node-gate-server-id" />
                 </Field>
                 <Field label={t("admin.nodes.detail.field.initial")} hint={t("admin.nodes.detail.field.initial.hint")}>
-                  <Input value={form.gate_initial_server} onChange={(e) => patch("gate_initial_server", e.target.value)} placeholder="survival" mono data-testid="node-gate-initial" />
+                  <Input value={form.downstream_initial_server} onChange={(e) => patch("downstream_initial_server", e.target.value)} placeholder="survival" mono data-testid="node-downstream-initial" />
                 </Field>
                 <Field label={t("admin.nodes.detail.field.holding")} hint={t("admin.nodes.detail.field.holding.hint")}>
-                  <Input value={form.gate_holding_server} onChange={(e) => patch("gate_holding_server", e.target.value)} placeholder="auth-hold" mono data-testid="node-gate-holding" />
+                  <Input value={form.downstream_holding_server} onChange={(e) => patch("downstream_holding_server", e.target.value)} placeholder="auth-hold" mono data-testid="node-downstream-holding" />
                 </Field>
                 <Field label={t("admin.nodes.detail.field.cookie")} hint={t("admin.nodes.detail.field.cookie.hint")}>
                   <Input value={form.transfer_cookie_key} onChange={(e) => patch("transfer_cookie_key", e.target.value)} mono data-testid="node-gate-cookie" />
                 </Field>
                 <Field label={t("admin.nodes.detail.field.timeout")} hint={t("admin.nodes.detail.field.timeout.hint")}>
-                  <Input type="number" min={3} value={form.gate_validation_timeout_seconds} onChange={(e) => patch("gate_validation_timeout_seconds", e.target.value)} data-testid="node-gate-timeout" />
+                  <Input type="number" min={3} value={form.downstream_validation_timeout_seconds} onChange={(e) => patch("downstream_validation_timeout_seconds", e.target.value)} data-testid="node-downstream-timeout" />
                 </Field>
                 <Field label={t("admin.nodes.detail.field.heartbeat")} hint={t("admin.nodes.detail.field.heartbeat.hint")}>
                   <Input type="number" min={10} value={form.heartbeat_interval_seconds} onChange={(e) => patch("heartbeat_interval_seconds", e.target.value)} data-testid="node-gate-heartbeat" />
@@ -230,13 +232,13 @@ export function NodeDetailPage() {
               </label>
             </Card>
           ) : (
-            <Card title={t("admin.nodes.detail.portalRuntime")}>
+            <Card title={t("admin.nodes.detail.limboRuntime")}>
               <p className="card-foot-note" style={{ marginTop: 0 }}>
                 <Icon name="info" size={13} /> {t("admin.nodes.detail.portalGlobal")}
               </p>
               <ConfigGrid testId="node-portal-runtime">
                 <ConfigRow k={t("admin.portal.field.defaultTarget")} v={text(cfg.default_target_server, "—")} mono />
-                <ConfigRow k={t("admin.portal.field.holding")} v={text(cfg.holding_server, "—")} mono />
+                <ConfigRow k={t("admin.portal.field.world")} v={text(cfg.limbo_world, "—")} mono />
                 <ConfigRow k={t("admin.portal.field.requestedHost")} v={text(cfg.portal_requested_host, "—")} mono />
                 <ConfigRow k={t("admin.portal.field.source")} v={text(cfg.portal_source_id, "—")} mono />
                 <ConfigRow k={t("admin.portal.field.cookie")} v={text(cfg.transfer_cookie_key, "authman:transfer_grant")} mono />

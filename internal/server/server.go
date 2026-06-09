@@ -32,6 +32,7 @@ type Options struct {
 
 type nodeStore interface {
 	Create(ctx context.Context, name string, now time.Time) (node.Node, string, error)
+	CreateKind(ctx context.Context, name string, kind string, now time.Time) (node.Node, string, error)
 	Authenticate(ctx context.Context, token string) (node.Node, error)
 	Rotate(ctx context.Context, id string, now time.Time) (node.Node, string, error)
 	Heartbeat(ctx context.Context, token string, now time.Time) (node.Node, error)
@@ -199,6 +200,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/portal/config", s.handlePortalConfig)
 	s.mux.HandleFunc("GET /api/portal/servers", s.handlePortalServers)
 	s.mux.HandleFunc("GET /api/portal/servers/{slug}/config", s.handlePortalServerConfig)
+	s.mux.HandleFunc("GET /api/assets/profiles/{id}/{asset}", s.handleProfileSkinAsset)
+	s.mux.HandleFunc("GET /api/assets/passports/{id}/avatar.png", s.handlePassportAvatarAsset)
+	s.mux.HandleFunc("GET /api/assets/default-skins/{model}/{name}", s.handleDefaultSkinAsset)
 	s.mux.HandleFunc("POST /api/portal/offline/register", s.handleOfflineRegister)
 	s.mux.HandleFunc("POST /api/portal/offline/check-name", s.handlePortalCheckName)
 	s.mux.HandleFunc("POST /api/portal/session/login", s.handlePortalLogin)
@@ -231,6 +235,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/admin/profiles", s.handleAdminCreateProfile)
 	s.mux.HandleFunc("GET /api/admin/profiles/{id}", s.handleAdminProfileDetail)
 	s.mux.HandleFunc("PATCH /api/admin/profiles/{id}", s.handleAdminUpdateProfile)
+	s.mux.HandleFunc("POST /api/admin/profiles/{id}/skin", s.handleAdminUploadProfileSkin)
+	s.mux.HandleFunc("DELETE /api/admin/profiles/{id}/skin", s.handleAdminDeleteProfileSkin)
 	s.mux.HandleFunc("POST /api/admin/profiles/{id}/bind", s.handleAdminBindProfile)
 	s.mux.HandleFunc("POST /api/admin/profiles/{id}/unbind", s.handleAdminUnbindProfile)
 	s.mux.HandleFunc("POST /api/admin/profiles/{id}/bans", s.handleAdminCreateProfileBan)
@@ -247,6 +253,18 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/admin/nodes", s.handleAdminCreateNode)
 	s.mux.HandleFunc("GET /api/admin/nodes", s.handleAdminListNodes)
 	s.mux.HandleFunc("POST /api/admin/nodes/{id}/rotate", s.handleAdminRotateNode)
+	s.mux.HandleFunc("POST /api/admin/login-portals", s.handleAdminCreateLimboPortalNode)
+	s.mux.HandleFunc("GET /api/admin/login-portals", s.handleAdminListLimboPortalNodes)
+	s.mux.HandleFunc("GET /api/admin/login-portals/{id}", s.handleAdminGetNode)
+	s.mux.HandleFunc("PUT /api/admin/login-portals/{id}", s.handleAdminUpdateNode)
+	s.mux.HandleFunc("POST /api/admin/login-portals/{id}/rotate", s.handleAdminRotateNode)
+	s.mux.HandleFunc("DELETE /api/admin/login-portals/{id}", s.handleAdminDeleteNode)
+	s.mux.HandleFunc("POST /api/admin/downstream/nodes", s.handleAdminCreateDownstreamNode)
+	s.mux.HandleFunc("GET /api/admin/downstream/nodes", s.handleAdminListDownstreamNodes)
+	s.mux.HandleFunc("GET /api/admin/downstream/nodes/{id}", s.handleAdminGetNode)
+	s.mux.HandleFunc("PUT /api/admin/downstream/nodes/{id}", s.handleAdminUpdateNode)
+	s.mux.HandleFunc("POST /api/admin/downstream/nodes/{id}/rotate", s.handleAdminRotateNode)
+	s.mux.HandleFunc("DELETE /api/admin/downstream/nodes/{id}", s.handleAdminDeleteNode)
 	s.mux.HandleFunc("POST /api/admin/velocity/nodes", s.handleAdminCreateNode)
 	s.mux.HandleFunc("GET /api/admin/velocity/nodes", s.handleAdminListNodes)
 	s.mux.HandleFunc("GET /api/admin/velocity/nodes/{id}", s.handleAdminGetNode)
@@ -254,6 +272,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/admin/velocity/nodes/{id}/rotate", s.handleAdminRotateNode)
 	s.mux.HandleFunc("POST /api/admin/velocity/nodes/{id}/disable", s.handleAdminDisableNode)
 	s.mux.HandleFunc("DELETE /api/admin/velocity/nodes/{id}", s.handleAdminDeleteNode)
+	s.mux.HandleFunc("GET /api/admin/downstream-servers", s.handleAdminDownstreamServers)
+	s.mux.HandleFunc("POST /api/admin/downstream-servers", s.handleAdminCreateDownstreamServer)
+	s.mux.HandleFunc("GET /api/admin/downstream-servers/{id}", s.handleAdminDownstreamServerDetail)
+	s.mux.HandleFunc("PUT /api/admin/downstream-servers/{id}", s.handleAdminUpdateDownstreamServer)
+	s.mux.HandleFunc("DELETE /api/admin/downstream-servers/{id}", s.handleAdminDeleteDownstreamServer)
+	s.mux.HandleFunc("GET /api/admin/limbo-blueprints", s.handleAdminLimboBlueprints)
+	s.mux.HandleFunc("POST /api/admin/limbo-blueprints/upload", s.handleAdminUploadLimboBlueprint)
+	s.mux.HandleFunc("GET /api/admin/limbo-blueprints/{id}", s.handleAdminLimboBlueprintDetail)
+	s.mux.HandleFunc("PUT /api/admin/limbo-blueprints/{id}", s.handleAdminUpdateLimboBlueprint)
+	s.mux.HandleFunc("DELETE /api/admin/limbo-blueprints/{id}", s.handleAdminDeleteLimboBlueprint)
 	s.mux.HandleFunc("GET /api/admin/portal-settings", s.handleAdminPortalSettings)
 	s.mux.HandleFunc("PUT /api/admin/portal-settings", s.handleAdminUpdatePortalSettings)
 	s.mux.HandleFunc("GET /api/admin/audit-events", s.handleAdminAuditEvents)
@@ -290,11 +318,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/admin/system/summary", s.handleAdminSystemSummary)
 	s.mux.HandleFunc("POST /api/node/heartbeat", s.handleNodeHeartbeat)
 	s.mux.HandleFunc("POST /api/node/actions/ack", s.handleNodeAckActions)
+	s.mux.HandleFunc("POST /api/node/limbo/sessions/verify", s.handleNodeVerifyLimboSession)
 	s.mux.HandleFunc("POST /api/node/players/resolve", s.handleNodeResolvePlayer)
 	s.mux.HandleFunc("POST /api/node/players/authenticate", s.handleNodeAuthenticatePlayer)
-	s.mux.HandleFunc("POST /api/node/portal/targets/resolve", s.handleNodeResolvePortalTarget)
-	s.mux.HandleFunc("POST /api/node/portal/transfer-grants", s.handleNodeCreateTransferGrant)
-	s.mux.HandleFunc("POST /api/node/gate/transfer-grants/consume", s.handleNodeConsumeTransferGrant)
+	s.mux.HandleFunc("POST /api/node/limbo/targets/resolve", s.handleNodeResolvePortalTarget)
+	s.mux.HandleFunc("GET /api/node/limbo/blueprints/{id}", s.handleNodeLimboBlueprint)
+	s.mux.HandleFunc("POST /api/node/limbo/transfer-grants", s.handleNodeCreateTransferGrant)
+	s.mux.HandleFunc("POST /api/node/downstream/transfer-grants/consume", s.handleNodeConsumeTransferGrant)
 	s.mux.HandleFunc("POST /api/node/presences/end", s.handleNodeEndPresence)
 	s.mux.HandleFunc("POST /api/node/bans/profile", s.handleNodeCreateProfileBan)
 	s.mux.HandleFunc("POST /api/node/bans/passport", s.handleNodeCreatePassportBan)
@@ -336,6 +366,22 @@ func profilePropertiesData(properties []identity.ProfileProperty) []map[string]a
 			"name":      property.Name,
 			"value":     property.Value,
 			"signature": property.Signature,
+		})
+	}
+	return out
+}
+
+func nodeProfileProperties(properties []nodeProfilePropertyRequest) []identity.ProfileProperty {
+	out := make([]identity.ProfileProperty, 0, len(properties))
+	for _, property := range properties {
+		name := strings.TrimSpace(property.Name)
+		if name == "" {
+			continue
+		}
+		out = append(out, identity.ProfileProperty{
+			Name:      name,
+			Value:     property.Value,
+			Signature: property.Signature,
 		})
 	}
 	return out

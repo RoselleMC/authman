@@ -1,0 +1,935 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/RoselleMC/limbgo"
+	"github.com/RoselleMC/limbgo/dialog"
+	"github.com/RoselleMC/limbgo/protocol/limbo"
+	"github.com/RoselleMC/limbgo/world/schematic"
+	"go.minekube.com/common/minecraft/component"
+)
+
+const version = "0.1.0-dev"
+
+type config struct {
+	Listen         string
+	CoreURL        string
+	NodeToken      string
+	NodeName       string
+	Schematic      string
+	WorldID        string
+	SourceID       string
+	DefaultHost    string
+	LoginMode      string
+	OnlineServerID string
+}
+
+type portal struct {
+	cfg           config
+	client        *coreClient
+	nodeID        string
+	locked        bool
+	runtime       map[string]any
+	logger        *slog.Logger
+	fallbackWorld limbgo.World
+	fallbackSpawn limbgo.SpawnTarget
+	worldsMu      sync.RWMutex
+	worlds        map[string]cachedWorld
+}
+
+type cachedWorld struct {
+	sha256 string
+	world  limbgo.World
+	spawn  limbgo.SpawnTarget
+}
+
+func main() {
+	var cfg config
+	flag.StringVar(&cfg.Listen, "listen", getenv("AUTHMAN_LIMBO_LISTEN", ":25565"), "listen address")
+	flag.StringVar(&cfg.CoreURL, "core-url", getenv("AUTHMAN_CORE_URL", "http://127.0.0.1:8080"), "Authman Core URL")
+	flag.StringVar(&cfg.NodeToken, "node-token", getenv("AUTHMAN_NODE_TOKEN", ""), "Authman node token")
+	flag.StringVar(&cfg.NodeName, "node-name", getenv("AUTHMAN_NODE_NAME", "limbo-portal"), "node display name")
+	flag.StringVar(&cfg.Schematic, "schematic", getenv("AUTHMAN_LIMBO_SCHEMATIC", ""), "optional limbo schematic file")
+	flag.StringVar(&cfg.WorldID, "world-id", getenv("AUTHMAN_LIMBO_WORLD_ID", "authman"), "limbo world id")
+	flag.StringVar(&cfg.SourceID, "source-id", getenv("AUTHMAN_LIMBO_SOURCE_ID", ""), "portal source id")
+	flag.StringVar(&cfg.DefaultHost, "default-host", getenv("AUTHMAN_LIMBO_DEFAULT_HOST", ""), "default requested host")
+	flag.StringVar(&cfg.LoginMode, "login-mode", getenv("AUTHMAN_LIMBO_LOGIN_MODE", "offline"), "limbo login mode: offline or online")
+	flag.StringVar(&cfg.OnlineServerID, "online-server-id", getenv("AUTHMAN_LIMBO_ONLINE_SERVER_ID", "authman-limbo"), "serverId challenge used for online-mode session verification")
+	flag.Parse()
+
+	if err := validateConfig(cfg); err != nil {
+		fatal(err)
+	}
+	logger := slog.Default()
+	world, spawn, err := loadWorld(cfg)
+	if err != nil {
+		fatal(err)
+	}
+	p := &portal{
+		cfg:           cfg,
+		client:        newCoreClient(cfg),
+		runtime:       map[string]any{},
+		logger:        logger,
+		fallbackWorld: world,
+		fallbackSpawn: spawn,
+		worlds:        map[string]cachedWorld{},
+	}
+	if err := p.heartbeat(context.Background()); err != nil {
+		logger.Warn("initial Authman heartbeat failed; portal starts locked", "err", err)
+		p.locked = true
+	}
+
+	motd, err := limbgo.ParseMiniMessage("<green>Authman</green> <gray>login portal</gray>")
+	if err != nil {
+		fatal(err)
+	}
+	router := limbo.Router{
+		MOTD:              motd,
+		VersionName:       "Authman Limbo",
+		MaxPlayers:        1000,
+		StatusProvider:    limbgo.StatusProviderFunc(p.status),
+		StatusRateLimiter: limbgo.NewRateLimiter(limbgo.RateLimitConfig{Requests: 60, Window: time.Second}),
+		LoginMode:         p.loginMode(),
+		SessionVerifier:   limbgo.SessionVerifierFunc(p.verifySession),
+		OnlineServerID:    cfg.OnlineServerID,
+	}
+	server, err := limbgo.NewServer(limbgo.Config{
+		Addr:           cfg.Listen,
+		ProtocolRouter: router,
+		JoinResolver:   limbgo.JoinResolverFunc(p.resolveJoin),
+		Events: limbgo.PlayerEventHandlerFuncs{
+			Join:        p.handleJoin,
+			Chat:        p.handleChat,
+			Command:     p.handleCommand,
+			DialogClick: p.handleDialogClick,
+		},
+		Logger: logger,
+	})
+	if err != nil {
+		fatal(err)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go p.heartbeatLoop(ctx)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServe(ctx)
+	}()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			fatal(err)
+		}
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			fatal(err)
+		}
+	}
+}
+
+func loadWorld(cfg config) (limbgo.World, limbgo.SpawnTarget, error) {
+	if strings.TrimSpace(cfg.Schematic) == "" {
+		world := limbgo.DefaultWorld(cfg.WorldID)
+		spawn := limbgo.DefaultSpawn(world.ID())
+		spawn.GameMode = limbgo.GameModeAdventure
+		return world, spawn, nil
+	}
+	world, err := schematic.LoadFile(cfg.Schematic, schematic.Options{WorldID: cfg.WorldID})
+	if err != nil {
+		return nil, limbgo.SpawnTarget{}, fmt.Errorf("load schematic: %w", err)
+	}
+	return world, limbgo.SpawnTarget{
+		World:    world.ID(),
+		Position: limbgo.Vec3{X: 0, Y: 65, Z: 0},
+		GameMode: limbgo.GameModeAdventure,
+	}, nil
+}
+
+func (p *portal) heartbeatLoop(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := p.heartbeat(ctx); err != nil {
+				p.logger.Warn("Authman heartbeat failed", "err", err)
+			}
+		}
+	}
+}
+
+func (p *portal) heartbeat(ctx context.Context) error {
+	res, err := p.client.heartbeat(ctx)
+	if err != nil {
+		return err
+	}
+	p.nodeID = res.Node.ID
+	p.runtime = res.RuntimeConfig
+	p.locked = false
+	return nil
+}
+
+func (p *portal) loginMode() limbgo.LoginMode {
+	switch strings.ToLower(strings.TrimSpace(p.cfg.LoginMode)) {
+	case string(limbgo.LoginModeOnline):
+		return limbgo.LoginModeOnline
+	default:
+		return limbgo.LoginModeOffline
+	}
+}
+
+func (p *portal) verifySession(ctx context.Context, proof limbgo.SessionProof) (limbgo.VerifiedProfile, error) {
+	profile, err := p.client.verifySession(ctx, proof)
+	if err != nil {
+		return limbgo.VerifiedProfile{}, err
+	}
+	if profile.UUID == "" || profile.Name == "" {
+		return limbgo.VerifiedProfile{}, fmt.Errorf("%w: Authman returned an incomplete verified profile", limbgo.ErrInvalidLogin)
+	}
+	return profile, nil
+}
+
+func (p *portal) resolveJoin(ctx context.Context, player limbgo.Player) (limbgo.JoinTarget, error) {
+	host := requestedHost(player.RequestedHost, p.cfg.DefaultHost)
+	resolved, err := p.client.resolveTarget(ctx, host)
+	if err != nil {
+		p.logger.Warn("using fallback limbo world; target resolve failed", "host", host, "err", err)
+		return limbgo.JoinTarget{World: p.fallbackWorld, Spawn: p.fallbackSpawn}, nil
+	}
+	if resolved.LimboBlueprint == nil || strings.TrimSpace(resolved.LimboBlueprint.ID) == "" || resolved.LimboBlueprint.Missing {
+		return limbgo.JoinTarget{World: p.fallbackWorld, Spawn: p.fallbackSpawn}, nil
+	}
+	world, spawn, err := p.worldForBlueprint(ctx, *resolved.LimboBlueprint)
+	if err != nil {
+		p.logger.Warn("using fallback limbo world; blueprint load failed", "blueprint", resolved.LimboBlueprint.ID, "err", err)
+		return limbgo.JoinTarget{World: p.fallbackWorld, Spawn: p.fallbackSpawn}, nil
+	}
+	return limbgo.JoinTarget{World: world, Spawn: spawn}, nil
+}
+
+func (p *portal) worldForBlueprint(ctx context.Context, blueprint limboBlueprintData) (limbgo.World, limbgo.SpawnTarget, error) {
+	p.worldsMu.RLock()
+	cached, ok := p.worlds[blueprint.ID]
+	p.worldsMu.RUnlock()
+	if ok && cached.sha256 == strings.TrimSpace(blueprint.SHA256) {
+		return cached.world, cached.spawn, nil
+	}
+	full, err := p.client.fetchBlueprint(ctx, blueprint.ID)
+	if err != nil {
+		return nil, limbgo.SpawnTarget{}, err
+	}
+	raw, err := base64.StdEncoding.DecodeString(full.SchematicBase64)
+	if err != nil {
+		return nil, limbgo.SpawnTarget{}, fmt.Errorf("decode blueprint schematic: %w", err)
+	}
+	worldID := stringFromMap(full.Config, "world_id")
+	if worldID == "" {
+		worldID = "authman-" + full.ID
+	}
+	world, err := schematic.Load(bytes.NewReader(raw), schematic.Options{
+		WorldID:   worldID,
+		Dimension: dimensionFromMap(full.Config),
+	})
+	if err != nil {
+		return nil, limbgo.SpawnTarget{}, err
+	}
+	spawn := spawnFromMap(full.Config, world.ID())
+	p.worldsMu.Lock()
+	p.worlds[full.ID] = cachedWorld{sha256: strings.TrimSpace(full.SHA256), world: world, spawn: spawn}
+	p.worldsMu.Unlock()
+	return world, spawn, nil
+}
+
+func (p *portal) status(ctx context.Context, req limbgo.StatusRequest) (limbgo.Status, error) {
+	host := requestedHost(req.Address, p.cfg.DefaultHost)
+	resolved, err := p.client.resolveTarget(ctx, host)
+	description := &component.Text{Content: "Authman login portal"}
+	if err == nil && resolved.Target.MOTD != "" {
+		description = &component.Text{Content: resolved.Target.MOTD}
+	}
+	return limbgo.Status{
+		VersionName:         "Authman Limbo",
+		Protocol:            req.Protocol,
+		Description:         description,
+		MaxPlayers:          1000,
+		OnlinePlayers:       0,
+		PreventsChatReports: limbgo.Bool(true),
+	}, nil
+}
+
+func (p *portal) handleJoin(ctx context.Context, session limbgo.PlayerSession, event *limbgo.JoinEvent) error {
+	p.logger.Info("limbo join event", "player", event.Player.Name, "protocol", event.Protocol)
+	if p.locked {
+		return session.SendMessage(ctx, &component.Text{Content: "Authman portal is locked."})
+	}
+	return p.showLoginDialog(ctx, session)
+}
+
+func (p *portal) handleChat(ctx context.Context, session limbgo.PlayerSession, event *limbgo.ChatEvent) error {
+	p.logger.Info("limbo chat event", "player", event.Player.Name, "protocol", event.Protocol, "first", firstWord(event.Message))
+	if p.locked {
+		return session.SendMessage(ctx, &component.Text{Content: "Authman portal is locked."})
+	}
+	parts := strings.Fields(event.Message)
+	if len(parts) >= 1 && strings.EqualFold(parts[0], "login") {
+		password := ""
+		if len(parts) >= 2 {
+			password = strings.Join(parts[1:], " ")
+		}
+		return p.authenticateAndTransfer(ctx, session, password)
+	}
+	return p.showLoginDialog(ctx, session)
+}
+
+func (p *portal) handleCommand(ctx context.Context, session limbgo.PlayerSession, event *limbgo.CommandEvent) error {
+	p.logger.Info("limbo command event", "player", event.Player.Name, "protocol", event.Protocol, "first", firstWord(event.Command))
+	if p.locked {
+		return session.SendMessage(ctx, &component.Text{Content: "Authman portal is locked."})
+	}
+	parts := strings.Fields(event.Command)
+	if len(parts) >= 1 && strings.EqualFold(parts[0], "login") {
+		password := ""
+		if len(parts) >= 2 {
+			password = strings.Join(parts[1:], " ")
+		}
+		return p.authenticateAndTransfer(ctx, session, password)
+	}
+	return p.showLoginDialog(ctx, session)
+}
+
+func (p *portal) handleDialogClick(ctx context.Context, session limbgo.PlayerSession, event *limbgo.DialogClickEvent) error {
+	p.logger.Info("limbo dialog event", "player", event.Player.Name, "protocol", event.Protocol, "id", event.ID, "payload_bytes", len(event.Payload))
+	if event.ID != "authman:login_submit" {
+		return p.showLoginDialog(ctx, session)
+	}
+	password := ""
+	if len(event.Payload) > 0 {
+		values, err := parseDialogStringPayload(event.Payload)
+		if err != nil {
+			p.logger.Warn("failed to parse dialog payload", "player", event.Player.Name, "err", err)
+			return session.SendMessage(ctx, &component.Text{Content: "Authman could not read the dialog response. Use /login <password> instead."})
+		}
+		password = strings.TrimSpace(values["password"])
+	}
+	return p.authenticateAndTransfer(ctx, session, password)
+}
+
+func (p *portal) showLoginDialog(ctx context.Context, session limbgo.PlayerSession) error {
+	if !boolFromMap(p.runtime, "dialog_enabled", true) || !session.Capabilities().Dialog {
+		return session.SendMessage(ctx, &component.Text{Content: "Use /login <password> to authenticate with Authman."})
+	}
+	resolved, err := p.client.resolvePlayer(ctx, session.Player())
+	if err != nil {
+		return session.SendMessage(ctx, &component.Text{Content: "Authman could not resolve this passport."})
+	}
+	body := []dialog.Raw{
+		dialog.PlainMessage(dialog.Text("Authenticate with Authman, then transfer to the downstream server."), 240),
+	}
+	inputs := []dialog.Raw(nil)
+	if resolved.Auth.Required {
+		inputs = append(inputs, dialog.TextInput("password", dialog.Text("Password"), dialog.TextInputOptions{
+			MaxLength: 128,
+			Width:     240,
+		}))
+	} else {
+		body = append(body, dialog.PlainMessage(dialog.Text("This premium passport can continue without a password."), 240))
+	}
+	return session.ShowDialog(ctx, dialog.Notice(dialog.Common{
+		Title:       dialog.Text("Authman"),
+		Body:        body,
+		Inputs:      inputs,
+		Pause:       dialog.Bool(false),
+		AfterAction: dialog.AfterActionWaitForResponse,
+	}, dialog.Button(
+		dialog.Text("Login"),
+		dialog.DynamicCustom("authman:login_submit", dialog.Raw{"screen": "login"}),
+	)))
+}
+
+func (p *portal) authenticateAndTransfer(ctx context.Context, session limbgo.PlayerSession, password string) error {
+	player := session.Player()
+	resolved, err := p.client.resolvePlayer(ctx, player)
+	if err != nil {
+		return session.SendMessage(ctx, &component.Text{Content: "Authman could not resolve this passport."})
+	}
+	if resolved.Auth.Required {
+		if strings.TrimSpace(password) == "" {
+			return p.showLoginDialog(ctx, session)
+		}
+		if err := p.client.authenticate(ctx, resolved.Auth.Username, password); err != nil {
+			return session.SendMessage(ctx, &component.Text{Content: "Invalid Authman password."})
+		}
+	}
+	host := requestedHost(player.RequestedHost, p.cfg.DefaultHost)
+	resolvedTarget, err := p.client.resolveTarget(ctx, host)
+	if err != nil {
+		return session.SendMessage(ctx, &component.Text{Content: "Authman could not resolve a downstream target."})
+	}
+	target := resolvedTarget.Target
+	grant, err := p.client.createGrant(ctx, resolved.Player.ProtocolName, target.ServerID, host, p.sourceID())
+	if err != nil {
+		return session.SendMessage(ctx, &component.Text{Content: "Authman could not create a transfer grant."})
+	}
+	caps := session.Capabilities()
+	if !caps.StoreCookie || !caps.Transfer {
+		if caps.Disconnect {
+			return session.Disconnect(ctx, &component.Text{Content: "Authman transfer requires Minecraft 1.20.5+ with vanilla transfer-cookie support."})
+		}
+		return session.SendMessage(ctx, &component.Text{Content: "Authman transfer requires Minecraft 1.20.5+ with vanilla transfer-cookie support."})
+	}
+	_ = session.ClearDialog(ctx)
+	if caps.ActionBar {
+		_ = session.SendActionBar(ctx, &component.Text{Content: "Authman login accepted"})
+	}
+	if caps.Title {
+		_ = session.ShowTitle(ctx, limbgo.Title{
+			Title:    &component.Text{Content: "Welcome"},
+			Subtitle: &component.Text{Content: "Preparing transfer"},
+			Times:    limbgo.TitleTimesTicks(5, 30, 5),
+		})
+	}
+	if err := session.StoreCookie(ctx, p.transferCookieKey(), []byte(grant.Token)); err != nil {
+		return err
+	}
+	if err := session.Transfer(ctx, grant.Target.TransferHost, grant.Target.TransferPort); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *portal) sourceID() string {
+	if strings.TrimSpace(p.cfg.SourceID) != "" {
+		return strings.TrimSpace(p.cfg.SourceID)
+	}
+	if strings.TrimSpace(p.nodeID) != "" {
+		return strings.TrimSpace(p.nodeID)
+	}
+	return strings.TrimSpace(p.cfg.NodeName)
+}
+
+func (p *portal) transferCookieKey() string {
+	if key := strings.TrimSpace(stringFromMap(p.runtime, "transfer_cookie_key")); key != "" {
+		return key
+	}
+	return "authman:transfer_grant"
+}
+
+func requestedHost(value, fallback string) string {
+	if host := strings.TrimSpace(value); host != "" {
+		return host
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func dimensionFromMap(config map[string]any) limbgo.Dimension {
+	switch strings.ToLower(strings.TrimSpace(stringFromMap(config, "dimension"))) {
+	case "nether":
+		return limbgo.DimensionPreset(limbgo.DimensionNether, 0)
+	case "end":
+		return limbgo.DimensionPreset(limbgo.DimensionEnd, 0)
+	default:
+		return limbgo.DimensionPreset(limbgo.DimensionOverworld, 0)
+	}
+}
+
+func spawnFromMap(config map[string]any, worldID string) limbgo.SpawnTarget {
+	spawn := map[string]any{}
+	if raw, ok := config["spawn"].(map[string]any); ok {
+		spawn = raw
+	}
+	return limbgo.SpawnTarget{
+		World:    worldID,
+		Position: limbgo.Vec3{X: floatFromMap(spawn, "x", 0), Y: floatFromMap(spawn, "y", 65), Z: floatFromMap(spawn, "z", 0)},
+		Rotation: limbgo.Rotation{Yaw: float32(floatFromMap(spawn, "yaw", 0)), Pitch: float32(floatFromMap(spawn, "pitch", 0))},
+		GameMode: limbgo.GameModeAdventure,
+	}
+}
+
+func floatFromMap(input map[string]any, key string, fallback float64) float64 {
+	switch typed := input[key].(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case json.Number:
+		if parsed, err := typed.Float64(); err == nil {
+			return parsed
+		}
+	case string:
+		if parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func validateConfig(cfg config) error {
+	if strings.TrimSpace(cfg.CoreURL) == "" {
+		return errors.New("AUTHMAN_CORE_URL is required")
+	}
+	if strings.TrimSpace(cfg.NodeToken) == "" {
+		return errors.New("AUTHMAN_NODE_TOKEN is required")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.LoginMode)) {
+	case "", string(limbgo.LoginModeOffline), string(limbgo.LoginModeOnline):
+	default:
+		return fmt.Errorf("unsupported AUTHMAN_LIMBO_LOGIN_MODE %q", cfg.LoginMode)
+	}
+	return nil
+}
+
+func getenv(key, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func stringFromMap(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	switch value := values[key].(type) {
+	case string:
+		return value
+	default:
+		return ""
+	}
+}
+
+func boolFromMap(values map[string]any, key string, fallback bool) bool {
+	if values == nil {
+		return fallback
+	}
+	switch value := values[key].(type) {
+	case bool:
+		return value
+	default:
+		return fallback
+	}
+}
+
+func firstWord(value string) string {
+	parts := strings.Fields(value)
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[0]
+}
+
+func parseDialogStringPayload(payload []byte) (map[string]string, error) {
+	reader := bytes.NewReader(payload)
+	tag, err := reader.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	values := map[string]string{}
+	if err := readNBTAnonymousPayload(reader, tag, "", values); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func readNBTAnonymousPayload(r *bytes.Reader, tag byte, name string, values map[string]string) error {
+	switch tag {
+	case 0:
+		return nil
+	case 1:
+		_, err := r.ReadByte()
+		return err
+	case 2:
+		_, err := readN(r, 2)
+		return err
+	case 3, 5:
+		_, err := readN(r, 4)
+		return err
+	case 4, 6:
+		_, err := readN(r, 8)
+		return err
+	case 7:
+		n, err := readNBTInt(r)
+		if err != nil {
+			return err
+		}
+		_, err = readN(r, n)
+		return err
+	case 8:
+		value, err := readNBTString(r)
+		if err != nil {
+			return err
+		}
+		if name != "" {
+			values[name] = value
+		}
+		return nil
+	case 9:
+		childTag, err := r.ReadByte()
+		if err != nil {
+			return err
+		}
+		n, err := readNBTInt(r)
+		if err != nil {
+			return err
+		}
+		for i := 0; i < n; i++ {
+			if err := readNBTAnonymousPayload(r, childTag, name, values); err != nil {
+				return err
+			}
+		}
+		return nil
+	case 10:
+		for {
+			childTag, err := r.ReadByte()
+			if err != nil {
+				return err
+			}
+			if childTag == 0 {
+				return nil
+			}
+			childName, err := readNBTString(r)
+			if err != nil {
+				return err
+			}
+			if err := readNBTAnonymousPayload(r, childTag, childName, values); err != nil {
+				return err
+			}
+		}
+	case 11:
+		n, err := readNBTInt(r)
+		if err != nil {
+			return err
+		}
+		_, err = readN(r, n*4)
+		return err
+	case 12:
+		n, err := readNBTInt(r)
+		if err != nil {
+			return err
+		}
+		_, err = readN(r, n*8)
+		return err
+	default:
+		return fmt.Errorf("unsupported nbt tag %d", tag)
+	}
+}
+
+func readNBTString(r *bytes.Reader) (string, error) {
+	sizeRaw, err := readN(r, 2)
+	if err != nil {
+		return "", err
+	}
+	size := int(binary.BigEndian.Uint16(sizeRaw))
+	raw, err := readN(r, size)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func readNBTInt(r *bytes.Reader) (int, error) {
+	raw, err := readN(r, 4)
+	if err != nil {
+		return 0, err
+	}
+	value := int(int32(binary.BigEndian.Uint32(raw)))
+	if value < 0 {
+		return 0, fmt.Errorf("negative nbt length %d", value)
+	}
+	return value, nil
+}
+
+func readN(r *bytes.Reader, n int) ([]byte, error) {
+	if n < 0 {
+		return nil, fmt.Errorf("negative read length %d", n)
+	}
+	if r.Len() < n {
+		return nil, io.ErrUnexpectedEOF
+	}
+	out := make([]byte, n)
+	_, err := io.ReadFull(r, out)
+	return out, err
+}
+
+func fatal(err error) {
+	_, _ = fmt.Fprintf(os.Stderr, "authman-limbo: %v\n", err)
+	os.Exit(1)
+}
+
+type coreClient struct {
+	cfg    config
+	client *http.Client
+}
+
+func newCoreClient(cfg config) *coreClient {
+	return &coreClient{cfg: cfg, client: &http.Client{Timeout: 8 * time.Second}}
+}
+
+type heartbeatResponse struct {
+	Node struct {
+		ID string `json:"id"`
+	} `json:"node"`
+	RuntimeConfig map[string]any `json:"runtime_config"`
+}
+
+type resolveResponse struct {
+	Player struct {
+		UUID         string `json:"uuid"`
+		ProtocolName string `json:"protocol_name"`
+	} `json:"player"`
+	Auth struct {
+		Required bool   `json:"required"`
+		Username string `json:"username"`
+	} `json:"auth"`
+}
+
+type verifySessionResponse struct {
+	Profile verifiedProfileData `json:"profile"`
+}
+
+type verifiedProfileData struct {
+	UUID       string                `json:"uuid"`
+	Name       string                `json:"name"`
+	Properties []profilePropertyData `json:"properties"`
+	Source     string                `json:"source"`
+	Verified   bool                  `json:"verified"`
+}
+
+type profilePropertyData struct {
+	Name      string `json:"name"`
+	Value     string `json:"value"`
+	Signature string `json:"signature,omitempty"`
+}
+
+type targetResponse struct {
+	Target         downstreamTarget    `json:"target"`
+	LimboBlueprint *limboBlueprintData `json:"limbo_blueprint"`
+}
+
+type limboBlueprintData struct {
+	ID              string         `json:"id"`
+	Name            string         `json:"name"`
+	SHA256          string         `json:"sha256"`
+	Missing         bool           `json:"missing"`
+	Config          map[string]any `json:"config"`
+	SchematicBase64 string         `json:"schematic_base64"`
+}
+
+type grantResponse struct {
+	Token  string           `json:"token"`
+	Target downstreamTarget `json:"target"`
+}
+
+type downstreamTarget struct {
+	ServerID     string `json:"server_id"`
+	TransferHost string `json:"transfer_host"`
+	TransferPort int    `json:"transfer_port"`
+	MOTD         string `json:"motd"`
+}
+
+func (c *coreClient) heartbeat(ctx context.Context) (heartbeatResponse, error) {
+	return postJSON[heartbeatResponse](ctx, c, "/api/node/heartbeat", map[string]any{
+		"kind":                 "limbo_portal",
+		"name":                 c.cfg.NodeName,
+		"instance_fingerprint": instanceFingerprint(c.cfg),
+		"plugin_version":       version,
+	})
+}
+
+func (c *coreClient) verifySession(ctx context.Context, proof limbgo.SessionProof) (limbgo.VerifiedProfile, error) {
+	res, err := postJSON[verifySessionResponse](ctx, c, "/api/node/limbo/sessions/verify", map[string]any{
+		"username":         proof.Username,
+		"server_id":        proof.ServerID,
+		"remote_ip":        proof.RemoteIP,
+		"protocol_version": proof.ProtocolVersion,
+		"requested_host":   proof.RequestedHost,
+	})
+	if err != nil {
+		return limbgo.VerifiedProfile{}, err
+	}
+	return limbgo.VerifiedProfile{
+		UUID:       res.Profile.UUID,
+		Name:       res.Profile.Name,
+		Properties: limbgoProfileProperties(res.Profile.Properties),
+		Source:     res.Profile.Source,
+		Verified:   res.Profile.Verified,
+	}, nil
+}
+
+func (c *coreClient) resolvePlayer(ctx context.Context, player limbgo.Player) (resolveResponse, error) {
+	return postJSON[resolveResponse](ctx, c, "/api/node/players/resolve", map[string]any{
+		"username":           player.Name,
+		"login_mode":         string(player.LoginMode),
+		"auth_source":        player.AuthSource,
+		"verified":           player.Verified,
+		"verified_uuid":      player.UUID,
+		"profile_properties": coreProfileProperties(player.ProfileProperties),
+	})
+}
+
+func (c *coreClient) authenticate(ctx context.Context, username, password string) error {
+	_, err := postJSON[map[string]any](ctx, c, "/api/node/players/authenticate", map[string]any{"username": username, "password": password})
+	return err
+}
+
+func (c *coreClient) resolveTarget(ctx context.Context, requestedHost string) (targetResponse, error) {
+	res, err := postJSON[targetResponse](ctx, c, "/api/node/limbo/targets/resolve", map[string]any{"requested_host": requestedHost})
+	return res, err
+}
+
+func (c *coreClient) fetchBlueprint(ctx context.Context, id string) (limboBlueprintData, error) {
+	return getJSON[limboBlueprintData](ctx, c, "/api/node/limbo/blueprints/"+url.PathEscape(strings.TrimSpace(id)))
+}
+
+func (c *coreClient) createGrant(ctx context.Context, username, serverID, requestedHost, source string) (grantResponse, error) {
+	return postJSON[grantResponse](ctx, c, "/api/node/limbo/transfer-grants", map[string]any{
+		"username":       username,
+		"server_id":      serverID,
+		"requested_host": requestedHost,
+		"source":         source,
+	})
+}
+
+func postJSON[T any](ctx context.Context, c *coreClient, path string, body map[string]any) (T, error) {
+	var out T
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return out, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.cfg.CoreURL, "/")+path, bytes.NewReader(payload))
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.cfg.NodeToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Authman-Instance", instanceFingerprint(c.cfg))
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer resp.Body.Close()
+	var envelope struct {
+		Data  T `json:"data"`
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return out, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		if envelope.Error != nil {
+			return out, fmt.Errorf("%s: %s", envelope.Error.Code, envelope.Error.Message)
+		}
+		return out, fmt.Errorf("Authman returned HTTP %d", resp.StatusCode)
+	}
+	return envelope.Data, nil
+}
+
+func getJSON[T any](ctx context.Context, c *coreClient, path string) (T, error) {
+	var out T
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.cfg.CoreURL, "/")+path, nil)
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.cfg.NodeToken)
+	req.Header.Set("X-Authman-Instance", instanceFingerprint(c.cfg))
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer resp.Body.Close()
+	var envelope struct {
+		Data  T `json:"data"`
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return out, err
+	}
+	if resp.StatusCode >= 400 || envelope.Error != nil {
+		if envelope.Error != nil {
+			return out, fmt.Errorf("%s: %s", envelope.Error.Code, envelope.Error.Message)
+		}
+		return out, fmt.Errorf("authman returned status %d", resp.StatusCode)
+	}
+	return envelope.Data, nil
+}
+
+func instanceFingerprint(cfg config) string {
+	seed := cfg.NodeName + "|" + cfg.Listen + "|" + cfg.CoreURL
+	return "limbo-" + strconv.FormatUint(fnv64(seed), 16)
+}
+
+func fnv64(text string) uint64 {
+	var h uint64 = 1469598103934665603
+	for _, b := range []byte(text) {
+		h ^= uint64(b)
+		h *= 1099511628211
+	}
+	return h
+}
+
+func coreProfileProperties(properties []limbgo.ProfileProperty) []profilePropertyData {
+	out := make([]profilePropertyData, 0, len(properties))
+	for _, property := range properties {
+		name := strings.TrimSpace(property.Name)
+		if name == "" {
+			continue
+		}
+		out = append(out, profilePropertyData{
+			Name:      name,
+			Value:     property.Value,
+			Signature: property.Signature,
+		})
+	}
+	return out
+}
+
+func limbgoProfileProperties(properties []profilePropertyData) []limbgo.ProfileProperty {
+	out := make([]limbgo.ProfileProperty, 0, len(properties))
+	for _, property := range properties {
+		name := strings.TrimSpace(property.Name)
+		if name == "" {
+			continue
+		}
+		out = append(out, limbgo.ProfileProperty{
+			Name:      name,
+			Value:     property.Value,
+			Signature: property.Signature,
+		})
+	}
+	return out
+}

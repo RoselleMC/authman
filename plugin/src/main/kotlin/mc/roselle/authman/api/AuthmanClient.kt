@@ -6,12 +6,9 @@ import com.google.gson.JsonObject
 import com.velocitypowered.api.util.GameProfile
 import mc.roselle.authman.config.AuthmanConfig
 import mc.roselle.authman.config.RuntimeConfig
-import mc.roselle.authman.model.AuthResult
-import mc.roselle.authman.model.DownstreamTarget
-import mc.roselle.authman.model.GateConsumeResult
+import mc.roselle.authman.model.DownstreamConsumeResult
 import mc.roselle.authman.model.NodeAction
 import mc.roselle.authman.model.ResolvedPlayer
-import mc.roselle.authman.model.TransferGrant
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
@@ -44,57 +41,9 @@ class AuthmanClient(
         )
     }
 
-    fun resolvePortalTarget(serverId: String, requestedHost: String): DownstreamTarget {
+    fun consumeTransferGrant(token: String, serverId: String, uuid: String, protocolName: String, source: String): DownstreamConsumeResult {
         val response = post(
-            "/api/node/portal/targets/resolve",
-            mapOf(
-                "server_id" to serverId,
-                "requested_host" to requestedHost,
-            ),
-        )
-        if (!response.ok) {
-            throw AuthmanHttpException("resolve portal target", response)
-        }
-        return parseTarget(response.jsonData().obj("target"))
-    }
-
-    fun authenticatePlayer(username: String, password: String): AuthResult {
-        val response = post("/api/node/players/authenticate", mapOf("username" to username, "password" to password))
-        if (response.ok) {
-            return AuthResult(authenticated = true, locked = false, statusCode = response.statusCode)
-        }
-        if (response.statusCode == 403 && response.body.contains("auth.account_locked")) {
-            return AuthResult(authenticated = false, locked = true, statusCode = response.statusCode)
-        }
-        if (response.statusCode == 401) {
-            return AuthResult(authenticated = false, locked = false, statusCode = response.statusCode)
-        }
-        throw AuthmanHttpException("authenticate", response)
-    }
-
-    fun createTransferGrant(username: String, serverId: String, requestedHost: String, source: String): TransferGrant {
-        val response = post(
-            "/api/node/portal/transfer-grants",
-            mapOf(
-                "username" to username,
-                "server_id" to serverId,
-                "requested_host" to requestedHost,
-                "source" to source,
-            ),
-        )
-        if (!response.ok) {
-            throw AuthmanHttpException("create transfer grant", response)
-        }
-        val data = response.jsonData()
-        return TransferGrant(
-            token = data.string("token"),
-            target = parseTarget(data.obj("target")),
-        )
-    }
-
-    fun consumeTransferGrant(token: String, serverId: String, uuid: String, protocolName: String, source: String): GateConsumeResult {
-        val response = post(
-            "/api/node/gate/transfer-grants/consume",
+            "/api/node/downstream/transfer-grants/consume",
             mapOf(
                 "token" to token,
                 "server_id" to serverId,
@@ -108,7 +57,7 @@ class AuthmanClient(
         }
         val player = response.jsonData().obj("player")
         val presence = response.jsonData().obj("presence")
-        return GateConsumeResult(
+        return DownstreamConsumeResult(
             allowed = true,
             resolved = ResolvedPlayer(
                 uuid = UUID.fromString(player.string("uuid")),
@@ -150,7 +99,7 @@ class AuthmanClient(
         val response = post(
             "/api/node/heartbeat",
             mapOf(
-                "mode" to config.runtimeMode.name.lowercase(),
+                "kind" to "downstream_velocity",
                 "instance_fingerprint" to instanceFingerprint,
                 "plugin_version" to pluginVersion,
                 "velocity_version" to velocityVersion,
@@ -226,44 +175,16 @@ data class HeartbeatResult(
     val accessRevoked: Boolean,
 )
 
-private fun parseTarget(target: JsonObject): DownstreamTarget {
-    return DownstreamTarget(
-        serverId = target.string("server_id"),
-        slug = target.string("slug"),
-        displayName = target.string("display_name"),
-        host = target.string("host"),
-        port = target.int("port", 25565),
-        transferHost = target.string("transfer_host"),
-        transferPort = target.int("transfer_port", 25565),
-        motd = target.string("motd"),
-        gateEnabled = target.boolean("gate_enabled", true),
-        grantTtlSeconds = target.int("grant_ttl_seconds", 45),
-    )
-}
-
 private fun parseRuntime(obj: JsonObject): RuntimeConfig {
-    return RuntimeConfig(
-        nodeName = obj.stringOr("node_name", "velocity"),
-        serverId = obj.stringOr("server_id", "default"),
-        heartbeatIntervalSeconds = obj.long("heartbeat_interval_seconds", 60),
-        resolveRawOfflineNames = obj.boolean("resolve_raw_offline_names", true),
-        maxPasswordAttempts = obj.int("max_password_attempts", 3),
-        chatCooldownMillis = obj.long("chat_cooldown_millis", 150),
-        authTimeoutSeconds = obj.long("auth_timeout_seconds", 90),
-        completionDelaySeconds = obj.long("completion_delay_seconds", 3),
-        defaultTargetServer = obj.stringOr("default_target_server", ""),
-        holdingServer = obj.stringOr("holding_server", ""),
-        transferCookieKey = obj.stringOr("transfer_cookie_key", "authman:transfer_grant"),
-        gateInitialServer = obj.stringOr("gate_initial_server", ""),
-        gateHoldingServer = obj.stringOr("gate_holding_server", ""),
-        gateValidationTimeoutSeconds = obj.long("gate_validation_timeout_seconds", 10),
-        portalRequestedServerId = obj.stringOr("portal_requested_server_id", ""),
-        portalRequestedHost = obj.stringOr("portal_requested_host", ""),
-        portalSourceId = obj.stringOr("portal_source_id", ""),
-        dialogEnabled = obj.boolean("dialog_enabled", true),
-        dialogFallbackChatEnabled = obj.boolean("dialog_fallback_chat_enabled", true),
-        emailVerificationMode = obj.stringOr("email_verification_mode", "disabled"),
-    )
+	return RuntimeConfig(
+		nodeName = obj.stringOr("node_name", "velocity"),
+		serverId = obj.stringOr("server_id", "default"),
+		heartbeatIntervalSeconds = obj.long("heartbeat_interval_seconds", 60),
+		transferCookieKey = obj.stringOr("transfer_cookie_key", "authman:transfer_grant"),
+		downstreamInitialServer = obj.stringOr("downstream_initial_server", obj.stringOr("gate_initial_server", "")),
+		downstreamHoldingServer = obj.stringOr("downstream_holding_server", obj.stringOr("gate_holding_server", "")),
+		downstreamValidationTimeoutSeconds = obj.long("downstream_validation_timeout_seconds", obj.long("gate_validation_timeout_seconds", 10)),
+	)
 }
 
 private fun parseNodeActions(element: JsonElement?): List<NodeAction> {

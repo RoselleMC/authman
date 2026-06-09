@@ -7,10 +7,12 @@ import { PassportsPage } from "./pages/PassportsPage";
 import { PassportDetailPage } from "./pages/PassportDetailPage";
 import { ProfilesPage } from "./pages/ProfilesPage";
 import { ProfileDetailPage } from "./pages/ProfileDetailPage";
-import { NodesPage } from "./pages/NodesPage";
 import { NodeDetailPage } from "./pages/NodeDetailPage";
+import { DownstreamServersPage } from "./pages/DownstreamServersPage";
+import { DownstreamServerDetailPage } from "./pages/DownstreamServerDetailPage";
+import { LoginPortalsPage } from "./pages/LoginPortalsPage";
+import { LimboBlueprintDetailPage } from "./pages/LimboBlueprintDetailPage";
 import { ProxyPoolPage } from "./pages/MojangPage";
-import { PortalSettingsPage } from "./pages/PortalSettingsPage";
 import { AuditPage } from "./pages/AuditPage";
 import { AuditDetailPage } from "./pages/AuditDetailPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -27,6 +29,16 @@ function RequireAuth({ children }: { children: JSX.Element }) {
 function LegacyPlayerRedirect() {
   const { id = "" } = useParams<{ id: string }>();
   return <Navigate to={`/profiles/${encodeURIComponent(id)}`} replace />;
+}
+
+function LegacyServerRedirect() {
+  const { id = "" } = useParams<{ id: string }>();
+  return <Navigate to={`/nodes/${encodeURIComponent(id)}`} replace />;
+}
+
+function LegacyBlueprintRedirect() {
+  const { id = "" } = useParams<{ id: string }>();
+  return <Navigate to={`/login-portals/blueprints/${encodeURIComponent(id)}`} replace />;
 }
 
 export function App() {
@@ -47,9 +59,18 @@ export function App() {
         <Route path="/profiles/:id" element={<ProfileDetailPage />} />
         <Route path="/players" element={<Navigate to="/passports" replace />} />
         <Route path="/players/:id" element={<LegacyPlayerRedirect />} />
-        <Route path="/nodes" element={<NodesPage />} />
-        <Route path="/nodes/:id" element={<NodeDetailPage />} />
-        <Route path="/portal" element={<PortalSettingsPage />} />
+        <Route path="/login-portals" element={<LoginPortalsPage tab="instances" />} />
+        <Route path="/login-portals/blueprints" element={<LoginPortalsPage tab="blueprints" />} />
+        <Route path="/login-portals/blueprints/:id" element={<LimboBlueprintDetailPage />} />
+        <Route path="/login-portals/settings" element={<LoginPortalsPage tab="settings" />} />
+        <Route path="/login-portals/:id" element={<NodeDetailPage />} />
+        <Route path="/nodes" element={<DownstreamServersPage />} />
+        <Route path="/nodes/:id" element={<DownstreamServerDetailPage />} />
+        <Route path="/servers" element={<Navigate to="/nodes" replace />} />
+        <Route path="/servers/:id" element={<LegacyServerRedirect />} />
+        <Route path="/limbo-blueprints" element={<Navigate to="/login-portals/blueprints" replace />} />
+        <Route path="/limbo-blueprints/:id" element={<LegacyBlueprintRedirect />} />
+        <Route path="/portal" element={<Navigate to="/login-portals/settings" replace />} />
         <Route path="/proxies" element={<ProxyPoolPage />} />
         <Route path="/mojang" element={<Navigate to="/settings/mojang" replace />} />
         <Route path="/audit" element={<AuditPage />} />

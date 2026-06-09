@@ -1,8 +1,6 @@
 package mc.roselle.authman
 
 import com.google.inject.Inject
-import com.github.retrooper.packetevents.PacketEvents
-import com.github.retrooper.packetevents.event.PacketListenerPriority
 import com.velocitypowered.api.event.Subscribe
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent
 import com.velocitypowered.api.plugin.Plugin
@@ -11,13 +9,9 @@ import mc.roselle.authman.api.AuthmanClient
 import mc.roselle.authman.command.AuthmanCommand
 import mc.roselle.authman.config.AuthmanConfig
 import mc.roselle.authman.config.InstanceFingerprint
-import mc.roselle.authman.config.RuntimeMode
-import mc.roselle.authman.dialog.DialogAuthView
-import mc.roselle.authman.listener.GateAuthListener
-import mc.roselle.authman.listener.PortalAuthListener
+import mc.roselle.authman.listener.DownstreamAuthListener
 import mc.roselle.authman.message.AuthmanMessages
 import mc.roselle.authman.model.NodeAction
-import mc.roselle.authman.session.AuthSessionStore
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.slf4j.Logger
@@ -40,7 +34,6 @@ class AuthmanPlugin @Inject constructor(
     private lateinit var config: AuthmanConfig
     private lateinit var instanceFingerprint: String
     private lateinit var client: AuthmanClient
-    private lateinit var sessions: AuthSessionStore
     private lateinit var messages: AuthmanMessages
     @Volatile
     private var coreAccessRevoked: Boolean = false
@@ -50,19 +43,9 @@ class AuthmanPlugin @Inject constructor(
         config = AuthmanConfig.load(dataDirectory)
         instanceFingerprint = InstanceFingerprint.load(dataDirectory)
         client = AuthmanClient(config, instanceFingerprint)
-        sessions = AuthSessionStore(config)
         messages = AuthmanMessages(config)
 
-        when (config.runtimeMode) {
-            RuntimeMode.PORTAL -> {
-                val listener = PortalAuthListener(this, server, logger, config, client, sessions, messages, DialogAuthView())
-                server.eventManager.register(this, listener)
-                PacketEvents.getAPI().eventManager.registerListener(listener, PacketListenerPriority.NORMAL)
-            }
-            RuntimeMode.GATE -> {
-                server.eventManager.register(this, GateAuthListener(this, server, logger, config, client, messages))
-            }
-        }
+        server.eventManager.register(this, DownstreamAuthListener(this, server, logger, config, client, messages))
         val command = AuthmanCommand(this, logger)
         val meta = server.commandManager.metaBuilder("authman")
             .aliases("am")
@@ -71,8 +54,7 @@ class AuthmanPlugin @Inject constructor(
         server.commandManager.register(meta, command)
 
         logger.info(
-            "Authman plugin enabled in {} mode for {} with API {} instance={}",
-            config.runtimeMode.name.lowercase(),
+            "Authman downstream plugin enabled for {} with API {} instance={}",
             server.version.name,
             config.apiBase,
             instanceFingerprint,
@@ -87,11 +69,6 @@ class AuthmanPlugin @Inject constructor(
 
     fun reloadConfigAndReconnect(): Boolean {
         val next = AuthmanConfig.load(dataDirectory)
-        val oldMode = config.runtimeMode
-        val nextMode = RuntimeMode.from(next.mode)
-        if (oldMode != nextMode) {
-            logger.warn("Authman mode changed from {} to {}; restart Velocity to replace listeners", oldMode, nextMode)
-        }
         config.replaceLocal(next)
         return sendHeartbeat()
     }

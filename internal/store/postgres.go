@@ -30,6 +30,8 @@ type Postgres struct {
 const passportSelectColumns = "uuid, kind, uuid, username, username_normalized, raw_offline_name, status, registration_server_id, last_seen_server_id, last_seen_at, last_seen_ip, last_seen_geo, created_at, updated_at"
 const profileSelectColumns = "uuid, uuid, protocol_name, normalized_name, display_name, status, skin_source, profile_properties, created_from_passport_id, last_seen_server_id, last_seen_at, last_seen_ip, last_seen_geo, created_at, updated_at"
 const nodeSelectColumns = "id, server_id, mode, name, token_hash, token_fingerprint, instance_fingerprint, plugin_version, velocity_version, disabled, runtime_config, created_at, last_heartbeat_at"
+const limboBlueprintSelectColumns = "id, name, description, filename, content_type, size_bytes, sha256, schematic, preview, config, created_at, updated_at"
+const profileSkinSelectColumns = "profile_id, model, skin_png, skin_content_type, skin_sha256, COALESCE(cape_png, ''::bytea), COALESCE(cape_content_type, ''), COALESCE(cape_sha256, ''), COALESCE(elytra_png, ''::bytea), COALESCE(elytra_content_type, ''), COALESCE(elytra_sha256, ''), created_at, updated_at"
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*Postgres, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -328,6 +330,108 @@ func (p *Postgres) GetPrimaryProfileForPassport(ctx context.Context, passportID 
 		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
 	}
 	return profile, err
+}
+
+func (p *Postgres) GetProfileSkin(ctx context.Context, profileID string) (ProfileSkin, error) {
+	skin, err := scanProfileSkinRow(p.pool.QueryRow(ctx, `
+		SELECT `+profileSkinSelectColumns+`
+		FROM profile_skins
+		WHERE profile_id = $1
+	`, strings.TrimSpace(profileID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ProfileSkin{}, fmt.Errorf("profile skin not found: %w", ErrNotFound)
+	}
+	return skin, err
+}
+
+func (p *Postgres) SetProfileSkin(ctx context.Context, profileID string, skin ProfileSkin, properties []identity.ProfileProperty) (identity.Profile, error) {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return identity.Profile{}, fmt.Errorf("profile id is required")
+	}
+	propsJSON, err := json.Marshal(properties)
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO profile_skins (
+			profile_id, model, skin_png, skin_content_type, skin_sha256,
+			cape_png, cape_content_type, cape_sha256,
+			elytra_png, elytra_content_type, elytra_sha256
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		ON CONFLICT (profile_id) DO UPDATE
+		SET model = EXCLUDED.model,
+			skin_png = EXCLUDED.skin_png,
+			skin_content_type = EXCLUDED.skin_content_type,
+			skin_sha256 = EXCLUDED.skin_sha256,
+			cape_png = EXCLUDED.cape_png,
+			cape_content_type = EXCLUDED.cape_content_type,
+			cape_sha256 = EXCLUDED.cape_sha256,
+			elytra_png = EXCLUDED.elytra_png,
+			elytra_content_type = EXCLUDED.elytra_content_type,
+			elytra_sha256 = EXCLUDED.elytra_sha256,
+			updated_at = now()
+	`, profileID, normalizeSkinModel(skin.Model), skin.SkinPNG, defaultContentType(skin.SkinContentType), skin.SkinSHA256, nullableBytes(skin.CapePNG), nullString(skin.CapeContentType), nullString(skin.CapeSHA256), nullableBytes(skin.ElytraPNG), nullString(skin.ElytraContentType), nullString(skin.ElytraSHA256)); err != nil {
+		return identity.Profile{}, err
+	}
+	profile, err := scanProfileRow(tx.QueryRow(ctx, `
+		UPDATE profiles
+		SET skin_source = 'custom',
+			profile_properties = $2::jsonb,
+			updated_at = now()
+		WHERE uuid = $1
+		RETURNING `+profileSelectColumns+`
+	`, profileID, string(propsJSON)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return identity.Profile{}, err
+	}
+	return profile, nil
+}
+
+func (p *Postgres) DeleteProfileSkin(ctx context.Context, profileID string, properties []identity.ProfileProperty, skinSource string) (identity.Profile, error) {
+	profileID = strings.TrimSpace(profileID)
+	propsJSON, err := json.Marshal(properties)
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM profile_skins WHERE profile_id = $1`, profileID); err != nil {
+		return identity.Profile{}, err
+	}
+	profile, err := scanProfileRow(tx.QueryRow(ctx, `
+		UPDATE profiles
+		SET skin_source = $2,
+			profile_properties = $3::jsonb,
+			updated_at = now()
+		WHERE uuid = $1
+		RETURNING `+profileSelectColumns+`
+	`, profileID, normalizeSkinSource(skinSource), string(propsJSON)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return identity.Profile{}, err
+	}
+	return profile, nil
 }
 
 func (p *Postgres) ListProfilesForPassport(ctx context.Context, passportID string) []identity.Profile {
@@ -1084,6 +1188,10 @@ func inferAuditOutcome(eventType string) string {
 }
 
 func (p *Postgres) Create(ctx context.Context, name string, now time.Time) (node.Node, string, error) {
+	return p.CreateKind(ctx, name, "downstream_velocity", now)
+}
+
+func (p *Postgres) CreateKind(ctx context.Context, name string, kind string, now time.Time) (node.Node, string, error) {
 	if name == "" {
 		return node.Node{}, "", fmt.Errorf("node name is required")
 	}
@@ -1098,7 +1206,7 @@ func (p *Postgres) Create(ctx context.Context, name string, now time.Time) (node
 	n := node.Node{
 		ID:               id,
 		ServerID:         "default",
-		Mode:             "portal",
+		Mode:             node.NormalizeKind(kind),
 		Name:             name,
 		TokenHash:        auth.HashToken("node", token),
 		TokenFingerprint: auth.TokenFingerprint(token),
@@ -1171,9 +1279,13 @@ func (p *Postgres) Register(ctx context.Context, registration node.Registration,
 		return node.Node{}, fmt.Errorf("instance fingerprint is required")
 	}
 	if registration.Name == "" {
-		registration.Name = "velocity-" + registration.InstanceFingerprint[:minInt(8, len(registration.InstanceFingerprint))]
+		registration.Name = "node-" + registration.InstanceFingerprint[:minInt(8, len(registration.InstanceFingerprint))]
 	}
-	registration.Mode = node.NormalizeMode(registration.Mode)
+	if registration.Kind != "" {
+		registration.Mode = node.NormalizeKind(registration.Kind)
+	} else {
+		registration.Mode = node.NormalizeKind(registration.Mode)
+	}
 	if registration.ServerID == "" {
 		registration.ServerID = "default"
 	}
@@ -1701,6 +1813,96 @@ func (p *Postgres) DeleteDownstreamServer(ctx context.Context, id string) error 
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("downstream server not found: %w", ErrNotFound)
+	}
+	return nil
+}
+
+func (p *Postgres) ListLimboBlueprints(ctx context.Context) []LimboBlueprint {
+	rows, err := p.pool.Query(ctx, fmt.Sprintf("SELECT %s FROM limbo_blueprints ORDER BY updated_at DESC, name ASC", limboBlueprintSelectColumns))
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	blueprints := make([]LimboBlueprint, 0)
+	for rows.Next() {
+		blueprint, err := scanLimboBlueprintRow(rows)
+		if err == nil {
+			blueprints = append(blueprints, blueprint)
+		}
+	}
+	return blueprints
+}
+
+func (p *Postgres) GetLimboBlueprint(ctx context.Context, id string) (LimboBlueprint, error) {
+	blueprint, err := scanLimboBlueprintRow(p.pool.QueryRow(ctx, fmt.Sprintf("SELECT %s FROM limbo_blueprints WHERE id = $1", limboBlueprintSelectColumns), id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return LimboBlueprint{}, fmt.Errorf("limbo blueprint not found: %w", ErrNotFound)
+	}
+	return blueprint, err
+}
+
+func (p *Postgres) UpsertLimboBlueprint(ctx context.Context, blueprint LimboBlueprint) (LimboBlueprint, error) {
+	if strings.TrimSpace(blueprint.ID) == "" {
+		id, err := randomID("limbo-blueprint")
+		if err != nil {
+			return LimboBlueprint{}, err
+		}
+		blueprint.ID = id
+	}
+	if blueprint.Preview == nil {
+		blueprint.Preview = map[string]any{}
+	}
+	if blueprint.Config == nil {
+		blueprint.Config = map[string]any{}
+	}
+	preview, err := json.Marshal(blueprint.Preview)
+	if err != nil {
+		return LimboBlueprint{}, err
+	}
+	config, err := json.Marshal(blueprint.Config)
+	if err != nil {
+		return LimboBlueprint{}, err
+	}
+	out, err := scanLimboBlueprintRow(p.pool.QueryRow(ctx, fmt.Sprintf(`
+		INSERT INTO limbo_blueprints (id, name, description, filename, content_type, size_bytes, sha256, schematic, preview, config, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, now())
+		ON CONFLICT (id) DO UPDATE
+		SET name = EXCLUDED.name,
+			description = EXCLUDED.description,
+			filename = EXCLUDED.filename,
+			content_type = EXCLUDED.content_type,
+			size_bytes = EXCLUDED.size_bytes,
+			sha256 = EXCLUDED.sha256,
+			schematic = EXCLUDED.schematic,
+			preview = EXCLUDED.preview,
+			config = EXCLUDED.config,
+			updated_at = now()
+		RETURNING %s
+	`, limboBlueprintSelectColumns),
+		blueprint.ID,
+		strings.TrimSpace(blueprint.Name),
+		strings.TrimSpace(blueprint.Description),
+		strings.TrimSpace(blueprint.Filename),
+		strings.TrimSpace(blueprint.ContentType),
+		blueprint.SizeBytes,
+		strings.TrimSpace(blueprint.SHA256),
+		blueprint.Schematic,
+		preview,
+		config,
+	))
+	if err != nil {
+		return LimboBlueprint{}, err
+	}
+	return out, nil
+}
+
+func (p *Postgres) DeleteLimboBlueprint(ctx context.Context, id string) error {
+	tag, err := p.pool.Exec(ctx, "DELETE FROM limbo_blueprints WHERE id = $1", id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("limbo blueprint not found: %w", ErrNotFound)
 	}
 	return nil
 }
@@ -2417,6 +2619,26 @@ func scanProfileRow(row playerScanner) (identity.Profile, error) {
 	return profile, nil
 }
 
+func scanProfileSkinRow(row playerScanner) (ProfileSkin, error) {
+	var skin ProfileSkin
+	err := row.Scan(
+		&skin.ProfileID,
+		&skin.Model,
+		&skin.SkinPNG,
+		&skin.SkinContentType,
+		&skin.SkinSHA256,
+		&skin.CapePNG,
+		&skin.CapeContentType,
+		&skin.CapeSHA256,
+		&skin.ElytraPNG,
+		&skin.ElytraContentType,
+		&skin.ElytraSHA256,
+		&skin.CreatedAt,
+		&skin.UpdatedAt,
+	)
+	return skin, err
+}
+
 func unmarshalIPGeo(raw []byte) *identity.IPGeo {
 	if len(raw) == 0 {
 		return nil
@@ -2546,7 +2768,7 @@ func scanNodeRow(row playerScanner) (node.Node, error) {
 	if err != nil {
 		return node.Node{}, err
 	}
-	n.Mode = node.NormalizeMode(n.Mode)
+	n.Mode = node.NormalizeKind(n.Mode)
 	if len(runtimeRaw) > 0 {
 		_ = json.Unmarshal(runtimeRaw, &n.RuntimeConfig)
 	}
@@ -2651,6 +2873,46 @@ func scanDownstreamServerRow(row playerScanner) (DownstreamServer, error) {
 	return normalizeDownstreamServer(server), nil
 }
 
+func scanLimboBlueprintRow(row playerScanner) (LimboBlueprint, error) {
+	var blueprint LimboBlueprint
+	var previewRaw []byte
+	var configRaw []byte
+	err := row.Scan(
+		&blueprint.ID,
+		&blueprint.Name,
+		&blueprint.Description,
+		&blueprint.Filename,
+		&blueprint.ContentType,
+		&blueprint.SizeBytes,
+		&blueprint.SHA256,
+		&blueprint.Schematic,
+		&previewRaw,
+		&configRaw,
+		&blueprint.CreatedAt,
+		&blueprint.UpdatedAt,
+	)
+	if err != nil {
+		return LimboBlueprint{}, err
+	}
+	if len(previewRaw) > 0 {
+		if err := json.Unmarshal(previewRaw, &blueprint.Preview); err != nil {
+			return LimboBlueprint{}, err
+		}
+	}
+	if blueprint.Preview == nil {
+		blueprint.Preview = map[string]any{}
+	}
+	if len(configRaw) > 0 {
+		if err := json.Unmarshal(configRaw, &blueprint.Config); err != nil {
+			return LimboBlueprint{}, err
+		}
+	}
+	if blueprint.Config == nil {
+		blueprint.Config = map[string]any{}
+	}
+	return cloneLimboBlueprint(blueprint), nil
+}
+
 func scanExtensionPlayerDataRow(row playerScanner) (ExtensionPlayerData, error) {
 	var data ExtensionPlayerData
 	var schemaRaw []byte
@@ -2726,6 +2988,37 @@ func nullString(value string) any {
 		return nil
 	}
 	return value
+}
+
+func nullableBytes(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return value
+}
+
+func defaultContentType(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "image/png"
+	}
+	return value
+}
+
+func normalizeSkinModel(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "slim") {
+		return "slim"
+	}
+	return "wide"
+}
+
+func normalizeSkinSource(value string) string {
+	switch strings.TrimSpace(value) {
+	case "mojang", "custom", "none":
+		return strings.TrimSpace(value)
+	default:
+		return "none"
+	}
 }
 
 func marshalNullableGeo(geo *identity.IPGeo) (any, error) {
@@ -2821,6 +3114,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS profile_passport_links_primary_unique
 
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_seen_ip text;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_seen_geo jsonb;
+
+CREATE TABLE IF NOT EXISTS profile_skins (
+	profile_id text PRIMARY KEY REFERENCES profiles(uuid) ON DELETE CASCADE,
+	model text NOT NULL DEFAULT 'wide' CHECK (model IN ('slim', 'wide')),
+	skin_png bytea NOT NULL,
+	skin_content_type text NOT NULL DEFAULT 'image/png',
+	skin_sha256 text NOT NULL,
+	cape_png bytea,
+	cape_content_type text,
+	cape_sha256 text,
+	elytra_png bytea,
+	elytra_content_type text,
+	elytra_sha256 text,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE profile_skins ADD COLUMN IF NOT EXISTS elytra_png bytea;
+ALTER TABLE profile_skins ADD COLUMN IF NOT EXISTS elytra_content_type text;
+ALTER TABLE profile_skins ADD COLUMN IF NOT EXISTS elytra_sha256 text;
 
 CREATE TABLE IF NOT EXISTS offline_passport_credentials (
 	passport_id text PRIMARY KEY REFERENCES passports(uuid) ON DELETE CASCADE,
@@ -2976,10 +3289,27 @@ CREATE TABLE IF NOT EXISTS admin_trusted_devices (
 CREATE INDEX IF NOT EXISTS admin_trusted_devices_admin_id_idx ON admin_trusted_devices (admin_id);
 CREATE INDEX IF NOT EXISTS admin_trusted_devices_expires_at_idx ON admin_trusted_devices (expires_at);
 
+CREATE TABLE IF NOT EXISTS limbo_blueprints (
+	id text PRIMARY KEY,
+	name text NOT NULL,
+	description text NOT NULL DEFAULT '',
+	filename text NOT NULL DEFAULT '',
+	content_type text NOT NULL DEFAULT 'application/octet-stream',
+	size_bytes bigint NOT NULL DEFAULT 0,
+	sha256 text NOT NULL DEFAULT '',
+	schematic bytea NOT NULL,
+	preview jsonb NOT NULL DEFAULT '{}'::jsonb,
+	config jsonb NOT NULL DEFAULT '{}'::jsonb,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS limbo_blueprints_updated_at_idx ON limbo_blueprints (updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS velocity_nodes (
 	id text PRIMARY KEY,
 	server_id text NOT NULL DEFAULT 'default',
-	mode text NOT NULL DEFAULT 'portal',
+	mode text NOT NULL DEFAULT 'downstream_velocity',
 	name text NOT NULL,
 	token_hash text NOT NULL,
 	token_fingerprint text NOT NULL,
@@ -2990,7 +3320,9 @@ CREATE TABLE IF NOT EXISTS velocity_nodes (
 );
 
 ALTER TABLE velocity_nodes ADD COLUMN IF NOT EXISTS server_id text NOT NULL DEFAULT 'default';
-ALTER TABLE velocity_nodes ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'portal';
+ALTER TABLE velocity_nodes ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'downstream_velocity';
+UPDATE velocity_nodes SET mode = 'limbo_portal' WHERE mode = 'portal';
+UPDATE velocity_nodes SET mode = 'downstream_velocity' WHERE mode = 'gate';
 ALTER TABLE velocity_nodes ADD COLUMN IF NOT EXISTS instance_fingerprint text NOT NULL DEFAULT '';
 ALTER TABLE velocity_nodes ADD COLUMN IF NOT EXISTS plugin_version text NOT NULL DEFAULT '';
 ALTER TABLE velocity_nodes ADD COLUMN IF NOT EXISTS velocity_version text NOT NULL DEFAULT '';
@@ -3104,7 +3436,7 @@ VALUES (
 	'active',
 	true,
 	'{"primary_color":"#16a34a","accent_color":"#2563eb","portal_message":"Welcome to Authman","display_name":"Default Server","description":"Default Authman downstream context"}'::jsonb,
-	'{"registration_strategy":"open","show_in_global":true,"host":"127.0.0.1","port":25565,"transfer_host":"127.0.0.1","transfer_port":25565,"motd":"Welcome to Authman","gate_enabled":true,"grant_ttl_seconds":45,"allowed_portal_sources":[],"portal_hosts":[]}'::jsonb,
+	'{"registration_strategy":"open","show_in_global":true,"host":"127.0.0.1","port":25565,"transfer_host":"127.0.0.1","transfer_port":25565,"motd":"Welcome to Authman","grant_required":true,"gate_enabled":true,"grant_ttl_seconds":45,"allowed_portal_sources":[],"portal_hosts":[]}'::jsonb,
 	ARRAY['authman.identity']::text[]
 )
 ON CONFLICT (id) DO NOTHING;

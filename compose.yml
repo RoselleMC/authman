@@ -1,10 +1,12 @@
 services:
   authman:
-    build: .
+    build:
+      context: ..
+      dockerfile: authman/Dockerfile
     environment:
       AUTHMAN_HTTP_ADDR: ":8080"
       AUTHMAN_DATABASE_URL: "postgres://authman:authman@postgres:5432/authman?sslmode=disable"
-      AUTHMAN_PUBLIC_BASE_URL: "http://localhost:8080"
+      AUTHMAN_PUBLIC_BASE_URL: "${AUTHMAN_PUBLIC_BASE_URL:-http://localhost:8080}"
       AUTHMAN_ADMIN_USERNAME: "admin"
       AUTHMAN_ADMIN_EMAIL: "admin@authman.local"
       AUTHMAN_ADMIN_PASSWORD: "authman-admin-change-me"
@@ -38,6 +40,23 @@ services:
       AUTHMAN_DEFAULT_LOCALE: "zh"
     ports:
       - "18081:8080"
+    depends_on:
+      - authman
+
+  authman-limbo:
+    build:
+      context: ..
+      dockerfile: authman/Dockerfile.limbo
+    environment:
+      AUTHMAN_CORE_URL: "http://authman:8080"
+      AUTHMAN_NODE_TOKEN: "${AUTHMAN_LIMBO_NODE_TOKEN:-authman-node-change-me}"
+      AUTHMAN_NODE_NAME: "limbo-portal"
+      AUTHMAN_LIMBO_LISTEN: ":25565"
+      AUTHMAN_LIMBO_DEFAULT_HOST: "default"
+      AUTHMAN_LIMBO_LOGIN_MODE: "${AUTHMAN_LIMBO_LOGIN_MODE:-offline}"
+      AUTHMAN_LIMBO_ONLINE_SERVER_ID: "${AUTHMAN_LIMBO_ONLINE_SERVER_ID:-authman-limbo}"
+    ports:
+      - "25665:25565"
     depends_on:
       - authman
 

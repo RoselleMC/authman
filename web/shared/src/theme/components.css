@@ -421,10 +421,21 @@
 .tbl tbody tr:last-child td { border-bottom: 0; }
 .tbl .is-sticky-right {
   right: 0;
-  background: var(--color-surface);
-  box-shadow: -10px 0 14px -14px rgba(15, 23, 42, .5);
+  --sticky-bg: var(--color-surface);
+  background: var(--sticky-bg);
 }
-.tbl tbody tr:hover .is-sticky-right { background: var(--color-surface-hover); }
+.tbl .is-sticky-right::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 -18px;
+  width: 18px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--sticky-bg));
+}
+.tbl tbody tr:hover .is-sticky-right {
+  --sticky-bg: var(--color-surface-hover);
+  background: var(--sticky-bg);
+}
 .adv-list-select-cell {
   width: 42px; min-width: 42px; text-align: center !important;
   padding: 0 !important;

@@ -38,6 +38,8 @@ type Memory struct {
 	bansByID            map[string]PlayerBan
 	nodeActionsByID     map[string]NodeAction
 	downstreamServers   map[string]DownstreamServer
+	limboBlueprints     map[string]LimboBlueprint
+	profileSkins        map[string]ProfileSkin
 	transferGrants      map[string]auth.TransferGrant
 	extensionData       map[string]ExtensionPlayerData
 	adminRoles          map[string]rbac.Role
@@ -68,6 +70,8 @@ func NewMemory() *Memory {
 		bansByID:            make(map[string]PlayerBan),
 		nodeActionsByID:     make(map[string]NodeAction),
 		downstreamServers:   make(map[string]DownstreamServer),
+		limboBlueprints:     make(map[string]LimboBlueprint),
+		profileSkins:        make(map[string]ProfileSkin),
 		transferGrants:      make(map[string]auth.TransferGrant),
 		extensionData:       make(map[string]ExtensionPlayerData),
 		adminRoles:          make(map[string]rbac.Role),
@@ -222,6 +226,65 @@ func (m *Memory) GetPrimaryProfileForPassport(ctx context.Context, passportID st
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.primaryProfileForPassportLocked(passportID)
+}
+
+func (m *Memory) GetProfileSkin(ctx context.Context, profileID string) (ProfileSkin, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	skin, ok := m.profileSkins[strings.TrimSpace(profileID)]
+	if !ok {
+		return ProfileSkin{}, fmt.Errorf("profile skin not found: %w", ErrNotFound)
+	}
+	return cloneProfileSkin(skin), nil
+}
+
+func (m *Memory) SetProfileSkin(ctx context.Context, profileID string, skin ProfileSkin, properties []identity.ProfileProperty) (identity.Profile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	profileID = strings.TrimSpace(profileID)
+	profile, ok := m.profilesByID[profileID]
+	if !ok {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	now := time.Now().UTC()
+	skin.ProfileID = profileID
+	if skin.Model != "slim" {
+		skin.Model = "wide"
+	}
+	if skin.SkinContentType == "" {
+		skin.SkinContentType = "image/png"
+	}
+	if skin.CreatedAt.IsZero() {
+		skin.CreatedAt = now
+	}
+	skin.UpdatedAt = now
+	m.profileSkins[profileID] = cloneProfileSkin(skin)
+	profile.SkinSource = "custom"
+	profile.ProfileProperties = append([]identity.ProfileProperty(nil), properties...)
+	profile.UpdatedAt = now
+	m.profilesByID[profileID] = profile
+	m.refreshProfilePlayerLocked(profileID)
+	return profile, nil
+}
+
+func (m *Memory) DeleteProfileSkin(ctx context.Context, profileID string, properties []identity.ProfileProperty, skinSource string) (identity.Profile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	profileID = strings.TrimSpace(profileID)
+	profile, ok := m.profilesByID[profileID]
+	if !ok {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	delete(m.profileSkins, profileID)
+	if skinSource != "mojang" {
+		skinSource = "none"
+	}
+	profile.SkinSource = skinSource
+	profile.ProfileProperties = append([]identity.ProfileProperty(nil), properties...)
+	profile.UpdatedAt = time.Now().UTC()
+	m.profilesByID[profileID] = profile
+	m.refreshProfilePlayerLocked(profileID)
+	return profile, nil
 }
 
 func (m *Memory) ListProfilesForPassport(ctx context.Context, passportID string) []identity.Profile {
@@ -407,6 +470,13 @@ func (m *Memory) RecordPlayerSeen(ctx context.Context, passportID string, profil
 
 func (m *Memory) UpdatePassportPassword(ctx context.Context, passportID string, passwordHash string) error {
 	return m.UpdateOfflinePassword(ctx, passportID, passwordHash)
+}
+
+func cloneProfileSkin(skin ProfileSkin) ProfileSkin {
+	skin.SkinPNG = append([]byte(nil), skin.SkinPNG...)
+	skin.CapePNG = append([]byte(nil), skin.CapePNG...)
+	skin.ElytraPNG = append([]byte(nil), skin.ElytraPNG...)
+	return skin
 }
 
 func cloneIPGeo(geo *identity.IPGeo) *identity.IPGeo {
@@ -1287,6 +1357,61 @@ func (m *Memory) DeleteDownstreamServer(ctx context.Context, id string) error {
 		return fmt.Errorf("downstream server not found: %w", ErrNotFound)
 	}
 	delete(m.downstreamServers, id)
+	return nil
+}
+
+func (m *Memory) ListLimboBlueprints(ctx context.Context) []LimboBlueprint {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	blueprints := make([]LimboBlueprint, 0, len(m.limboBlueprints))
+	for _, blueprint := range m.limboBlueprints {
+		blueprints = append(blueprints, cloneLimboBlueprint(blueprint))
+	}
+	return blueprints
+}
+
+func (m *Memory) GetLimboBlueprint(ctx context.Context, id string) (LimboBlueprint, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	blueprint, ok := m.limboBlueprints[id]
+	if !ok {
+		return LimboBlueprint{}, fmt.Errorf("limbo blueprint not found: %w", ErrNotFound)
+	}
+	return cloneLimboBlueprint(blueprint), nil
+}
+
+func (m *Memory) UpsertLimboBlueprint(ctx context.Context, blueprint LimboBlueprint) (LimboBlueprint, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	if strings.TrimSpace(blueprint.ID) == "" {
+		m.nextID++
+		blueprint.ID = "limbo-blueprint-" + strconv.Itoa(m.nextID)
+		blueprint.CreatedAt = now
+	} else if existing, ok := m.limboBlueprints[blueprint.ID]; ok && !existing.CreatedAt.IsZero() {
+		blueprint.CreatedAt = existing.CreatedAt
+	}
+	if blueprint.CreatedAt.IsZero() {
+		blueprint.CreatedAt = now
+	}
+	blueprint.UpdatedAt = now
+	if blueprint.Preview == nil {
+		blueprint.Preview = map[string]any{}
+	}
+	if blueprint.Config == nil {
+		blueprint.Config = map[string]any{}
+	}
+	m.limboBlueprints[blueprint.ID] = cloneLimboBlueprint(blueprint)
+	return cloneLimboBlueprint(blueprint), nil
+}
+
+func (m *Memory) DeleteLimboBlueprint(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.limboBlueprints[id]; !ok {
+		return fmt.Errorf("limbo blueprint not found: %w", ErrNotFound)
+	}
+	delete(m.limboBlueprints, id)
 	return nil
 }
 

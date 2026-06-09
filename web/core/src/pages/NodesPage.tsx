@@ -34,19 +34,44 @@ function NodeStatusBadge({ status }: { status: SafeVelocityNode["status"] }) {
 
 function NodeModeBadge({ mode }: { mode: SafeVelocityNode["mode"] }) {
   const { t } = useI18n();
-  return <Badge tone={mode === "gate" ? "warning" : "info"} dot>{t(`admin.nodes.mode.${mode}`)}</Badge>;
+  return <Badge tone={mode === "downstream_velocity" ? "warning" : "info"} dot>{t(`admin.nodes.mode.${mode}`)}</Badge>;
 }
 
 function nodeRuntimeSummary(n: SafeVelocityNode, t: (key: string, fallback?: string) => string) {
   const cfg = n.runtime_config ?? {};
-  if (n.mode === "gate") {
-    const initial = typeof cfg.gate_initial_server === "string" && cfg.gate_initial_server ? cfg.gate_initial_server : "—";
-    const holding = typeof cfg.gate_holding_server === "string" && cfg.gate_holding_server ? cfg.gate_holding_server : "—";
+  if (n.kind === "downstream_velocity") {
+    const initial = typeof cfg.downstream_initial_server === "string" && cfg.downstream_initial_server ? cfg.downstream_initial_server : "—";
+    const holding = typeof cfg.downstream_holding_server === "string" && cfg.downstream_holding_server ? cfg.downstream_holding_server : "—";
     return `${t("admin.nodes.runtime.initial")}: ${initial} · ${t("admin.nodes.runtime.holding")}: ${holding}`;
   }
   const target = typeof cfg.portal_requested_server_id === "string" && cfg.portal_requested_server_id ? cfg.portal_requested_server_id : "default";
   const source = typeof cfg.portal_source_id === "string" && cfg.portal_source_id ? cfg.portal_source_id : n.name;
   return `${t("admin.nodes.runtime.target")}: ${target} · ${t("admin.nodes.runtime.source")}: ${source}`;
+}
+
+function configString(cfg: Record<string, unknown>, key: string): string {
+  const value = cfg[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function configBool(cfg: Record<string, unknown>, key: string, fallback: boolean): boolean {
+  const value = cfg[key];
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function LimboAuthBadges({ node }: { node: SafeVelocityNode }) {
+  const { t } = useI18n();
+  const cfg = node.runtime_config ?? {};
+  return (
+    <div className="row-actions" style={{ justifyContent: "flex-start" }}>
+      <Badge tone={configBool(cfg, "dialog_enabled", true) ? "success" : "neutral"} dot>
+        {t("admin.loginPortals.auth.dialog")}
+      </Badge>
+      <Badge tone={configBool(cfg, "dialog_fallback_chat_enabled", true) ? "info" : "neutral"} dot>
+        {t("admin.loginPortals.auth.chat")}
+      </Badge>
+    </div>
+  );
 }
 
 interface IssuedToken {
@@ -55,7 +80,7 @@ interface IssuedToken {
   name: string;
 }
 
-export function NodesPage() {
+export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "downstream_velocity"; embedded?: boolean }) {
   const { t, tError } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
@@ -66,8 +91,8 @@ export function NodesPage() {
   const [issuedToken, setIssuedToken] = useState<IssuedToken | null>(null);
 
   const q = useQuery({
-    queryKey: ["admin.nodes"],
-    queryFn: fetchNodes,
+    queryKey: ["admin.nodes", kind],
+    queryFn: () => fetchNodes(kind),
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
   });
@@ -85,7 +110,7 @@ export function NodesPage() {
   });
 
   const issueMut = useMutation({
-    mutationFn: (name: string) => createNode({ name }),
+    mutationFn: (name: string) => createNode({ name, kind }),
     onSuccess: (res, name) => {
       setIssuedToken({
         token_once: res.token_once,
@@ -99,7 +124,7 @@ export function NodesPage() {
     onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
   });
 
-  const columns: DataColumn<SafeVelocityNode>[] = [
+  const downstreamColumns: DataColumn<SafeVelocityNode>[] = [
     {
       key: "name",
       header: t("admin.nodes.col.name"),
@@ -161,23 +186,112 @@ export function NodesPage() {
       ),
     },
   ];
+  const limboColumns: DataColumn<SafeVelocityNode>[] = [
+    {
+      key: "name",
+      header: t("admin.nodes.col.name"),
+      minWidth: "180px",
+      render: (n) => (
+        <div className="node-name">
+          <span className="node-ico">
+            <Icon name="layers" size={15} />
+          </span>
+          {n.name}
+        </div>
+      ),
+    },
+    { key: "status", header: t("admin.nodes.col.status"), minWidth: "110px", render: (n) => <NodeStatusBadge status={n.status} /> },
+    {
+      key: "target",
+      header: t("admin.loginPortals.col.target"),
+      minWidth: "180px",
+      render: (n) => (
+        <span>
+          {n.server_label && n.server_label !== "—" ? n.server_label : configString(n.runtime_config, "portal_requested_server_id") || n.server_id || "—"}
+          <br />
+          <code className="mono muted-cell">{configString(n.runtime_config, "portal_requested_server_id") || n.server_id || "—"}</code>
+        </span>
+      ),
+    },
+    {
+      key: "host",
+      header: t("admin.loginPortals.col.host"),
+      minWidth: "180px",
+      render: (n) => <code className="mono">{configString(n.runtime_config, "portal_requested_host") || t("common.all")}</code>,
+    },
+    {
+      key: "source",
+      header: t("admin.loginPortals.col.source"),
+      minWidth: "150px",
+      render: (n) => <code className="mono">{configString(n.runtime_config, "portal_source_id") || n.name}</code>,
+    },
+    {
+      key: "auth",
+      header: t("admin.loginPortals.col.auth"),
+      minWidth: "150px",
+      render: (n) => <LimboAuthBadges node={n} />,
+    },
+    {
+      key: "version",
+      header: t("admin.loginPortals.col.version"),
+      minWidth: "130px",
+      render: (n) => <span className="muted-cell">{n.plugin_version || "—"}</span>,
+    },
+    {
+      key: "heartbeat",
+      header: t("admin.nodes.col.heartbeat"),
+      minWidth: "130px",
+      render: (n) => <span className="muted-cell">{formatRelativeTime(n.last_seen_at)}</span>,
+    },
+    {
+      key: "actions",
+      header: "",
+      align: "right",
+      width: "52px",
+      minWidth: "52px",
+      sticky: "right",
+      render: (n) => (
+        <div className="row-actions">
+          <IconButton
+            name="close"
+            size={16}
+            label={t("admin.nodes.delete")}
+            onClick={(event) => {
+              event.stopPropagation();
+              setDeleteTarget(n);
+            }}
+            data-testid={`delete-${n.id}`}
+          />
+        </div>
+      ),
+    },
+  ];
+  const columns = kind === "limbo_portal" ? limboColumns : downstreamColumns;
+  const issueButton = (
+    <Button
+      variant="primary"
+      icon="plus"
+      onClick={() => setIssueOpen(true)}
+      data-testid="node-issue-open"
+    >
+      {t("admin.nodes.issueToken")}
+    </Button>
+  );
 
-  return (
-    <PageShell>
-      <PageHeader
-        title={t("admin.nodes.heading")}
-        desc={t("admin.nodes.desc")}
-        action={(
-          <Button
-            variant="primary"
-            icon="plus"
-            onClick={() => setIssueOpen(true)}
-            data-testid="node-issue-open"
-          >
-            {t("admin.nodes.issueToken")}
-          </Button>
-        )}
-      />
+  const content = (
+    <>
+      {embedded ? (
+        <div className="section-toolbar">
+          <span />
+          {issueButton}
+        </div>
+      ) : (
+        <PageHeader
+          title={kind === "limbo_portal" ? t("admin.loginPortals.heading") : t("admin.nodes.heading")}
+          desc={kind === "limbo_portal" ? t("admin.loginPortals.desc") : t("admin.nodes.desc")}
+          action={issueButton}
+        />
+      )}
       {q.error ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : null}
       <Card noBody className="table-card">
         <DataTable
@@ -185,19 +299,19 @@ export function NodesPage() {
           rows={rows}
           columns={columns}
           rowKey={(r) => r.id}
-          onRowClick={(r) => navigate(`/nodes/${encodeURIComponent(r.id)}`)}
+          onRowClick={(r) => navigate(`${kind === "limbo_portal" ? "/login-portals" : "/nodes"}/${encodeURIComponent(r.id)}`)}
           empty={
             <EmptyState
               icon="server"
-              title={t("admin.nodes.empty")}
-              description={t("admin.nodes.empty.desc")}
+              title={kind === "limbo_portal" ? t("admin.loginPortals.empty") : t("admin.nodes.empty")}
+              description={kind === "limbo_portal" ? t("admin.loginPortals.empty.desc") : t("admin.nodes.empty.desc")}
               testId="nodes-empty"
             />
           }
           testId="nodes-table"
         />
         <div className="card-foot-note">
-          <Icon name="info" size={13} /> {t("admin.nodes.footnote")}
+          <Icon name="info" size={13} /> {kind === "limbo_portal" ? t("admin.loginPortals.footnote") : t("admin.nodes.footnote")}
         </div>
       </Card>
       <Dialog
@@ -290,6 +404,8 @@ export function NodesPage() {
           {deleteTarget?.name} · {deleteTarget?.instance_fingerprint || deleteTarget?.token_fingerprint}
         </p>
       </Dialog>
-    </PageShell>
+    </>
   );
+
+  return embedded ? content : <PageShell>{content}</PageShell>;
 }

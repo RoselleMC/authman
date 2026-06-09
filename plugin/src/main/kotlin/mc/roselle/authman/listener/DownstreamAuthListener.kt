@@ -3,6 +3,7 @@ package mc.roselle.authman.listener
 import com.velocitypowered.api.event.Subscribe
 import com.velocitypowered.api.event.connection.DisconnectEvent
 import com.velocitypowered.api.event.connection.LoginEvent
+import com.velocitypowered.api.event.connection.PostLoginEvent
 import com.velocitypowered.api.event.player.CookieReceiveEvent
 import com.velocitypowered.api.event.player.GameProfileRequestEvent
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent
@@ -21,7 +22,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
-class GateAuthListener(
+class DownstreamAuthListener(
     private val plugin: AuthmanPlugin,
     private val server: ProxyServer,
     private val logger: Logger,
@@ -43,7 +44,7 @@ class GateAuthListener(
             client.resolvePlayer(event.username)
         } catch (ex: Exception) {
             plugin.lockIfCoreRejected(ex)
-            logger.warn("Failed to resolve Authman gate profile {}", event.username, ex)
+            logger.warn("Failed to resolve Authman downstream profile {}", event.username, ex)
             return
         }
         val profile = event.gameProfile
@@ -51,7 +52,7 @@ class GateAuthListener(
             .withName(resolved.protocolName)
             .withProperties(resolved.properties)
         event.setGameProfile(profile)
-        logger.info("Applied Authman gate identity for {} as {} / {}", event.username, resolved.protocolName, resolved.uuid)
+        logger.info("Applied Authman downstream identity for {} as {} / {}", event.username, resolved.protocolName, resolved.uuid)
     }
 
     @Subscribe
@@ -61,9 +62,16 @@ class GateAuthListener(
             return
         }
         val player = event.player
+        logger.info("Authman downstream LoginEvent identity for {} / {}", player.username, player.uniqueId)
         pending.add(player.uniqueId)
         requestGrantCookie(player)
         scheduleValidationTimeout(player)
+    }
+
+    @Subscribe
+    fun onPostLogin(event: PostLoginEvent) {
+        val player = event.player
+        logger.info("Authman downstream PostLoginEvent identity for {} / {}", player.username, player.uniqueId)
     }
 
     @Subscribe
@@ -116,32 +124,29 @@ class GateAuthListener(
         }
         validating.remove(player.uniqueId)
         pending.remove(player.uniqueId)
-        logger.info("Accepted Authman gate grant for {} / {}", result.resolved.protocolName, result.resolved.uuid)
+        logger.info("Accepted Authman downstream grant for {} / {}", result.resolved.protocolName, result.resolved.uuid)
         scheduleInitialConnect(player, 250)
     }
 
     @Subscribe
-	fun onChooseInitialServer(event: PlayerChooseInitialServerEvent) {
-		val player = event.player
+    fun onChooseInitialServer(event: PlayerChooseInitialServerEvent) {
+        val player = event.player
         if (plugin.isCoreAccessRevoked()) {
             event.setInitialServer(null)
             return
         }
-		if (!allowed.contains(player.uniqueId)) {
-			requestGrantCookie(player)
-            val holding = config.gateHoldingServer
-            if (holding.isBlank()) {
-                event.setInitialServer(null)
+        if (!allowed.contains(player.uniqueId)) {
+            requestGrantCookie(player)
+            val holding = config.downstreamHoldingServer
+            if (holding.isNotBlank()) {
+                event.setInitialServer(server.getServer(holding).orElse(null))
                 return
             }
-            event.setInitialServer(server.getServer(holding).orElse(null))
-			return
-		}
-		val configured = config.gateInitialServer
-		if (configured.isNotBlank()) {
-			event.setInitialServer(server.getServer(configured).orElse(event.initialServer.orElse(null)))
-		}
-	}
+            event.setInitialServer(resolveInitialServer(event))
+            return
+        }
+        event.setInitialServer(resolveInitialServer(event))
+    }
 
     @Subscribe
 	fun onServerPreConnect(event: ServerPreConnectEvent) {
@@ -151,7 +156,7 @@ class GateAuthListener(
             return
         }
 		if (!allowed.contains(event.player.uniqueId)) {
-            val holding = config.gateHoldingServer
+            val holding = config.downstreamHoldingServer
             if (holding.isNotBlank() && event.originalServer.serverInfo.name == holding) {
                 requestGrantCookie(event.player)
                 return
@@ -181,7 +186,7 @@ class GateAuthListener(
 
     @Subscribe
     fun onServerConnected(event: ServerConnectedEvent) {
-        val holding = config.gateHoldingServer
+        val holding = config.downstreamHoldingServer
         if (holding.isNotBlank() && allowed.contains(event.player.uniqueId) && event.server.serverInfo.name == holding) {
             scheduleInitialConnect(event.player, 250)
         }
@@ -197,17 +202,14 @@ class GateAuthListener(
         if (!player.isActive) {
             return
         }
-        val configured = config.gateInitialServer
-        if (configured.isBlank()) {
-            return
-        }
-        val target = server.getServer(configured).orElse(null) ?: return
-        if (player.currentServer.map { it.server.serverInfo.name == configured }.orElse(false)) {
+        val target = resolveInitialServer(null) ?: return
+        val targetName = target.serverInfo.name
+        if (player.currentServer.map { it.server.serverInfo.name == targetName }.orElse(false)) {
             return
         }
         player.createConnectionRequest(target).connect().whenComplete { result, error ->
             if (error != null) {
-                logger.warn("Failed to connect Authman gate player {} to {}", player.username, configured, error)
+                logger.warn("Failed to connect Authman downstream player {} to {}", player.username, targetName, error)
                 return@whenComplete
             }
             if (result.status == com.velocitypowered.api.proxy.ConnectionRequestBuilder.Status.CONNECTION_IN_PROGRESS) {
@@ -215,9 +217,25 @@ class GateAuthListener(
                 return@whenComplete
             }
             if (!result.isSuccessful) {
-                logger.warn("Authman gate player {} was not connected to {}: {}", player.username, configured, result.status)
+                logger.warn("Authman downstream player {} was not connected to {}: {}", player.username, targetName, result.status)
             }
         }
+    }
+
+    private fun resolveInitialServer(event: PlayerChooseInitialServerEvent?): com.velocitypowered.api.proxy.server.RegisteredServer? {
+        val configured = config.downstreamInitialServer
+        if (configured.isNotBlank()) {
+            val configuredServer = server.getServer(configured).orElse(null)
+            if (configuredServer != null) {
+                return configuredServer
+            }
+            logger.warn("Configured Authman downstream initial server {} is not registered in Velocity", configured)
+        }
+        val eventInitial = event?.initialServer?.orElse(null)
+        if (eventInitial != null) {
+            return eventInitial
+        }
+        return server.allServers.firstOrNull()
     }
 
     private fun requestGrantCookie(player: Player) {
@@ -233,16 +251,16 @@ class GateAuthListener(
     private fun scheduleValidationTimeout(player: Player) {
         server.scheduler.buildTask(plugin, Runnable {
             if (player.isActive && pending.contains(player.uniqueId) && !allowed.contains(player.uniqueId)) {
-                reject(player, "Authman gate validation timed out")
+                reject(player, "Authman downstream validation timed out")
             }
-        }).delay(config.gateValidationTimeoutSeconds, TimeUnit.SECONDS).schedule()
+        }).delay(config.downstreamValidationTimeoutSeconds, TimeUnit.SECONDS).schedule()
     }
 
     private fun reject(player: Player, reason: String) {
         pending.remove(player.uniqueId)
         allowed.remove(player.uniqueId)
         validating.remove(player.uniqueId)
-        logger.info("Rejected Authman gate player {}: {}", player.username, reason)
+        logger.info("Rejected Authman downstream player {}: {}", player.username, reason)
         if (player.isActive) {
             player.disconnect(messages.temporaryUnavailable())
         }

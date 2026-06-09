@@ -281,7 +281,8 @@ export function coerceAdminUser(raw: unknown): SafeAdminUser {
 export interface SafeVelocityNode {
   id: string;
   name: string;
-  mode: "portal" | "gate";
+  mode: "limbo_portal" | "downstream_velocity";
+  kind: "limbo_portal" | "downstream_velocity";
   server_id: string;
   server_label: string;
   runtime_config: Record<string, unknown>;
@@ -299,7 +300,8 @@ export function coerceVelocityNode(raw: unknown): SafeVelocityNode {
   return {
     id: asString(r.id, ""),
     name: asString(r.name, "—"),
-    mode: mapEnum(r.mode, ["portal", "gate"] as const, "portal"),
+    mode: mapEnum(firstDefined(r.kind, r.mode), ["limbo_portal", "downstream_velocity"] as const, "downstream_velocity"),
+    kind: mapEnum(firstDefined(r.kind, r.mode), ["limbo_portal", "downstream_velocity"] as const, "downstream_velocity"),
     server_id: asString(r.server_id, ""),
     server_label: asString(firstDefined(r.server_label, r.server_name), "—"),
     runtime_config: asRecord(r.runtime_config),

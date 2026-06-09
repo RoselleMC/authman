@@ -29,6 +29,37 @@ type DownstreamServer struct {
 	UpdatedAt          time.Time
 }
 
+type LimboBlueprint struct {
+	ID          string
+	Name        string
+	Description string
+	Filename    string
+	ContentType string
+	SizeBytes   int64
+	SHA256      string
+	Schematic   []byte
+	Preview     map[string]any
+	Config      map[string]any
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+type ProfileSkin struct {
+	ProfileID         string
+	Model             string
+	SkinPNG           []byte
+	SkinContentType   string
+	SkinSHA256        string
+	CapePNG           []byte
+	CapeContentType   string
+	CapeSHA256        string
+	ElytraPNG         []byte
+	ElytraContentType string
+	ElytraSHA256      string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
 type ExtensionPlayerData struct {
 	ID         string
 	ServerID   string
@@ -191,6 +222,9 @@ type PlayerStore interface {
 	GetProfileByProtocolName(ctx context.Context, protocolName string) (identity.Profile, error)
 	GetPassportForProfile(ctx context.Context, profileID string) (identity.Passport, error)
 	GetPrimaryProfileForPassport(ctx context.Context, passportID string) (identity.Profile, error)
+	GetProfileSkin(ctx context.Context, profileID string) (ProfileSkin, error)
+	SetProfileSkin(ctx context.Context, profileID string, skin ProfileSkin, properties []identity.ProfileProperty) (identity.Profile, error)
+	DeleteProfileSkin(ctx context.Context, profileID string, properties []identity.ProfileProperty, skinSource string) (identity.Profile, error)
 	ListProfilesForPassport(ctx context.Context, passportID string) []identity.Profile
 	ListPassports(ctx context.Context) []identity.Passport
 	ListProfiles(ctx context.Context) []identity.Profile
@@ -252,6 +286,10 @@ type PlayerStore interface {
 	GetDownstreamServer(ctx context.Context, idOrSlug string) (DownstreamServer, error)
 	UpsertDownstreamServer(ctx context.Context, server DownstreamServer) (DownstreamServer, error)
 	DeleteDownstreamServer(ctx context.Context, id string) error
+	ListLimboBlueprints(ctx context.Context) []LimboBlueprint
+	GetLimboBlueprint(ctx context.Context, id string) (LimboBlueprint, error)
+	UpsertLimboBlueprint(ctx context.Context, blueprint LimboBlueprint) (LimboBlueprint, error)
+	DeleteLimboBlueprint(ctx context.Context, id string) error
 	SaveTransferGrant(ctx context.Context, grant auth.TransferGrant) error
 	ConsumeTransferGrant(ctx context.Context, tokenHash string, serverID string, uuid string, protocolName string, gateNodeID string, allowedPortalSources []string, now time.Time) (auth.TransferGrant, error)
 	ListExtensionPlayerData(ctx context.Context, playerID string, serverSlug string, includePrivate bool) []ExtensionPlayerData

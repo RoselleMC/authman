@@ -1,4 +1,4 @@
-import { apiFetch, setCsrfToken } from "@authman/shared";
+import { ApiError, apiFetch, getCsrfToken, getRuntimeConfig, setCsrfToken } from "@authman/shared";
 
 export interface AdminMe {
   id: string;
@@ -120,6 +120,7 @@ export interface PlayerListMeta {
 export interface ProfileSummary {
   id: string;
   uuid: string;
+  avatar_url?: string;
   protocol_name: string;
   normalized_name: string;
   display_name: string;
@@ -163,6 +164,7 @@ export interface PassportRow {
   id: string;
   kind: "premium" | "offline";
   uuid: string;
+  avatar_url?: string;
   username: string;
   username_normalized: string;
   raw_offline_name: string;
@@ -194,7 +196,7 @@ export interface PassportDetail extends PassportRow {
 
 export interface ProfileRow extends ProfileSummary {
   uuid_compact?: string;
-  skin_source: "mojang" | "offline_custom" | "none";
+  skin_source: "mojang" | "custom" | "offline_custom" | "none";
   passport: { id: string; kind: "premium" | "offline"; username: string; status: string } | null;
   last_seen_at: string | null;
   last_seen_ip: string | null;
@@ -203,11 +205,28 @@ export interface ProfileRow extends ProfileSummary {
 }
 
 export interface ProfileDetail extends ProfileRow {
+  skin: ProfileSkinInfo;
   properties: Array<{ name: string; value: string; signature?: string }>;
   presences: PlayerPresence[];
   bans: PlayerBan[];
   audit_events: AuditEventSummary[];
   extension_data: Array<Record<string, unknown>>;
+}
+
+export interface ProfileSkinInfo {
+  source: string;
+  effective_source: "custom" | "mojang" | "textures" | "default";
+  model: "slim" | "wide" | string;
+  default_variant: string;
+  default_model: "slim" | "wide" | string;
+  skin_url: string;
+  cape_url?: string | null;
+  elytra_url?: string | null;
+  avatar_url: string;
+  has_custom_skin: boolean;
+  has_custom_cape: boolean;
+  has_custom_elytra: boolean;
+  updated_at?: string | null;
 }
 
 export interface IdentityListFilters extends Record<string, string | number | undefined> {
@@ -266,6 +285,19 @@ export async function updateProfileStatus(id: string, status: ProfileRow["status
   return res.data;
 }
 
+export async function uploadProfileSkin(id: string, input: { skin: File; cape?: File | null; elytra?: File | null; model: "slim" | "wide" }): Promise<ProfileSkinInfo> {
+  const form = new FormData();
+  form.set("model", input.model);
+  form.set("skin", input.skin);
+  if (input.cape) form.set("cape", input.cape);
+  if (input.elytra) form.set("elytra", input.elytra);
+  return multipartFetch<ProfileSkinInfo>(`/admin/profiles/${encodeURIComponent(id)}/skin`, { method: "POST", body: form });
+}
+
+export async function deleteProfileSkin(id: string): Promise<ProfileSkinInfo> {
+  return multipartFetch<ProfileSkinInfo>(`/admin/profiles/${encodeURIComponent(id)}/skin`, { method: "DELETE" });
+}
+
 export async function createProfileBan(id: string, input: { reason: string; expires_at?: string | null; expires_in_seconds?: number }): Promise<{ ban: PlayerBan; ended_presences: number }> {
   const res = await apiFetch<{ ban: PlayerBan; ended_presences: number }>(`/admin/profiles/${encodeURIComponent(id)}/bans`, { method: "POST", body: input });
   return res.data;
@@ -303,7 +335,8 @@ export async function unbindProfile(id: string): Promise<void> {
 export interface VelocityNode {
   id: string;
   name: string;
-  mode: "portal" | "gate";
+  mode: "limbo_portal" | "downstream_velocity";
+  kind: "limbo_portal" | "downstream_velocity";
   server_id: string;
   server_label: string;
   runtime_config?: PortalRuntimeConfig;
@@ -316,8 +349,9 @@ export interface VelocityNode {
   created_at: string;
 }
 
-export async function fetchNodes(): Promise<VelocityNode[]> {
-  const res = await apiFetch<VelocityNode[]>("/admin/velocity/nodes");
+export async function fetchNodes(kind: "limbo_portal" | "downstream_velocity" | "all" = "all"): Promise<VelocityNode[]> {
+  const path = kind === "limbo_portal" ? "/admin/login-portals" : kind === "downstream_velocity" ? "/admin/downstream/nodes" : "/admin/nodes";
+  const res = await apiFetch<VelocityNode[]>(path);
   return res.data;
 }
 
@@ -341,8 +375,9 @@ export async function disableNode(id: string): Promise<void> {
 export async function deleteNode(id: string): Promise<void> {
   await apiFetch<null>(`/admin/velocity/nodes/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
-export async function createNode(input: { name: string }): Promise<{ token_once: string; token_fingerprint: string; node: VelocityNode }> {
-  const res = await apiFetch<{ token_once: string; token_fingerprint: string; node: VelocityNode }>("/admin/velocity/nodes", { method: "POST", body: input });
+export async function createNode(input: { name: string; kind?: "limbo_portal" | "downstream_velocity" }): Promise<{ token_once: string; token_fingerprint: string; node: VelocityNode }> {
+  const path = input.kind === "limbo_portal" ? "/admin/login-portals" : input.kind === "downstream_velocity" ? "/admin/downstream/nodes" : "/admin/nodes";
+  const res = await apiFetch<{ token_once: string; token_fingerprint: string; node: VelocityNode }>(path, { method: "POST", body: input });
   return res.data;
 }
 
@@ -530,10 +565,12 @@ export interface DownstreamServer {
     transfer_host?: string;
     transfer_port?: number;
     motd?: string;
+    grant_required?: boolean;
     gate_enabled?: boolean;
     grant_ttl_seconds?: number;
     allowed_portal_sources?: string[];
     portal_hosts?: string[];
+    limbo_blueprint_id?: string;
   };
   target: {
     server_id: string;
@@ -545,6 +582,7 @@ export interface DownstreamServer {
     transfer_host: string;
     transfer_port: number;
     motd: string;
+    grant_required: boolean;
     gate_enabled: boolean;
     grant_ttl_seconds: number;
     allowed_portal_sources: string[];
@@ -552,6 +590,8 @@ export interface DownstreamServer {
     extension_providers: string[];
   };
   extension_providers: string[];
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface DownstreamServerInput {
@@ -582,6 +622,95 @@ export async function updateDownstreamServer(id: string, input: DownstreamServer
 }
 export async function deleteDownstreamServer(id: string): Promise<void> {
   await apiFetch<null>(`/admin/downstream-servers/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export interface LimboBlueprintPreviewBlock {
+  x: number;
+  y: number;
+  z: number;
+  p: number;
+  name?: string;
+}
+
+export interface LimboBlueprintPreview {
+  bounds?: {
+    min_x: number;
+    min_y: number;
+    min_z: number;
+    max_x: number;
+    max_y: number;
+    max_z: number;
+    width: number;
+    height: number;
+    length: number;
+  };
+  block_count?: number;
+  sampled?: number;
+  palette?: Array<{ id: number; name: string }>;
+  blocks?: LimboBlueprintPreviewBlock[];
+}
+
+export interface LimboBlueprintConfig {
+  world_id?: string;
+  dimension?: "overworld" | "nether" | "end";
+  spawn?: { x: number; y: number; z: number; yaw: number; pitch: number };
+  [key: string]: unknown;
+}
+
+export interface LimboBlueprint {
+  id: string;
+  name: string;
+  description: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  sha256: string;
+  preview: LimboBlueprintPreview;
+  config: LimboBlueprintConfig;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchLimboBlueprints(): Promise<LimboBlueprint[]> {
+  const res = await apiFetch<LimboBlueprint[]>("/admin/limbo-blueprints");
+  return res.data;
+}
+
+export async function fetchLimboBlueprint(id: string): Promise<LimboBlueprint> {
+  const res = await apiFetch<LimboBlueprint>(`/admin/limbo-blueprints/${encodeURIComponent(id)}`);
+  return res.data;
+}
+
+export async function updateLimboBlueprint(id: string, input: { name: string; description: string; config: LimboBlueprintConfig }): Promise<LimboBlueprint> {
+  const res = await apiFetch<LimboBlueprint>(`/admin/limbo-blueprints/${encodeURIComponent(id)}`, { method: "PUT", body: input });
+  return res.data;
+}
+
+export async function deleteLimboBlueprint(id: string): Promise<void> {
+  await apiFetch<null>(`/admin/limbo-blueprints/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function uploadLimboBlueprint(input: { file: File; name?: string; description?: string; config?: LimboBlueprintConfig }): Promise<LimboBlueprint> {
+  const cfg = getRuntimeConfig();
+  const form = new FormData();
+  form.append("file", input.file);
+  if (input.name) form.append("name", input.name);
+  if (input.description) form.append("description", input.description);
+  if (input.config) form.append("config", JSON.stringify(input.config));
+  const headers: Record<string, string> = { Accept: "application/json" };
+  const csrf = getCsrfToken();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
+  const res = await fetch(`${cfg.apiBase}/admin/limbo-blueprints/upload`, {
+    method: "POST",
+    credentials: "include",
+    headers,
+    body: form,
+  });
+  const envelope = await res.json().catch(() => null) as { data?: LimboBlueprint; error?: { code: string; message: string } } | null;
+  if (!res.ok || envelope?.error || !envelope?.data) {
+    throw new ApiError(res.status, envelope?.error ?? null, res.statusText);
+  }
+  return envelope.data;
 }
 
 export interface ExtensionRegistryEntry {
@@ -893,6 +1022,26 @@ function bufferToBase64URL(buffer: ArrayBuffer): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function multipartFetch<T>(path: string, opts: { method: "POST" | "DELETE"; body?: FormData }): Promise<T> {
+  const base = getRuntimeConfig().apiBase;
+  const url = path.startsWith("/") ? `${base}${path}` : `${base}/${path}`;
+  const headers: Record<string, string> = { Accept: "application/json" };
+  const csrf = getCsrfToken();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
+  const res = await fetch(url, {
+    method: opts.method,
+    headers,
+    credentials: "include",
+    body: opts.body,
+  });
+  const text = await res.text();
+  const envelope = text ? (JSON.parse(text) as { data?: T; error?: { code: string; message: string; details?: Record<string, unknown> } }) : null;
+  if (!res.ok || envelope?.error) {
+    throw new ApiError(res.status, envelope?.error ?? null, res.statusText);
+  }
+  return envelope?.data as T;
 }
 
 export interface SystemSummary {

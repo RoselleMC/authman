@@ -96,7 +96,9 @@ export function PassportsPage() {
       filter: { type: "text", placeholder: t("admin.passports.searchPlaceholder") },
       render: (r) => (
         <div className="player-cell">
-          <span className="pa-avatar">{(r.username || "?")[0]}</span>
+          <span className={r.avatar_url ? "pa-avatar has-image" : "pa-avatar"}>
+            {r.avatar_url ? <img src={r.avatar_url} alt="" aria-hidden="true" /> : (r.username || "?")[0]}
+          </span>
           <span className="player-name">{r.username}</span>
         </div>
       ),

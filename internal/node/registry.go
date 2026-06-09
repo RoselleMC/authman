@@ -28,6 +28,7 @@ type Node struct {
 
 type Registration struct {
 	Mode                string
+	Kind                string
 	Name                string
 	ServerID            string
 	InstanceFingerprint string
@@ -47,6 +48,10 @@ func NewRegistry() *Registry {
 }
 
 func (r *Registry) Create(ctx context.Context, name string, now time.Time) (Node, string, error) {
+	return r.CreateKind(ctx, name, "downstream_velocity", now)
+}
+
+func (r *Registry) CreateKind(ctx context.Context, name string, kind string, now time.Time) (Node, string, error) {
 	if name == "" {
 		return Node{}, "", fmt.Errorf("node name is required")
 	}
@@ -60,7 +65,7 @@ func (r *Registry) Create(ctx context.Context, name string, now time.Time) (Node
 	node := Node{
 		ID:               fmt.Sprintf("node-%d", r.nextID),
 		ServerID:         "default",
-		Mode:             "portal",
+		Mode:             NormalizeKind(kind),
 		Name:             name,
 		TokenHash:        auth.HashToken("node", token),
 		TokenFingerprint: auth.TokenFingerprint(token),
@@ -124,9 +129,12 @@ func (r *Registry) Register(ctx context.Context, registration Registration, now 
 	}
 	name := registration.Name
 	if name == "" {
-		name = "velocity-" + registration.InstanceFingerprint[:min(8, len(registration.InstanceFingerprint))]
+		name = "node-" + registration.InstanceFingerprint[:min(8, len(registration.InstanceFingerprint))]
 	}
-	mode := NormalizeMode(registration.Mode)
+	kind := NormalizeKind(registration.Kind)
+	if registration.Kind == "" {
+		kind = NormalizeKind(registration.Mode)
+	}
 	serverID := registration.ServerID
 	if serverID == "" {
 		serverID = "default"
@@ -140,7 +148,7 @@ func (r *Registry) Register(ctx context.Context, registration Registration, now 
 				return Node{}, fmt.Errorf("node is revoked")
 			}
 			node.Name = name
-			node.Mode = mode
+			node.Mode = kind
 			node.ServerID = serverID
 			node.TokenFingerprint = registration.AccessFingerprint
 			node.PluginVersion = registration.PluginVersion
@@ -154,7 +162,7 @@ func (r *Registry) Register(ctx context.Context, registration Registration, now 
 	node := Node{
 		ID:                  fmt.Sprintf("node-%d", r.nextID),
 		ServerID:            serverID,
-		Mode:                mode,
+		Mode:                kind,
 		Name:                name,
 		TokenFingerprint:    registration.AccessFingerprint,
 		InstanceFingerprint: registration.InstanceFingerprint,
@@ -169,12 +177,22 @@ func (r *Registry) Register(ctx context.Context, registration Registration, now 
 }
 
 func NormalizeMode(value string) string {
+	return NormalizeKind(value)
+}
+
+func NormalizeKind(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "gate":
-		return "gate"
+	case "limbo", "limbo_portal", "portal":
+		return "limbo_portal"
+	case "downstream", "downstream_velocity", "velocity", "gate":
+		return "downstream_velocity"
 	default:
-		return "portal"
+		return "downstream_velocity"
 	}
+}
+
+func IsLimboPortal(value string) bool {
+	return NormalizeKind(value) == "limbo_portal"
 }
 
 func (r *Registry) List(ctx context.Context) []Node {

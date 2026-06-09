@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/RoselleMC/authman/internal/auth"
 	"github.com/RoselleMC/authman/internal/extensions"
 	"github.com/RoselleMC/authman/internal/identity"
+	"github.com/RoselleMC/authman/internal/mojang"
 	"github.com/RoselleMC/authman/internal/node"
 	"github.com/RoselleMC/authman/internal/store"
 	"github.com/RoselleMC/authman/internal/yggdrasil"
@@ -419,6 +421,23 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 			"reason":          err.Error(),
 			"verification_by": "mojang",
 		})
+		if errors.Is(err, mojang.ErrAllRoutesFailed) || !errors.Is(err, yggdrasil.ErrProfileNotFound) {
+			if player, ok := s.resolveOfflineAfterMojangFailure(r.Context(), req.Username); ok {
+				s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "limbo.session.verify_offline_fallback", playerEventDetails(player, map[string]any{
+					"username":        req.Username,
+					"server_id":       req.ServerID,
+					"remote_ip":       req.RemoteIP,
+					"requested_host":  req.RequestedHost,
+					"protocol":        req.ProtocolVersion,
+					"reason":          err.Error(),
+					"verification_by": "mojang",
+				}))
+				api.WriteError(w, api.NewError(http.StatusUnauthorized, "session.verify_failed", "Mojang verifier is unavailable; registered offline passport may authenticate with password"))
+				return
+			}
+			api.WriteError(w, api.NewError(http.StatusServiceUnavailable, "mojang.verifier_unavailable", err.Error()))
+			return
+		}
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "session.verify_failed", err.Error()))
 		return
 	}
@@ -448,6 +467,14 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 		},
 		"player": playerData(player),
 	}, nil)
+}
+
+func (s *Server) resolveOfflineAfterMojangFailure(ctx context.Context, username string) (identity.Player, bool) {
+	player, err := s.ResolveOffline(ctx, strings.TrimSpace(username))
+	if err != nil || player.Kind != identity.PlayerKindOffline {
+		return identity.Player{}, false
+	}
+	return player, true
 }
 
 func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request) {

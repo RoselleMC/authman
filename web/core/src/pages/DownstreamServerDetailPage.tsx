@@ -2,13 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AdvancedList,
   ApiError,
   BackLink,
   Badge,
   Button,
   Card,
   ConfirmDialog,
-  DataTable,
   DetailActions,
   DetailAside,
   DetailBody,
@@ -28,8 +28,9 @@ import {
   coerceVelocityNode,
   formatRelativeTime,
   useI18n,
+  useListState,
   useToast,
-  type DataColumn,
+  type ListColumn,
   type SafeVelocityNode,
 } from "@authman/shared";
 import {
@@ -104,6 +105,7 @@ export function DownstreamServerDetailPage() {
   const [tab, setTab] = useState<Tab>("routing");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteNodeTarget, setDeleteNodeTarget] = useState<SafeVelocityNode | null>(null);
+  const [bulkDeleteNodes, setBulkDeleteNodes] = useState<SafeVelocityNode[]>([]);
   const [issueOpen, setIssueOpen] = useState(false);
   const [issueName, setIssueName] = useState("");
   const [issuedToken, setIssuedToken] = useState<IssuedToken | null>(null);
@@ -116,6 +118,7 @@ export function DownstreamServerDetailPage() {
     refetchIntervalInBackground: false,
   });
   const server = q.data;
+  const nodeList = useListState({ urlPrefix: "serverNodes", urlSync: false, defaults: { pageSize: 10, hidden: ["fingerprint"] } });
   const [input, setInput] = useState<DownstreamServerInput | null>(null);
   const [portalHosts, setPortalHosts] = useState("");
   const [allowedSources, setAllowedSources] = useState("");
@@ -173,6 +176,17 @@ export function DownstreamServerDetailPage() {
     },
     onError: (err) => toast.danger(err instanceof ApiError ? err.message : t("common.unknown")),
   });
+  const bulkDeleteNodeMut = useMutation({
+    mutationFn: async (rows: SafeVelocityNode[]) => {
+      await Promise.all(rows.map((row) => deleteNode(row.id)));
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.nodes.delete.toast") });
+      setBulkDeleteNodes([]);
+      void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? err.message : t("common.unknown")),
+  });
   const issueNodeMut = useMutation({
     mutationFn: (name: string) => createNode({ name, kind: "downstream_velocity" }),
     onSuccess: (res, name) => {
@@ -190,10 +204,14 @@ export function DownstreamServerDetailPage() {
   function setConfig(next: Partial<DownstreamServerInput["portal_config"]>) {
     setInput((current) => current ? { ...current, portal_config: { ...current.portal_config, ...next } } : current);
   }
-  const nodeColumns: DataColumn<SafeVelocityNode>[] = [
+  const nodeColumns: ListColumn<SafeVelocityNode>[] = [
     {
       key: "name",
       header: t("admin.nodes.col.name"),
+      mandatory: true,
+      sortable: true,
+      sortValue: (n) => n.name,
+      filter: { type: "text" },
       render: (n) => (
         <div className="node-name">
           <span className="node-ico"><Icon name="server" size={15} /></span>
@@ -201,7 +219,22 @@ export function DownstreamServerDetailPage() {
         </div>
       ),
     },
-    { key: "status", header: t("admin.nodes.col.status"), render: (n) => <NodeStatusBadge status={n.status} /> },
+    {
+      key: "status",
+      header: t("admin.nodes.col.status"),
+      sortable: true,
+      sortValue: (n) => n.status,
+      filter: {
+        type: "select",
+        options: [
+          { value: "", label: t("common.all") },
+          { value: "active", label: t("admin.nodes.status.active") },
+          { value: "stale", label: t("admin.nodes.status.stale") },
+          { value: "offline", label: t("status.offline") },
+        ],
+      },
+      render: (n) => <NodeStatusBadge status={n.status} />,
+    },
     { key: "runtime", header: t("admin.nodes.col.runtime"), minWidth: "220px", render: (n) => <span className="muted-cell">{nodeRuntimeSummary(n, t)}</span> },
     {
       key: "fingerprint",
@@ -213,9 +246,17 @@ export function DownstreamServerDetailPage() {
       key: "version",
       header: t("admin.nodes.col.version"),
       minWidth: "150px",
+      sortable: true,
+      sortValue: (n) => n.plugin_version ?? "",
       render: (n) => <span className="muted-cell">{n.plugin_version || "—"}{n.velocity_version ? ` / ${n.velocity_version}` : ""}</span>,
     },
-    { key: "heartbeat", header: t("admin.nodes.col.heartbeat"), render: (n) => <span className="muted-cell">{formatRelativeTime(n.last_seen_at)}</span> },
+    {
+      key: "heartbeat",
+      header: t("admin.nodes.col.heartbeat"),
+      sortable: true,
+      sortValue: (n) => n.last_seen_at ?? "",
+      render: (n) => <span className="muted-cell">{formatRelativeTime(n.last_seen_at)}</span>,
+    },
     {
       key: "actions",
       header: "",
@@ -315,15 +356,24 @@ export function DownstreamServerDetailPage() {
             <>
               <Card
                 title={t("admin.servers.instances")}
-                actions={<Button variant="primary" icon="plus" onClick={() => setIssueOpen(true)} data-testid="server-node-issue-open">{t("admin.nodes.issueToken")}</Button>}
                 noBody
                 className="table-card"
               >
-                <DataTable
+                <AdvancedList
                   loading={nodesQ.isLoading}
                   rows={nodes}
                   columns={nodeColumns}
                   rowKey={(r) => r.id}
+                  state={nodeList.state}
+                  onStateChange={nodeList.setState}
+                  onRowClick={(r) => navigate(`/nodes/${encodeURIComponent(r.id)}`)}
+                  primaryActions={<Button variant="primary" icon="plus" onClick={() => setIssueOpen(true)} data-testid="server-node-issue-open">{t("admin.nodes.issueToken")}</Button>}
+                  selectable
+                  selectionActions={(selectedRows) => (
+                    <Button size="sm" variant="danger-soft" icon="close" onClick={() => setBulkDeleteNodes(selectedRows)}>
+                      {t("admin.nodes.delete")}
+                    </Button>
+                  )}
                   empty={(
                     <EmptyState
                       icon="server"
@@ -429,6 +479,17 @@ export function DownstreamServerDetailPage() {
           {deleteNodeTarget?.name} · {deleteNodeTarget?.instance_fingerprint || deleteNodeTarget?.token_fingerprint}
         </p>
       </Dialog>
+      <ConfirmDialog
+        open={bulkDeleteNodes.length > 0}
+        onCancel={() => setBulkDeleteNodes([])}
+        onConfirm={() => bulkDeleteNodeMut.mutate(bulkDeleteNodes)}
+        title={t("admin.nodes.delete")}
+        body={t("admin.nodes.delete.desc")}
+        confirmLabel={t("admin.nodes.delete")}
+        destructive
+        loading={bulkDeleteNodeMut.isPending}
+        testId="dialog-bulk-delete-server-node"
+      />
       <ConfirmDialog
         open={deleteOpen}
         onCancel={() => setDeleteOpen(false)}

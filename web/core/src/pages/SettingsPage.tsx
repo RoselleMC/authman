@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as QRCode from "qrcode";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import {
+  AdvancedList,
   Alert,
   Badge,
   Button,
@@ -10,7 +11,6 @@ import {
   ConfirmDialog,
   ConfigGrid,
   ConfigRow,
-  DataTable,
   Dialog,
   EmptyState,
   ErrorState,
@@ -31,8 +31,9 @@ import {
   cx,
   formatAbsTime,
   useI18n,
+  useListState,
   useToast,
-  type DataColumn,
+  type ListColumn,
   type SafeAdminUser,
 } from "@authman/shared";
 import {
@@ -478,6 +479,7 @@ function AdminsPanel() {
   const { hasPermission, user: currentUser } = useSession();
   const toast = useToast();
   const qc = useQueryClient();
+  const list = useListState({ urlPrefix: "admins", urlSync: false, defaults: { pageSize: 10 }, storageScope: currentUser?.id });
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<SafeAdminUser | null>(null);
   const [totpResetUser, setTOTPResetUser] = useState<SafeAdminUser | null>(null);
@@ -528,10 +530,14 @@ function AdminsPanel() {
       await qc.invalidateQueries({ queryKey: ["admin.users"] });
     },
   });
-  const columns: DataColumn<SafeAdminUser>[] = [
+  const columns: ListColumn<SafeAdminUser>[] = [
     {
       key: "name",
       header: t("admin.settings.col.admin"),
+      mandatory: true,
+      sortable: true,
+      sortValue: (u) => u.display_name || u.username || u.email,
+      filter: { type: "text" },
       render: (u) => (
         <div className="admin-user">
           <span className="acct-avatar" style={{ width: 30, height: 30 }}>
@@ -547,6 +553,15 @@ function AdminsPanel() {
     {
       key: "role",
       header: t("admin.settings.col.role"),
+      sortable: true,
+      sortValue: (u) => u.role_alias || u.role,
+      filter: {
+        type: "select",
+        options: [
+          { value: "", label: t("common.all") },
+          ...roles.map((role) => ({ value: role.id, label: roleLabel(role) })),
+        ],
+      },
       render: (u) => {
         const role = rolesByID.get(u.role);
         const label = u.role_alias || (role ? roleLabel(role) : t(`admin.settings.role.${u.role}`, u.role));
@@ -561,6 +576,16 @@ function AdminsPanel() {
     {
       key: "status",
       header: t("admin.settings.col.status"),
+      sortable: true,
+      sortValue: (u) => u.status,
+      filter: {
+        type: "select",
+        options: [
+          { value: "", label: t("common.all") },
+          { value: "active", label: t("status.active") },
+          { value: "disabled", label: t("status.disabled") },
+        ],
+      },
       render: (u) =>
         u.status === "active" ? (
           <Badge tone="success" dot>
@@ -584,7 +609,13 @@ function AdminsPanel() {
         </div>
       ),
     },
-    { key: "created", header: t("admin.settings.col.created"), render: (u) => (u.created_at ? formatAbsTime(u.created_at) : "—") },
+    {
+      key: "created",
+      header: t("admin.settings.col.created"),
+      sortable: true,
+      sortValue: (u) => u.created_at ?? "",
+      render: (u) => (u.created_at ? formatAbsTime(u.created_at) : "—"),
+    },
     {
       key: "actions",
       header: "",
@@ -636,11 +667,13 @@ function AdminsPanel() {
         {usersQ.error ? (
           <ErrorState error={usersQ.error} onRetry={() => usersQ.refetch()} />
         ) : (
-          <DataTable
+          <AdvancedList
             loading={usersQ.isLoading}
             rows={adminUsers}
             columns={columns}
             rowKey={(r) => r.id}
+            state={list.state}
+            onStateChange={list.setState}
             empty={<EmptyState icon="users" title={t("admin.settings.emptyAdmins")} />}
             testId="admin-users-table"
           />

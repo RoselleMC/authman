@@ -72,7 +72,7 @@ func main() {
 	flag.StringVar(&cfg.WorldID, "world-id", getenv("AUTHMAN_LIMBO_WORLD_ID", "authman"), "limbo world id")
 	flag.StringVar(&cfg.SourceID, "source-id", getenv("AUTHMAN_LIMBO_SOURCE_ID", ""), "portal source id")
 	flag.StringVar(&cfg.DefaultHost, "default-host", getenv("AUTHMAN_LIMBO_DEFAULT_HOST", ""), "default requested host")
-	flag.StringVar(&cfg.LoginMode, "login-mode", getenv("AUTHMAN_LIMBO_LOGIN_MODE", "offline"), "limbo login mode: offline or online")
+	flag.StringVar(&cfg.LoginMode, "login-mode", getenv("AUTHMAN_LIMBO_LOGIN_MODE", "hybrid"), "limbo login mode: hybrid, offline, or online")
 	flag.StringVar(&cfg.OnlineServerID, "online-server-id", getenv("AUTHMAN_LIMBO_ONLINE_SERVER_ID", "authman-limbo"), "serverId challenge used for online-mode session verification")
 	flag.Parse()
 
@@ -198,14 +198,22 @@ func (p *portal) loginMode() limbgo.LoginMode {
 	switch strings.ToLower(strings.TrimSpace(p.cfg.LoginMode)) {
 	case string(limbgo.LoginModeOnline):
 		return limbgo.LoginModeOnline
-	default:
+	case string(limbgo.LoginModeHybrid):
+		return limbgo.LoginModeHybrid
+	case string(limbgo.LoginModeOffline):
 		return limbgo.LoginModeOffline
+	default:
+		return limbgo.LoginModeHybrid
 	}
 }
 
 func (p *portal) verifySession(ctx context.Context, proof limbgo.SessionProof) (limbgo.VerifiedProfile, error) {
 	profile, err := p.client.verifySession(ctx, proof)
 	if err != nil {
+		var coreErr coreAPIError
+		if errors.As(err, &coreErr) && coreErr.Status == http.StatusUnauthorized && coreErr.Code == "session.verify_failed" {
+			return limbgo.VerifiedProfile{}, fmt.Errorf("%w: %s", limbgo.ErrInvalidLogin, coreErr.Message)
+		}
 		return limbgo.VerifiedProfile{}, err
 	}
 	if profile.UUID == "" || profile.Name == "" {
@@ -352,6 +360,9 @@ func (p *portal) showLoginDialog(ctx context.Context, session limbgo.PlayerSessi
 	}
 	inputs := []dialog.Raw(nil)
 	if resolved.Auth.Required {
+		if !session.Player().Verified {
+			body = append(body, dialog.PlainMessage(dialog.Text("Your premium session is not verified. Authman is using offline password authentication for this login."), 240))
+		}
 		inputs = append(inputs, dialog.TextInput("password", dialog.Text("Password"), dialog.TextInputOptions{
 			MaxLength: 128,
 			Width:     240,
@@ -500,7 +511,7 @@ func validateConfig(cfg config) error {
 		return errors.New("AUTHMAN_NODE_TOKEN is required")
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.LoginMode)) {
-	case "", string(limbgo.LoginModeOffline), string(limbgo.LoginModeOnline):
+	case "", string(limbgo.LoginModeHybrid), string(limbgo.LoginModeOffline), string(limbgo.LoginModeOnline):
 	default:
 		return fmt.Errorf("unsupported AUTHMAN_LIMBO_LOGIN_MODE %q", cfg.LoginMode)
 	}
@@ -819,6 +830,19 @@ func (c *coreClient) createGrant(ctx context.Context, username, serverID, reques
 	})
 }
 
+type coreAPIError struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+func (e coreAPIError) Error() string {
+	if e.Code != "" {
+		return e.Code + ": " + e.Message
+	}
+	return fmt.Sprintf("Authman returned HTTP %d", e.Status)
+}
+
 func postJSON[T any](ctx context.Context, c *coreClient, path string, body map[string]any) (T, error) {
 	var out T
 	payload, err := json.Marshal(body)
@@ -849,9 +873,9 @@ func postJSON[T any](ctx context.Context, c *coreClient, path string, body map[s
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		if envelope.Error != nil {
-			return out, fmt.Errorf("%s: %s", envelope.Error.Code, envelope.Error.Message)
+			return out, coreAPIError{Status: resp.StatusCode, Code: envelope.Error.Code, Message: envelope.Error.Message}
 		}
-		return out, fmt.Errorf("Authman returned HTTP %d", resp.StatusCode)
+		return out, coreAPIError{Status: resp.StatusCode}
 	}
 	return envelope.Data, nil
 }
@@ -881,9 +905,9 @@ func getJSON[T any](ctx context.Context, c *coreClient, path string) (T, error) 
 	}
 	if resp.StatusCode >= 400 || envelope.Error != nil {
 		if envelope.Error != nil {
-			return out, fmt.Errorf("%s: %s", envelope.Error.Code, envelope.Error.Message)
+			return out, coreAPIError{Status: resp.StatusCode, Code: envelope.Error.Code, Message: envelope.Error.Message}
 		}
-		return out, fmt.Errorf("authman returned status %d", resp.StatusCode)
+		return out, coreAPIError{Status: resp.StatusCode}
 	}
 	return envelope.Data, nil
 }

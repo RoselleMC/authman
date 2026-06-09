@@ -2,11 +2,12 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
+  AdvancedList,
   ApiError,
   Badge,
   Button,
   Card,
-  DataTable,
+  ConfirmDialog,
   Dialog,
   EmptyState,
   ErrorState,
@@ -20,11 +21,13 @@ import {
   coerceVelocityNode,
   formatRelativeTime,
   useI18n,
+  useListState,
   useToast,
-  type DataColumn,
+  type ListColumn,
   type SafeVelocityNode,
 } from "@authman/shared";
 import { createNode, deleteNode, fetchNodes } from "../api/admin";
+import { useSession } from "../auth/SessionContext";
 
 function NodeStatusBadge({ status }: { status: SafeVelocityNode["status"] }) {
   const { t } = useI18n();
@@ -82,13 +85,20 @@ interface IssuedToken {
 
 export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "downstream_velocity"; embedded?: boolean }) {
   const { t, tError } = useI18n();
+  const { user } = useSession();
   const navigate = useNavigate();
   const toast = useToast();
   const qc = useQueryClient();
   const [deleteTarget, setDeleteTarget] = useState<SafeVelocityNode | null>(null);
+  const [bulkDeleteRows, setBulkDeleteRows] = useState<SafeVelocityNode[]>([]);
   const [issueOpen, setIssueOpen] = useState(false);
   const [issueName, setIssueName] = useState("");
   const [issuedToken, setIssuedToken] = useState<IssuedToken | null>(null);
+  const list = useListState({
+    urlPrefix: kind === "limbo_portal" ? "lpn" : "dsn",
+    defaults: { pageSize: 25, hidden: kind === "limbo_portal" ? ["source"] : [] },
+    storageScope: user?.id,
+  });
 
   const q = useQuery({
     queryKey: ["admin.nodes", kind],
@@ -109,6 +119,18 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
     onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
   });
 
+  const bulkDeleteMut = useMutation({
+    mutationFn: async (rows: SafeVelocityNode[]) => {
+      await Promise.all(rows.map((row) => deleteNode(row.id)));
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.nodes.delete.toast") });
+      setBulkDeleteRows([]);
+      void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
+  });
+
   const issueMut = useMutation({
     mutationFn: (name: string) => createNode({ name, kind }),
     onSuccess: (res, name) => {
@@ -124,10 +146,14 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
     onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
   });
 
-  const downstreamColumns: DataColumn<SafeVelocityNode>[] = [
+  const downstreamColumns: ListColumn<SafeVelocityNode>[] = [
     {
       key: "name",
       header: t("admin.nodes.col.name"),
+      mandatory: true,
+      sortable: true,
+      sortValue: (n) => n.name,
+      filter: { type: "text" },
       render: (n) => (
         <div className="node-name">
           <span className="node-ico">
@@ -137,21 +163,39 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
         </div>
       ),
     },
-    { key: "mode", header: t("admin.nodes.col.mode"), render: (n) => <NodeModeBadge mode={n.mode} /> },
+    { key: "mode", header: t("admin.nodes.col.mode"), sortable: true, sortValue: (n) => n.mode, render: (n) => <NodeModeBadge mode={n.mode} /> },
     {
       key: "runtime",
       header: t("admin.nodes.col.runtime"),
+      minWidth: "220px",
       render: (n) => <span className="muted-cell">{nodeRuntimeSummary(n, t)}</span>,
     },
-    { key: "status", header: t("admin.nodes.col.status"), render: (n) => <NodeStatusBadge status={n.status} /> },
+    {
+      key: "status",
+      header: t("admin.nodes.col.status"),
+      sortable: true,
+      sortValue: (n) => n.status,
+      filter: {
+        type: "select",
+        options: [
+          { value: "", label: t("common.all") },
+          { value: "active", label: t("admin.nodes.status.active") },
+          { value: "stale", label: t("admin.nodes.status.stale") },
+          { value: "offline", label: t("status.offline") },
+        ],
+      },
+      render: (n) => <NodeStatusBadge status={n.status} />,
+    },
     {
       key: "fingerprint",
       header: t("admin.nodes.col.fingerprint"),
+      minWidth: "180px",
       render: (n) => <code className="mono fingerprint" title={t("admin.nodes.fingerprint.title")}>{n.instance_fingerprint || n.token_fingerprint}</code>,
     },
     {
       key: "version",
       header: t("admin.nodes.col.version"),
+      minWidth: "150px",
       render: (n) => (
         <span className="muted-cell">
           {n.plugin_version || "—"}{n.velocity_version ? ` / ${n.velocity_version}` : ""}
@@ -161,6 +205,9 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
     {
       key: "heartbeat",
       header: t("admin.nodes.col.heartbeat"),
+      minWidth: "140px",
+      sortable: true,
+      sortValue: (n) => n.last_seen_at ?? "",
       render: (n) => <span className="muted-cell">{formatRelativeTime(n.last_seen_at)}</span>,
     },
     {
@@ -186,11 +233,15 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
       ),
     },
   ];
-  const limboColumns: DataColumn<SafeVelocityNode>[] = [
+  const limboColumns: ListColumn<SafeVelocityNode>[] = [
     {
       key: "name",
       header: t("admin.nodes.col.name"),
+      mandatory: true,
       minWidth: "180px",
+      sortable: true,
+      sortValue: (n) => n.name,
+      filter: { type: "text" },
       render: (n) => (
         <div className="node-name">
           <span className="node-ico">
@@ -200,11 +251,29 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
         </div>
       ),
     },
-    { key: "status", header: t("admin.nodes.col.status"), minWidth: "110px", render: (n) => <NodeStatusBadge status={n.status} /> },
+    {
+      key: "status",
+      header: t("admin.nodes.col.status"),
+      minWidth: "110px",
+      sortable: true,
+      sortValue: (n) => n.status,
+      filter: {
+        type: "select",
+        options: [
+          { value: "", label: t("common.all") },
+          { value: "active", label: t("admin.nodes.status.active") },
+          { value: "stale", label: t("admin.nodes.status.stale") },
+          { value: "offline", label: t("status.offline") },
+        ],
+      },
+      render: (n) => <NodeStatusBadge status={n.status} />,
+    },
     {
       key: "target",
       header: t("admin.loginPortals.col.target"),
       minWidth: "180px",
+      sortable: true,
+      sortValue: (n) => n.server_label || configString(n.runtime_config, "portal_requested_server_id") || n.server_id || "",
       render: (n) => (
         <span>
           {n.server_label && n.server_label !== "—" ? n.server_label : configString(n.runtime_config, "portal_requested_server_id") || n.server_id || "—"}
@@ -217,12 +286,15 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
       key: "host",
       header: t("admin.loginPortals.col.host"),
       minWidth: "180px",
+      sortable: true,
+      sortValue: (n) => configString(n.runtime_config, "portal_requested_host"),
       render: (n) => <code className="mono">{configString(n.runtime_config, "portal_requested_host") || t("common.all")}</code>,
     },
     {
       key: "source",
       header: t("admin.loginPortals.col.source"),
       minWidth: "150px",
+      defaultVisible: false,
       render: (n) => <code className="mono">{configString(n.runtime_config, "portal_source_id") || n.name}</code>,
     },
     {
@@ -235,12 +307,16 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
       key: "version",
       header: t("admin.loginPortals.col.version"),
       minWidth: "130px",
+      sortable: true,
+      sortValue: (n) => n.plugin_version ?? "",
       render: (n) => <span className="muted-cell">{n.plugin_version || "—"}</span>,
     },
     {
       key: "heartbeat",
       header: t("admin.nodes.col.heartbeat"),
       minWidth: "130px",
+      sortable: true,
+      sortValue: (n) => n.last_seen_at ?? "",
       render: (n) => <span className="muted-cell">{formatRelativeTime(n.last_seen_at)}</span>,
     },
     {
@@ -294,12 +370,20 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
       )}
       {q.error ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : null}
       <Card noBody className="table-card">
-        <DataTable
+        <AdvancedList
           loading={q.isLoading}
           rows={rows}
           columns={columns}
           rowKey={(r) => r.id}
+          state={list.state}
+          onStateChange={list.setState}
           onRowClick={(r) => navigate(`${kind === "limbo_portal" ? "/login-portals" : "/nodes"}/${encodeURIComponent(r.id)}`)}
+          selectable
+          selectionActions={(selectedRows) => (
+            <Button size="sm" variant="danger-soft" icon="close" onClick={() => setBulkDeleteRows(selectedRows)}>
+              {t("admin.nodes.delete")}
+            </Button>
+          )}
           empty={
             <EmptyState
               icon="server"
@@ -404,6 +488,18 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
           {deleteTarget?.name} · {deleteTarget?.instance_fingerprint || deleteTarget?.token_fingerprint}
         </p>
       </Dialog>
+
+      <ConfirmDialog
+        open={bulkDeleteRows.length > 0}
+        onCancel={() => setBulkDeleteRows([])}
+        onConfirm={() => bulkDeleteMut.mutate(bulkDeleteRows)}
+        title={t("admin.nodes.delete")}
+        body={t("admin.nodes.delete.desc")}
+        confirmLabel={t("admin.nodes.delete")}
+        destructive
+        loading={bulkDeleteMut.isPending}
+        testId="dialog-bulk-delete-node"
+      />
     </>
   );
 

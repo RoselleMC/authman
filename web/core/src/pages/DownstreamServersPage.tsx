@@ -5,6 +5,7 @@ import {
   AdvancedList,
   Button,
   Card,
+  ConfirmDialog,
   Dialog,
   EmptyState,
   Field,
@@ -19,7 +20,7 @@ import {
   useToast,
   type ListColumn,
 } from "@authman/shared";
-import { createDownstreamServer, fetchDownstreamServers, type DownstreamServer, type DownstreamServerInput } from "../api/admin";
+import { createDownstreamServer, deleteDownstreamServer, fetchDownstreamServers, type DownstreamServer, type DownstreamServerInput } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
 function serverInput(slug: string, displayName: string): DownstreamServerInput {
@@ -56,6 +57,7 @@ export function DownstreamServersPage() {
   const qc = useQueryClient();
   const list = useListState({ urlPrefix: "ds", defaults: { pageSize: 25, hidden: ["host"] }, storageScope: user?.id });
   const [open, setOpen] = useState(false);
+  const [bulkDeleteRows, setBulkDeleteRows] = useState<DownstreamServer[]>([]);
   const [slug, setSlug] = useState("");
   const [displayName, setDisplayName] = useState("");
   const q = useQuery({ queryKey: ["admin.downstreamServers"], queryFn: fetchDownstreamServers });
@@ -68,6 +70,17 @@ export function DownstreamServersPage() {
       setDisplayName("");
       void qc.invalidateQueries({ queryKey: ["admin.downstreamServers"] });
       navigate(`/nodes/${encodeURIComponent(server.id)}`);
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const deleteMut = useMutation({
+    mutationFn: async (rows: DownstreamServer[]) => {
+      await Promise.all(rows.map((row) => deleteDownstreamServer(row.id)));
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.servers.deleted.toast") });
+      setBulkDeleteRows([]);
+      void qc.invalidateQueries({ queryKey: ["admin.downstreamServers"] });
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -96,6 +109,12 @@ export function DownstreamServersPage() {
           onStateChange={list.setState}
           loading={q.isLoading}
           onRowClick={(r) => navigate(`/nodes/${encodeURIComponent(r.id)}`)}
+          selectable={(row) => row.id !== "default"}
+          selectionActions={(rows) => (
+            <Button size="sm" variant="danger-soft" icon="trash" onClick={() => setBulkDeleteRows(rows)}>
+              {t("common.delete")}
+            </Button>
+          )}
           empty={<EmptyState icon="server" title={t("admin.servers.empty")} />}
           testId="downstream-servers"
         />
@@ -113,6 +132,17 @@ export function DownstreamServersPage() {
           <Field label={t("admin.servers.col.name")}><Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Survival" /></Field>
         </div>
       </Dialog>
+      <ConfirmDialog
+        open={bulkDeleteRows.length > 0}
+        onCancel={() => setBulkDeleteRows([])}
+        onConfirm={() => deleteMut.mutate(bulkDeleteRows)}
+        title={t("admin.servers.delete")}
+        body={t("admin.servers.deleteDesc")}
+        confirmLabel={t("common.delete")}
+        destructive
+        loading={deleteMut.isPending}
+        testId="dialog-bulk-delete-server"
+      />
     </PageShell>
   );
 }

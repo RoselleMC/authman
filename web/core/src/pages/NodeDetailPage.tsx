@@ -11,11 +11,15 @@ import {
   ConfigRow,
   DefList,
   DefRow,
+  DetailActions,
+  DetailAside,
+  DetailBody,
+  DetailGrid,
+  DetailSummary,
   ErrorState,
   Field,
   Icon,
   Input,
-  PageHeader,
   PageShell,
   coerceVelocityNode,
   formatRelativeTime,
@@ -144,39 +148,55 @@ export function NodeDetailPage() {
 
   return (
     <PageShell>
-      <BackLink onClick={() => navigate(backPath)} testId="back-to-nodes">
-        {backLabel}
-      </BackLink>
-      <PageHeader
-        eyebrow={<Badge tone={node.kind === "downstream_velocity" ? "warning" : "info"} dot>{t(`admin.nodes.mode.${node.kind}`)}</Badge>}
-        title={node.name}
-        desc={node.kind === "downstream_velocity" ? t("admin.nodes.detail.downstreamDesc") : t("admin.nodes.detail.limboDesc")}
-        action={(
-          <Button
-            variant="primary"
-            icon="save"
-            loading={save.isPending}
-            disabled={!dirty || save.isPending}
-            onClick={() => save.mutate(form)}
-            data-testid="node-detail-save"
-          >
-            {t("common.save")}
-          </Button>
-        )}
-      />
+      <div className="detail-toolbar">
+        <BackLink onClick={() => navigate(backPath)} testId="back-to-nodes">
+          {backLabel}
+        </BackLink>
+      </div>
 
-      <div className="detail-grid">
-        <div className="detail-aside">
-          <Card title={t("admin.nodes.detail.summary")}>
+      <DetailGrid>
+        <DetailAside>
+          <DetailSummary
+            title={node.name}
+            icon={node.kind === "limbo_portal" ? "layers" : "server"}
+            titleMeta={<Badge tone={statusTone(node.status)} dot>{t(`admin.nodes.status.${node.status}`, node.status)}</Badge>}
+            meta={<><span className="muted-cell">{t("admin.nodes.col.mode")}</span><strong>{t(`admin.nodes.mode.${node.kind}`)}</strong></>}
+          >
             <DefList>
-              <DefRow k={t("admin.nodes.col.status")}>
-                <Badge tone={statusTone(node.status)} dot>{t(`admin.nodes.status.${node.status}`, node.status)}</Badge>
-              </DefRow>
-              <DefRow k={t("admin.nodes.col.mode")}>{t(`admin.nodes.mode.${node.kind}`)}</DefRow>
               <DefRow k={t("admin.nodes.col.heartbeat")}>{formatRelativeTime(node.last_seen_at)}</DefRow>
               <DefRow k={t("admin.nodes.col.version")}>
                 <code className="mono">{node.plugin_version || "—"}{node.velocity_version ? ` / ${node.velocity_version}` : ""}</code>
               </DefRow>
+            </DefList>
+          </DetailSummary>
+          <DetailActions title={t("common.actions")}>
+            <Button
+              variant="primary"
+              icon="save"
+              block
+              loading={save.isPending}
+              disabled={!dirty || save.isPending}
+              onClick={() => save.mutate(form)}
+              data-testid="node-detail-save"
+            >
+              {t("common.save")}
+            </Button>
+            {node.kind === "limbo_portal" ? (
+              <Button variant="secondary" icon="settings" block onClick={() => navigate("/login-portals/settings")} data-testid="node-open-portal-settings">
+                {t("admin.nodes.detail.openPortal")}
+              </Button>
+            ) : null}
+          </DetailActions>
+        </DetailAside>
+
+        <DetailBody>
+          <Card title={t("admin.nodes.detail.identity")}>
+            <div className="settings-form-grid settings-form-grid--single">
+              <Field label={t("admin.nodes.field.name")} hint={t("admin.nodes.detail.name.hint")}>
+                <Input value={form.name} onChange={(e) => patch("name", e.target.value)} mono data-testid="node-detail-name" />
+              </Field>
+            </div>
+            <DefList>
               <DefRow k={t("admin.nodes.detail.instance")}>
                 <code className="mono fingerprint">{node.instance_fingerprint || "—"}</code>
               </DefRow>
@@ -184,16 +204,6 @@ export function NodeDetailPage() {
                 <code className="mono fingerprint">{node.token_fingerprint || "—"}</code>
               </DefRow>
             </DefList>
-          </Card>
-        </div>
-
-        <div className="detail-body">
-          <Card title={t("admin.nodes.detail.identity")}>
-            <div className="settings-form-grid settings-form-grid--single">
-              <Field label={t("admin.nodes.field.name")} hint={t("admin.nodes.detail.name.hint")}>
-                <Input value={form.name} onChange={(e) => patch("name", e.target.value)} mono data-testid="node-detail-name" />
-              </Field>
-            </div>
           </Card>
 
           {node.kind === "downstream_velocity" ? (
@@ -244,13 +254,10 @@ export function NodeDetailPage() {
                 <ConfigRow k={t("admin.portal.field.cookie")} v={text(cfg.transfer_cookie_key, "authman:transfer_grant")} mono />
                 <ConfigRow k={t("admin.portal.field.dialog")} v={boolValue(cfg.dialog_enabled, true) ? t("common.enabled") : t("common.disabled")} />
               </ConfigGrid>
-              <Button variant="ghost" icon="settings" onClick={() => navigate("/portal")} style={{ marginTop: 16 }} data-testid="node-open-portal-settings">
-                {t("admin.nodes.detail.openPortal")}
-              </Button>
             </Card>
           )}
-        </div>
-      </div>
+        </DetailBody>
+      </DetailGrid>
     </PageShell>
   );
 }

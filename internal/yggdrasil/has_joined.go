@@ -39,21 +39,19 @@ func (s JoinService) HasJoined(ctx context.Context, request HasJoinedRequest) (P
 	if looksOffline(request.Username) {
 		return s.offlineProfile(ctx, trimOfflineMarker(request.Username))
 	}
-	if s.Offline != nil {
-		profile, err := s.offlineProfile(ctx, request.Username)
-		if err == nil {
-			return profile, nil
-		}
-		if !errors.Is(err, ErrProfileNotFound) {
-			return Profile{}, err
-		}
-	}
 	if s.Premium != nil {
 		profile, err := s.Premium.HasJoined(ctx, request)
 		if err == nil {
 			return profile, nil
 		}
 		if !errors.Is(err, ErrProfileNotFound) {
+			profile, offlineErr := s.offlineProfile(ctx, request.Username)
+			if offlineErr == nil {
+				return profile, nil
+			}
+			if !errors.Is(offlineErr, ErrProfileNotFound) {
+				return Profile{}, offlineErr
+			}
 			return Profile{}, err
 		}
 	}

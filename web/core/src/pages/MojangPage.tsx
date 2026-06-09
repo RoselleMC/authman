@@ -2,11 +2,12 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
+  AdvancedList,
   ApiError,
   Badge,
   Button,
   Card,
-  DataTable,
+  ConfirmDialog,
   Dialog,
   EmptyState,
   ErrorState,
@@ -19,11 +20,13 @@ import {
   Select,
   coerceMojangStatus,
   useI18n,
+  useListState,
   useToast,
-  type DataColumn,
+  type ListColumn,
   type SafeMojangProxy,
 } from "@authman/shared";
 import { createMojangRoute, deleteMojangRoute, fetchMojang, updateMojangRoute, type CreateMojangRouteInput } from "../api/admin";
+import { useSession } from "../auth/SessionContext";
 
 function StateBadge({ state }: { state: string }) {
   const { t } = useI18n();
@@ -36,9 +39,11 @@ const PROXY_TYPE: Record<Exclude<SafeMojangProxy["kind"], "direct">, string> = {
 
 export function ProxyPoolPage() {
   const { t, tError } = useI18n();
+  const { user } = useSession();
   const navigate = useNavigate();
   const toast = useToast();
   const qc = useQueryClient();
+  const list = useListState({ urlPrefix: "px", defaults: { pageSize: 25 }, storageScope: user?.id });
   const [dialogOpen, setDialogOpen] = useState(false);
   const [kind, setKind] = useState<CreateMojangRouteInput["kind"]>("http");
   const [routeID, setRouteID] = useState("");
@@ -50,6 +55,7 @@ export function ProxyPoolPage() {
   const [authPassword, setAuthPassword] = useState("");
   const [editTarget, setEditTarget] = useState<SafeMojangProxy | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SafeMojangProxy | null>(null);
+  const [bulkDeleteRows, setBulkDeleteRows] = useState<SafeMojangProxy[]>([]);
   const q = useQuery({
     queryKey: ["admin.mojang"],
     queryFn: fetchMojang,
@@ -98,13 +104,28 @@ export function ProxyPoolPage() {
     },
     onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
   });
+  const bulkDeleteMut = useMutation({
+    mutationFn: async (routes: SafeMojangProxy[]) => {
+      await Promise.all(routes.map((route) => deleteMojangRoute(route.id)));
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.mojang.delete.toast") });
+      setBulkDeleteRows([]);
+      void qc.invalidateQueries({ queryKey: ["admin.mojang"] });
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
+  });
   const dialogPending = createMut.isPending || updateMut.isPending;
 
   const status = q.data ? coerceMojangStatus(q.data) : null;
-  const columns: DataColumn<SafeMojangProxy>[] = [
+  const columns: ListColumn<SafeMojangProxy>[] = [
     {
       key: "route",
       header: t("admin.mojang.col.route"),
+      mandatory: true,
+      sortable: true,
+      sortValue: (p) => p.id,
+      filter: { type: "text" },
       render: (p) => (
         <div className="proxy-route">
           <code className="mono" style={{ fontWeight: 560 }}>{p.id}</code>
@@ -112,17 +133,52 @@ export function ProxyPoolPage() {
         </div>
       ),
     },
-    { key: "kind", header: t("admin.mojang.col.type"), render: (p) => <span className="type-pill">{p.kind === "direct" ? t("admin.mojang.route.direct") : PROXY_TYPE[p.kind]}</span> },
-    { key: "state", header: t("admin.mojang.col.state"), render: (p) => <StateBadge state={p.state} /> },
+    {
+      key: "kind",
+      header: t("admin.mojang.col.type"),
+      sortable: true,
+      sortValue: (p) => p.kind,
+      filter: {
+        type: "select",
+        options: [
+          { value: "", label: t("common.all") },
+          { value: "direct", label: t("admin.mojang.route.direct") },
+          { value: "http", label: "HTTP" },
+          { value: "socks5", label: "SOCKS5" },
+        ],
+      },
+      render: (p) => <span className="type-pill">{p.kind === "direct" ? t("admin.mojang.route.direct") : PROXY_TYPE[p.kind]}</span>,
+    },
+    {
+      key: "state",
+      header: t("admin.mojang.col.state"),
+      sortable: true,
+      sortValue: (p) => p.state,
+      filter: {
+        type: "select",
+        options: [
+          { value: "", label: t("common.all") },
+          { value: "healthy", label: t("admin.mojang.state.healthy") },
+          { value: "failed", label: t("admin.mojang.state.failed") },
+          { value: "disabled", label: t("admin.mojang.state.disabled") },
+          { value: "cooling_down", label: t("admin.mojang.state.cooldown") },
+        ],
+      },
+      render: (p) => <StateBadge state={p.state} />,
+    },
     {
       key: "count",
       header: t("admin.mojang.col.requests"),
       align: "right",
+      sortable: true,
+      sortValue: (p) => p.request_count,
       render: (p) => <span className="mono">{p.request_count.toLocaleString()}</span>,
     },
     {
       key: "cooldown",
       header: t("admin.mojang.col.cooldown"),
+      sortable: true,
+      sortValue: (p) => p.cooldown_remaining_seconds,
       render: (p) =>
         p.cooldown_remaining_seconds > 0 ? (
           <span className="cooldown-pill">
@@ -226,11 +282,19 @@ export function ProxyPoolPage() {
       {q.error ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : null}
 
       <Card title={t("admin.mojang.proxies")} noBody className="table-card">
-        <DataTable
+        <AdvancedList
           loading={q.isLoading}
           rows={status?.proxies ?? []}
           columns={columns}
           rowKey={(r) => r.id}
+          state={list.state}
+          onStateChange={list.setState}
+          selectable={(row) => row.kind !== "direct"}
+          selectionActions={(rows) => (
+            <Button size="sm" variant="danger-soft" icon="close" onClick={() => setBulkDeleteRows(rows)}>
+              {t("admin.mojang.delete")}
+            </Button>
+          )}
           empty={<EmptyState icon="activity" title={t("admin.mojang.empty.proxies")} />}
           testId="mojang-proxies"
         />
@@ -354,6 +418,17 @@ export function ProxyPoolPage() {
           {deleteTarget?.id} · {deleteTarget?.url_masked || deleteTarget?.kind}
         </p>
       </Dialog>
+      <ConfirmDialog
+        open={bulkDeleteRows.length > 0}
+        onCancel={() => setBulkDeleteRows([])}
+        onConfirm={() => bulkDeleteMut.mutate(bulkDeleteRows)}
+        title={t("admin.mojang.delete")}
+        body={t("admin.mojang.delete.desc")}
+        confirmLabel={t("admin.mojang.delete")}
+        destructive
+        loading={bulkDeleteMut.isPending}
+        testId="dialog-bulk-delete-mojang-route"
+      />
     </PageShell>
   );
 }

@@ -304,6 +304,10 @@ type portalSelectProfileRequest struct {
 	ProfileID string `json:"profile_id"`
 }
 
+type portalCreateProfileRequest struct {
+	ProtocolName string `json:"protocol_name"`
+}
+
 func (s *Server) handlePortalSelectProfile(w http.ResponseWriter, r *http.Request) {
 	session, authErr := s.requirePlayer(r, true)
 	if authErr != nil {
@@ -342,6 +346,131 @@ func (s *Server) handlePortalSelectProfile(w http.ResponseWriter, r *http.Reques
 		"profile":  profileRowData(profile, &passport, s.store.ListProfilePresences(r.Context(), profile.ID)),
 		"player":   portalPlayerData(identity.PlayerFromPassportProfile(passport, profile)),
 	}, nil)
+}
+
+func (s *Server) handlePortalCreateProfile(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requirePlayer(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	passport, _, _, err := s.portalSessionIdentity(r.Context(), session)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session passport was not found"))
+		return
+	}
+	if passport.Status != identity.PassportStatusActive {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "passport.not_editable", "passport is not editable"))
+		return
+	}
+	var req portalCreateProfileRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	name, err := identity.NormalizeProtocolName(req.ProtocolName)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.invalid_name", err.Error()))
+		return
+	}
+	profile, err := identity.NewOfflineProfile("", name.Protocol, passport.ID)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.invalid_name", err.Error()))
+		return
+	}
+	profile, err = s.store.CreateProfile(r.Context(), profile)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.create_failed", err.Error()))
+		return
+	}
+	pp, err := s.store.BindProfileToPassport(r.Context(), profile.ID, passport.ID, false)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.bind_failed", err.Error()))
+		return
+	}
+	session.SelectedProfileID = pp.Profile.ID
+	if err := s.store.UpdateSession(r.Context(), session); err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.session_failed", "failed to update session"))
+		return
+	}
+	s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPlayer, profile.ID, "profile.self_create", map[string]any{
+		"profile_id":    profile.ID,
+		"protocol_name": profile.ProtocolName,
+	})
+	s.writePortalSessionData(w, r, passport, pp.Profile)
+}
+
+func (s *Server) handlePortalArchiveProfile(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requirePlayer(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	passport, target, authErr := s.portalOwnedProfile(r, session, r.PathValue("id"))
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	profiles := s.store.ListProfilesForPassport(r.Context(), passport.ID)
+	fallback := identity.Profile{}
+	for _, profile := range profiles {
+		if profile.ID == target.ID {
+			continue
+		}
+		if profile.Status == identity.ProfileStatusActive && fallback.ID == "" {
+			fallback = profile
+		}
+	}
+	if target.Status == identity.ProfileStatusActive && fallback.ID == "" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.last_active", "cannot archive the last active profile"))
+		return
+	}
+	updated, err := s.store.SetProfileStatus(r.Context(), target.ID, identity.ProfileStatusArchived)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "profile.archive_failed", "failed to archive profile"))
+		return
+	}
+	selected := updated
+	if session.SelectedProfileID == target.ID {
+		selected = fallback
+		session.SelectedProfileID = fallback.ID
+		if err := s.store.UpdateSession(r.Context(), session); err != nil {
+			api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.session_failed", "failed to update session"))
+			return
+		}
+	}
+	s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPlayer, target.ID, "profile.self_archive", map[string]any{
+		"profile_id":    target.ID,
+		"protocol_name": target.ProtocolName,
+	})
+	s.writePortalSessionData(w, r, passport, selected)
+}
+
+func (s *Server) handlePortalRestoreProfile(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requirePlayer(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	passport, target, authErr := s.portalOwnedProfile(r, session, r.PathValue("id"))
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	updated, err := s.store.SetProfileStatus(r.Context(), target.ID, identity.ProfileStatusActive)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "profile.restore_failed", "failed to restore profile"))
+		return
+	}
+	s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPlayer, target.ID, "profile.self_restore", map[string]any{
+		"profile_id":    target.ID,
+		"protocol_name": target.ProtocolName,
+	})
+	selected, err := s.store.GetProfileByID(r.Context(), session.SelectedProfileID)
+	if err != nil {
+		selected = updated
+	}
+	s.writePortalSessionData(w, r, passport, selected)
 }
 
 func (s *Server) handlePortalLinkLogin(w http.ResponseWriter, r *http.Request) {
@@ -431,6 +560,35 @@ func (s *Server) portalSessionIdentity(ctx context.Context, session auth.Session
 	session.SelectedProfileID = profile.ID
 	_ = s.store.UpdateSession(ctx, session)
 	return passport, profile, identity.PlayerFromPassportProfile(passport, profile), nil
+}
+
+func (s *Server) portalOwnedProfile(r *http.Request, session auth.Session, profileID string) (identity.Passport, identity.Profile, *api.Error) {
+	passport, err := s.store.GetPassportByID(r.Context(), session.SubjectID)
+	if err != nil {
+		return identity.Passport{}, identity.Profile{}, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session passport was not found")
+	}
+	if passport.Status != identity.PassportStatusActive {
+		return identity.Passport{}, identity.Profile{}, api.NewError(http.StatusForbidden, "passport.not_editable", "passport is not editable")
+	}
+	profile, err := s.store.GetProfileByID(r.Context(), strings.TrimSpace(profileID))
+	if err != nil {
+		return identity.Passport{}, identity.Profile{}, api.NewError(http.StatusNotFound, "profile.not_found", "profile not found")
+	}
+	owner, err := s.store.GetPassportForProfile(r.Context(), profile.ID)
+	if err != nil || owner.ID != passport.ID {
+		return identity.Passport{}, identity.Profile{}, api.NewError(http.StatusForbidden, "profile.not_owned", "profile is not available for this passport")
+	}
+	return passport, profile, nil
+}
+
+func (s *Server) writePortalSessionData(w http.ResponseWriter, r *http.Request, passport identity.Passport, profile identity.Profile) {
+	profiles := s.store.ListProfilesForPassport(r.Context(), passport.ID)
+	api.WriteJSON(w, http.StatusOK, map[string]any{
+		"player":   portalPlayerData(identity.PlayerFromPassportProfile(passport, profile)),
+		"passport": passportRowData(passport, profiles, s.store.ListPassportPresences(r.Context(), passport.ID)),
+		"profiles": portalProfileListData(profiles),
+		"profile":  profileRowData(profile, &passport, s.store.ListProfilePresences(r.Context(), profile.ID)),
+	}, nil)
 }
 
 func portalProfileListData(profiles []identity.Profile) []map[string]any {

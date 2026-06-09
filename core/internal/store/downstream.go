@@ -37,13 +37,7 @@ func defaultDownstreamServer(now time.Time) DownstreamServer {
 		DisplayName:      "Default Server",
 		Status:           "active",
 		RegistrationOpen: true,
-		PortalTheme: map[string]any{
-			"primary_color":  "#16a34a",
-			"accent_color":   "#2563eb",
-			"portal_message": "Welcome to Authman",
-			"display_name":   "Default Server",
-			"description":    "Default Authman downstream context",
-		},
+		PortalTheme:      map[string]any{},
 		PortalConfig: map[string]any{
 			"registration_strategy":  "open",
 			"show_in_global":         true,
@@ -73,18 +67,7 @@ func normalizeDownstreamServer(server DownstreamServer) DownstreamServer {
 	if server.Status == "" {
 		server.Status = "active"
 	}
-	if server.PortalTheme == nil {
-		server.PortalTheme = map[string]any{}
-	}
-	if _, ok := server.PortalTheme["primary_color"]; !ok {
-		server.PortalTheme["primary_color"] = "#16a34a"
-	}
-	if _, ok := server.PortalTheme["accent_color"]; !ok {
-		server.PortalTheme["accent_color"] = "#2563eb"
-	}
-	if _, ok := server.PortalTheme["display_name"]; !ok {
-		server.PortalTheme["display_name"] = server.DisplayName
-	}
+	server.PortalTheme = map[string]any{}
 	if server.PortalConfig == nil {
 		server.PortalConfig = map[string]any{}
 	}
@@ -111,7 +94,7 @@ func normalizeDownstreamServer(server DownstreamServer) DownstreamServer {
 		server.PortalConfig["transfer_port"] = intFromAny(server.PortalConfig["port"], DefaultDownstreamPort)
 	}
 	if _, ok := server.PortalConfig["motd"]; !ok {
-		server.PortalConfig["motd"] = stringFromAny(server.PortalTheme["portal_message"], "Welcome to Authman")
+		server.PortalConfig["motd"] = server.DisplayName
 	}
 	if _, ok := server.PortalConfig["gate_enabled"]; !ok {
 		if _, ok := server.PortalConfig["grant_required"]; ok {
@@ -166,7 +149,7 @@ func DownstreamTargetFromServer(server DownstreamServer) DownstreamTarget {
 	if ttl > 300 {
 		ttl = 300
 	}
-	motd := strings.TrimSpace(stringFromAny(server.PortalConfig["motd"], stringFromAny(server.PortalTheme["portal_message"], server.DisplayName)))
+	motd := strings.TrimSpace(stringFromAny(server.PortalConfig["motd"], server.DisplayName))
 	if motd == "" {
 		motd = server.DisplayName
 	}

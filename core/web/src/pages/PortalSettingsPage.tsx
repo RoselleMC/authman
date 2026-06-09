@@ -16,10 +16,6 @@ import {
 import { fetchPortalSettings, updatePortalSettings, type PortalSettings } from "../api/admin";
 
 const EMPTY: PortalSettings = {
-  default_target_server: "",
-  holding_server: "",
-  requested_host: "",
-  source_id: "",
   transfer_cookie_key: "authman:transfer_grant",
   dialog_enabled: true,
   dialog_fallback_chat_enabled: true,
@@ -69,61 +65,16 @@ export function PortalSettingsPage({ embedded = false }: { embedded?: boolean } 
   const content = (
     <>
       {embedded ? (
-        <div className="section-toolbar">
-          <span />
-          {saveButton}
-        </div>
+        null
       ) : (
         <PageHeader
           title={t("admin.portal.heading")}
           desc={t("admin.portal.desc")}
-          action={saveButton}
         />
       )}
       {q.error ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : null}
       <div className="settings-grid">
-        <Card title={t("admin.portal.card.routing")}>
-          <div className="settings-form-grid">
-            <Field label={t("admin.portal.field.defaultTarget")} hint={t("admin.portal.field.defaultTarget.hint")}>
-              <Input
-                value={form.default_target_server}
-                onChange={(e) => patch("default_target_server", e.target.value)}
-                placeholder="default"
-                mono
-                data-testid="portal-default-target"
-              />
-            </Field>
-            <Field label={t("admin.portal.field.holding")} hint={t("admin.portal.field.holding.hint")}>
-              <Input
-                value={form.holding_server}
-                onChange={(e) => patch("holding_server", e.target.value)}
-                placeholder="lobby"
-                mono
-                data-testid="portal-holding-server"
-              />
-            </Field>
-            <Field label={t("admin.portal.field.requestedHost")} hint={t("admin.portal.field.requestedHost.hint")}>
-              <Input
-                value={form.requested_host}
-                onChange={(e) => patch("requested_host", e.target.value)}
-                placeholder="play.example.com"
-                mono
-                data-testid="portal-requested-host"
-              />
-            </Field>
-            <Field label={t("admin.portal.field.source")} hint={t("admin.portal.field.source.hint")}>
-              <Input
-                value={form.source_id}
-                onChange={(e) => patch("source_id", e.target.value)}
-                placeholder="portal-global"
-                mono
-                data-testid="portal-source-id"
-              />
-            </Field>
-          </div>
-        </Card>
-
-        <Card title={t("admin.portal.card.auth")}>
+        <Card title={t("admin.portal.card.auth")} actions={saveButton}>
           <div className="settings-form-grid settings-form-grid--single">
             <Field label={t("admin.portal.field.cookie")} hint={t("admin.portal.field.cookie.hint")}>
               <Input

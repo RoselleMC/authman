@@ -165,7 +165,13 @@ async function statFile(file) {
 }
 
 function isAllowedPortalPath(pathname) {
-  return pathname === "/api/portal" || pathname.startsWith("/api/portal/");
+  return (
+    pathname === "/api/portal" ||
+    pathname.startsWith("/api/portal/") ||
+    pathname.startsWith("/api/assets/profiles/") ||
+    pathname.startsWith("/api/assets/passports/") ||
+    pathname.startsWith("/api/assets/default-skins/")
+  );
 }
 
 function hasBody(method = "GET") {

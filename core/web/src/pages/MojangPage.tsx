@@ -159,6 +159,7 @@ export function ProxyPoolPage() {
         options: [
           { value: "", label: t("common.all") },
           { value: "healthy", label: t("admin.mojang.state.healthy") },
+          { value: "unknown", label: t("admin.mojang.state.unknown") },
           { value: "failed", label: t("admin.mojang.state.failed") },
           { value: "disabled", label: t("admin.mojang.state.disabled") },
           { value: "cooling_down", label: t("admin.mojang.state.cooldown") },
@@ -281,8 +282,9 @@ export function ProxyPoolPage() {
       />
       {q.error ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : null}
 
-      <Card title={t("admin.mojang.proxies")} noBody className="table-card">
+      <Card noBody className="table-card">
         <AdvancedList
+          title={t("admin.mojang.proxies")}
           loading={q.isLoading}
           rows={status?.proxies ?? []}
           columns={columns}

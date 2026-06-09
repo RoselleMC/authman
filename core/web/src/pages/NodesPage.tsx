@@ -42,19 +42,9 @@ function NodeModeBadge({ mode }: { mode: SafeVelocityNode["mode"] }) {
 
 function nodeRuntimeSummary(n: SafeVelocityNode, t: (key: string, fallback?: string) => string) {
   const cfg = n.runtime_config ?? {};
-  if (n.kind === "downstream_velocity") {
-    const initial = typeof cfg.downstream_initial_server === "string" && cfg.downstream_initial_server ? cfg.downstream_initial_server : "—";
-    const holding = typeof cfg.downstream_holding_server === "string" && cfg.downstream_holding_server ? cfg.downstream_holding_server : "—";
-    return `${t("admin.nodes.runtime.initial")}: ${initial} · ${t("admin.nodes.runtime.holding")}: ${holding}`;
-  }
-  const target = typeof cfg.portal_requested_server_id === "string" && cfg.portal_requested_server_id ? cfg.portal_requested_server_id : "default";
-  const source = typeof cfg.portal_source_id === "string" && cfg.portal_source_id ? cfg.portal_source_id : n.name;
-  return `${t("admin.nodes.runtime.target")}: ${target} · ${t("admin.nodes.runtime.source")}: ${source}`;
-}
-
-function configString(cfg: Record<string, unknown>, key: string): string {
-  const value = cfg[key];
-  return typeof value === "string" ? value.trim() : "";
+  const initial = typeof cfg.downstream_initial_server === "string" && cfg.downstream_initial_server ? cfg.downstream_initial_server : "—";
+  const holding = typeof cfg.downstream_holding_server === "string" && cfg.downstream_holding_server ? cfg.downstream_holding_server : "—";
+  return `${t("admin.nodes.runtime.initial")}: ${initial} · ${t("admin.nodes.runtime.holding")}: ${holding}`;
 }
 
 function configBool(cfg: Record<string, unknown>, key: string, fallback: boolean): boolean {
@@ -96,7 +86,7 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
   const [issuedToken, setIssuedToken] = useState<IssuedToken | null>(null);
   const list = useListState({
     urlPrefix: kind === "limbo_portal" ? "lpn" : "dsn",
-    defaults: { pageSize: 25, hidden: kind === "limbo_portal" ? ["source"] : [] },
+    defaults: { pageSize: 25 },
     storageScope: user?.id,
   });
 
@@ -269,35 +259,6 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
       render: (n) => <NodeStatusBadge status={n.status} />,
     },
     {
-      key: "target",
-      header: t("admin.loginPortals.col.target"),
-      minWidth: "180px",
-      sortable: true,
-      sortValue: (n) => n.server_label || configString(n.runtime_config, "portal_requested_server_id") || n.server_id || "",
-      render: (n) => (
-        <span>
-          {n.server_label && n.server_label !== "—" ? n.server_label : configString(n.runtime_config, "portal_requested_server_id") || n.server_id || "—"}
-          <br />
-          <code className="mono muted-cell">{configString(n.runtime_config, "portal_requested_server_id") || n.server_id || "—"}</code>
-        </span>
-      ),
-    },
-    {
-      key: "host",
-      header: t("admin.loginPortals.col.host"),
-      minWidth: "180px",
-      sortable: true,
-      sortValue: (n) => configString(n.runtime_config, "portal_requested_host"),
-      render: (n) => <code className="mono">{configString(n.runtime_config, "portal_requested_host") || t("common.all")}</code>,
-    },
-    {
-      key: "source",
-      header: t("admin.loginPortals.col.source"),
-      minWidth: "150px",
-      defaultVisible: false,
-      render: (n) => <code className="mono">{configString(n.runtime_config, "portal_source_id") || n.name}</code>,
-    },
-    {
       key: "auth",
       header: t("admin.loginPortals.col.auth"),
       minWidth: "150px",
@@ -356,12 +317,7 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
 
   const content = (
     <>
-      {embedded ? (
-        <div className="section-toolbar">
-          <span />
-          {issueButton}
-        </div>
-      ) : (
+      {embedded ? null : (
         <PageHeader
           title={kind === "limbo_portal" ? t("admin.loginPortals.heading") : t("admin.nodes.heading")}
           desc={kind === "limbo_portal" ? t("admin.loginPortals.desc") : t("admin.nodes.desc")}
@@ -371,12 +327,14 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
       {q.error ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : null}
       <Card noBody className="table-card">
         <AdvancedList
+          title={embedded ? (kind === "limbo_portal" ? t("admin.loginPortals.tab.instances") : t("admin.nodes.heading")) : undefined}
           loading={q.isLoading}
           rows={rows}
           columns={columns}
           rowKey={(r) => r.id}
           state={list.state}
           onStateChange={list.setState}
+          primaryActions={embedded ? issueButton : undefined}
           onRowClick={(r) => navigate(`${kind === "limbo_portal" ? "/login-portals" : "/nodes"}/${encodeURIComponent(r.id)}`)}
           selectable
           selectionActions={(selectedRows) => (

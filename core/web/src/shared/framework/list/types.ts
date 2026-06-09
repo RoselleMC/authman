@@ -57,6 +57,8 @@ export interface ListState {
   filters: Record<string, string>;
   /** Set of column keys the user has hidden. Mandatory columns are ignored. */
   hidden: string[];
+  /** Whether the filter header row is visible. Defaults to false. */
+  filtersVisible: boolean;
   sortKey?: string;
   sortDir?: "asc" | "desc";
 }
@@ -64,6 +66,7 @@ export interface ListState {
 export interface ListStateDefaults {
   pageSize?: number;
   hidden?: string[];
+  filtersVisible?: boolean;
   filters?: Record<string, string>;
   sortKey?: string;
   sortDir?: "asc" | "desc";

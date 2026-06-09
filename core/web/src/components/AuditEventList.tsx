@@ -23,11 +23,12 @@ const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 interface Props {
   baseFilters?: AuditFilters;
   filterable?: boolean;
+  title?: string;
   testId?: string;
   urlPrefix?: string;
 }
 
-export function AuditEventList({ baseFilters, filterable = true, testId = "audit", urlPrefix = "a" }: Props) {
+export function AuditEventList({ baseFilters, filterable = true, title, testId = "audit", urlPrefix = "a" }: Props) {
   const { t } = useI18n();
   const { user } = useSession();
   const navigate = useNavigate();
@@ -157,6 +158,7 @@ export function AuditEventList({ baseFilters, filterable = true, testId = "audit
 
   return (
     <AdvancedList
+      title={title}
       columns={columns}
       rowKey={(ev) => ev.id || `${ev.event_type}-${ev.created_at}`}
       mode="server"

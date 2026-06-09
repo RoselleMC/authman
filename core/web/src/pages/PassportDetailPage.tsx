@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -30,21 +30,24 @@ import {
   bindProfile,
   createPassportBan,
   createProfile,
+  deletePassportSkin,
   extendBan,
   fetchPassport,
   fetchProfiles,
   revokeBan,
   unbindProfile,
   updatePassportStatus,
+  uploadPassportSkin,
   type PassportRow,
   type PlayerBan,
   type ProfileSummary,
 } from "../api/admin";
 import { ErrorBlock } from "../components/ErrorBlock";
 import { BanStateCell, LockUntilCell } from "../components/PlayerStateCells";
+import { MinecraftSkinPreview } from "../components/MinecraftSkinPreview";
 
 type DialogState = null | "status" | "bind" | "create" | "ban" | "extendBan" | "revokeBan";
-type DetailTab = "overview" | "audit";
+type DetailTab = "overview" | "skin" | "audit";
 type DurationUnit = "s" | "min" | "h" | "d" | "w" | "m" | "y";
 
 const DEFAULT_BAN_VALUE = "1";
@@ -65,8 +68,15 @@ export function PassportDetailPage() {
   const [banDurationValue, setBanDurationValue] = useState(DEFAULT_BAN_VALUE);
   const [banDurationUnit, setBanDurationUnit] = useState<DurationUnit>(DEFAULT_BAN_UNIT);
   const [revokeTarget, setRevokeTarget] = useState<PlayerBan | null>(null);
+  const [skinFile, setSkinFile] = useState<File | null>(null);
+  const [capeFile, setCapeFile] = useState<File | null>(null);
+  const [elytraFile, setElytraFile] = useState<File | null>(null);
+  const [skinModel, setSkinModel] = useState<"wide" | "slim">("wide");
   const profileList = useListState({ urlPrefix: "boundProfiles", urlSync: false, defaults: { pageSize: 10, hidden: ["uuid", "lockedUntil"] } });
   const q = useQuery({ queryKey: ["admin.passport", id], queryFn: () => fetchPassport(id), enabled: !!id });
+  const previewSkinURL = useObjectURL(skinFile);
+  const previewCapeURL = useObjectURL(capeFile);
+  const previewElytraURL = useObjectURL(elytraFile);
   const unboundQ = useQuery({
     queryKey: ["admin.profiles.unbound"],
     queryFn: ({ signal }) => fetchProfiles({ binding: "unbound", page: 1, page_size: 200 }, signal),
@@ -154,10 +164,41 @@ export function PassportDetailPage() {
     },
     onError: () => toast.danger(t("common.unknown")),
   });
+  const skinMut = useMutation({
+    mutationFn: () => {
+      if (!skinFile && !q.data?.skin.has_custom_skin) throw new Error("skin file missing");
+      return uploadPassportSkin(id, { skin: skinFile, cape: capeFile, elytra: elytraFile, model: skinModel });
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.skins.saved") });
+      setSkinFile(null);
+      setCapeFile(null);
+      setElytraFile(null);
+      void qc.invalidateQueries({ queryKey: ["admin.passport", id] });
+      void qc.invalidateQueries({ queryKey: ["admin.passports"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const skinDeleteMut = useMutation({
+    mutationFn: () => deletePassportSkin(id),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.skins.resetDone") });
+      void qc.invalidateQueries({ queryKey: ["admin.passport", id] });
+      void qc.invalidateQueries({ queryKey: ["admin.passports"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  useEffect(() => {
+    if (q.data?.skin.model) {
+      setSkinModel(normalizeSkinModel(q.data.skin.model));
+    }
+  }, [q.data?.id, q.data?.skin.model]);
 
   if (q.isLoading) return <div className="page"><Card>{t("common.loading")}</Card></div>;
   if (q.error || !q.data) return <div className="page"><ErrorBlock error={q.error} onRetry={() => q.refetch()} /></div>;
   const p = q.data;
+  const persistedSkinModel = normalizeSkinModel(p.skin.model);
+  const hasSkinChanges = Boolean(skinFile || capeFile || elytraFile || (p.skin.has_custom_skin && skinModel !== persistedSkinModel));
   const activeBan = firstActiveBan(p.bans);
   const banDurationValid = isValidDuration(banDurationValue);
   const relatedAuditIDs = [p.id, p.uuid, ...p.profiles.flatMap((profile) => [profile.id, profile.uuid])]
@@ -218,6 +259,7 @@ export function PassportDetailPage() {
           onChange={setTab}
           tabs={[
             { value: "overview", label: t("common.overview"), icon: "gauge" },
+            { value: "skin", label: t("admin.skins.heading"), icon: "user" },
             { value: "audit", label: t("admin.player.audit"), icon: "list" },
           ]}
         />
@@ -262,9 +304,10 @@ export function PassportDetailPage() {
                   <DefRow k={t("admin.players.col.lastSeenIp")}><IPLocation ip={p.last_seen_ip} geo={p.last_seen_geo} /></DefRow>
                 </DefList>
               </Card>
-              <Card noBody className="table-card" title={t("admin.passports.profiles")}>
+              <Card noBody className="table-card">
                 {p.profiles.length ? (
                   <AdvancedList
+                    title={t("admin.passports.profiles")}
                     mode="client"
                     columns={boundProfileColumns}
                     rowKey={(profile) => profile.id}
@@ -284,7 +327,11 @@ export function PassportDetailPage() {
                 ) : (
                   <div className="adv-list">
                     <div className="adv-list-toolbar">
-                      <div className="adv-list-toolbar__left" />
+                      <div className="adv-list-toolbar__left">
+                        <div className="adv-list-title">
+                          <h3>{t("admin.passports.profiles")}</h3>
+                        </div>
+                      </div>
                       <div className="adv-list-toolbar__right">
                         <div className="adv-list-primary-actions">
                           <Button size="sm" variant="secondary" icon="link" onClick={() => { setSelectedProfileID(""); setDialog("bind"); }}>{t("admin.profiles.bind")}</Button>
@@ -327,9 +374,54 @@ export function PassportDetailPage() {
                 </Card>
               ) : null}
             </>
+          ) : tab === "skin" ? (
+            <div className="skin-detail-grid">
+              <Card title={t("admin.skins.preview")}>
+                <MinecraftSkinPreview
+                  skinUrl={previewSkinURL ?? p.skin.skin_url}
+                  capeUrl={previewCapeURL ?? p.skin.cape_url}
+                  elytraUrl={previewElytraURL ?? p.skin.elytra_url}
+                  model={skinModel}
+                  name={p.username}
+                />
+              </Card>
+              <Card title={t("admin.skins.state")}>
+                <DefList>
+                  <DefRow k={t("admin.skins.effectiveSource")}>{t(`admin.skins.source.${p.skin.effective_source}`)}</DefRow>
+                  <DefRow k={t("admin.skins.model")}>{t(`admin.skins.model.${p.skin.model === "slim" ? "slim" : "wide"}`)}</DefRow>
+                  <DefRow k={t("admin.skins.defaultVariant")}>{p.skin.default_variant} · {p.skin.default_model}</DefRow>
+                  <DefRow k={t("admin.skins.customSkin")}>{p.skin.has_custom_skin ? t("common.yes") : t("common.no")}</DefRow>
+                  <DefRow k={t("admin.skins.customCape")}>{p.skin.has_custom_cape ? t("common.yes") : t("common.no")}</DefRow>
+                  <DefRow k={t("admin.skins.customElytra")}>{p.skin.has_custom_elytra ? t("common.yes") : t("common.no")}</DefRow>
+                  <DefRow k={t("common.updated")}>{formatAbsTime(p.skin.updated_at)}</DefRow>
+                </DefList>
+              </Card>
+              <Card title={t("admin.skins.passportUpload")}>
+                <div className="skin-upload-grid">
+                  <Field label={t("admin.skins.model")}>
+                    <Select<"wide" | "slim">
+                      value={skinModel}
+                      onChange={setSkinModel}
+                      options={[
+                        { value: "wide", label: t("admin.skins.model.wide") },
+                        { value: "slim", label: t("admin.skins.model.slim") },
+                      ]}
+                    />
+                  </Field>
+                  <SkinFilePicker id="passport-skin-file" label={t("admin.skins.file.skin")} file={skinFile} onChange={setSkinFile} required />
+                  <SkinFilePicker id="passport-cape-file" label={t("admin.skins.file.cape")} file={capeFile} onChange={setCapeFile} />
+                  <SkinFilePicker id="passport-elytra-file" label={t("admin.skins.file.elytra")} file={elytraFile} onChange={setElytraFile} />
+                </div>
+                <div className="skin-actions">
+                  <Button icon="check" loading={skinMut.isPending} disabled={!hasSkinChanges} onClick={() => skinMut.mutate()}>{t("admin.skins.saveCustom")}</Button>
+                  <Button variant="secondary" icon="refresh" loading={skinDeleteMut.isPending} disabled={!p.skin.has_custom_skin} onClick={() => skinDeleteMut.mutate()}>{t("admin.skins.reset")}</Button>
+                </div>
+                <p className="card-copy">{t("admin.skins.passportUploadHint")}</p>
+              </Card>
+            </div>
           ) : (
-            <Card noBody className="table-card" title={t("admin.player.audit")}>
-              <AuditEventList baseFilters={{ related_id: relatedAuditIDs }} filterable={false} testId="passport-audit" urlPrefix="paAudit" />
+            <Card noBody className="table-card">
+              <AuditEventList title={t("admin.player.audit")} baseFilters={{ related_id: relatedAuditIDs }} filterable={false} testId="passport-audit" urlPrefix="paAudit" />
             </Card>
           )}
         </div>
@@ -445,6 +537,62 @@ function banTimeText(ban: PlayerBan, t: (key: string, fallback?: string) => stri
   if (ban.revoked_at) return t("admin.bans.revokedAt").replace("{time}", formatAbsTime(ban.revoked_at));
   if (ban.expires_at) return t("admin.bans.expiresAt").replace("{time}", formatAbsTime(ban.expires_at));
   return t("admin.bans.permanent");
+}
+
+function SkinFilePicker({
+  id,
+  label,
+  file,
+  onChange,
+  required,
+}: {
+  id: string;
+  label: string;
+  file: File | null;
+  onChange: (file: File | null) => void;
+  required?: boolean;
+}) {
+  return (
+    <Field label={label}>
+      <div className="skin-file-picker">
+        <input
+          id={id}
+          className="skin-file-picker__input"
+          type="file"
+          accept="image/png"
+          onChange={(event) => onChange(event.currentTarget.files?.[0] ?? null)}
+          required={required}
+        />
+        <label className="skin-file-picker__button" htmlFor={id}>
+          <Icon name="plus" size={14} />
+          {file ? file.name : label}
+        </label>
+        {file ? (
+          <button type="button" className="skin-file-picker__clear" onClick={() => onChange(null)} aria-label="Clear">
+            <Icon name="close" size={13} />
+          </button>
+        ) : null}
+      </div>
+    </Field>
+  );
+}
+
+function useObjectURL(file: File | null) {
+  const [url, setURL] = useState<string | null>(null);
+  useEffect(() => {
+    if (!file) {
+      setURL(null);
+      return undefined;
+    }
+    const next = URL.createObjectURL(file);
+    setURL(next);
+    return () => URL.revokeObjectURL(next);
+  }, [file]);
+  return url;
+}
+
+function normalizeSkinModel(model: string | undefined): "wide" | "slim" {
+  return model === "slim" ? "slim" : "wide";
 }
 
 function DurationField({

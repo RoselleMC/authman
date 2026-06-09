@@ -20,32 +20,57 @@ import {
   useToast,
   type ListColumn,
 } from "@authman/shared";
-import { createDownstreamServer, deleteDownstreamServer, fetchDownstreamServers, type DownstreamServer, type DownstreamServerInput } from "../api/admin";
+import { createDownstreamServer, deleteDownstreamServer, fetchDownstreamServers, updateDownstreamServer, type DownstreamServer, type DownstreamServerInput } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
-function serverInput(slug: string, displayName: string): DownstreamServerInput {
+function splitCSV(value: string): string[] {
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function parseAddress(value: string): { host: string; port: number } {
+  const trimmed = value.trim();
+  const lastColon = trimmed.lastIndexOf(":");
+  if (lastColon > 0) {
+    const host = trimmed.slice(0, lastColon).trim();
+    const port = Number(trimmed.slice(lastColon + 1).trim());
+    return { host: host || "127.0.0.1", port: Number.isFinite(port) && port > 0 ? port : 25565 };
+  }
+  return { host: trimmed || "127.0.0.1", port: 25565 };
+}
+
+function serverInput(displayName: string, matchDomains: string, connectionAddress: string): DownstreamServerInput {
+  const target = parseAddress(connectionAddress);
   return {
-    slug,
     display_name: displayName,
-    status: "active",
+    enabled: true,
+    visible: true,
     registration_open: true,
-    portal_theme: { display_name: displayName, portal_message: displayName },
-    portal_config: {
-      registration_strategy: "open",
+    routing_config: {
       show_in_global: true,
-      host: "127.0.0.1",
-      port: 25565,
-      transfer_host: "127.0.0.1",
-      transfer_port: 25565,
+      host: target.host,
+      port: target.port,
+      transfer_host: target.host,
+      transfer_port: target.port,
       motd: displayName,
       gate_enabled: true,
       grant_required: true,
       grant_ttl_seconds: 45,
       allowed_portal_sources: [],
-      portal_hosts: [],
+      portal_hosts: splitCSV(matchDomains),
       limbo_blueprint_id: "",
     },
     extension_providers: ["authman.identity"],
+  };
+}
+
+function inputFromServer(server: DownstreamServer, patch: Partial<Pick<DownstreamServerInput, "enabled" | "visible">>): DownstreamServerInput {
+  return {
+    display_name: server.display_name,
+    enabled: patch.enabled ?? server.enabled,
+    visible: patch.visible ?? server.visible,
+    registration_open: true,
+    routing_config: { ...server.routing_config },
+    extension_providers: [...server.extension_providers],
   };
 }
 
@@ -58,16 +83,18 @@ export function DownstreamServersPage() {
   const list = useListState({ urlPrefix: "ds", defaults: { pageSize: 25, hidden: ["host"] }, storageScope: user?.id });
   const [open, setOpen] = useState(false);
   const [bulkDeleteRows, setBulkDeleteRows] = useState<DownstreamServer[]>([]);
-  const [slug, setSlug] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [matchDomains, setMatchDomains] = useState("");
+  const [connectionAddress, setConnectionAddress] = useState("127.0.0.1:25565");
   const q = useQuery({ queryKey: ["admin.downstreamServers"], queryFn: fetchDownstreamServers });
   const createMut = useMutation({
-    mutationFn: () => createDownstreamServer(serverInput(slug, displayName)),
+    mutationFn: () => createDownstreamServer(serverInput(displayName, matchDomains, connectionAddress)),
     onSuccess: (server) => {
       toast.push({ tone: "success", title: t("common.saved") });
       setOpen(false);
-      setSlug("");
       setDisplayName("");
+      setMatchDomains("");
+      setConnectionAddress("127.0.0.1:25565");
       void qc.invalidateQueries({ queryKey: ["admin.downstreamServers"] });
       navigate(`/nodes/${encodeURIComponent(server.id)}`);
     },
@@ -84,12 +111,20 @@ export function DownstreamServersPage() {
     },
     onError: () => toast.danger(t("common.unknown")),
   });
+  const statusMut = useMutation({
+    mutationFn: async ({ rows, patch }: { rows: DownstreamServer[]; patch: Partial<Pick<DownstreamServerInput, "enabled" | "visible">> }) => {
+      await Promise.all(rows.map((row) => updateDownstreamServer(row.id, inputFromServer(row, patch))));
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.servers.saved.toast") });
+      void qc.invalidateQueries({ queryKey: ["admin.downstreamServers"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
   const columns: ListColumn<DownstreamServer>[] = [
     { key: "name", header: t("admin.servers.col.name"), mandatory: true, sortable: true, sortValue: (r) => r.display_name, filter: { type: "text" }, render: (r) => <strong>{r.display_name}</strong> },
-    { key: "slug", header: t("admin.servers.col.slug"), sortable: true, sortValue: (r) => r.slug, render: (r) => <span className="mono">{r.slug}</span> },
-    { key: "status", header: t("admin.servers.col.status"), sortable: true, sortValue: (r) => r.status, render: (r) => <StatusBadge status={r.status} /> },
+    { key: "status", header: t("admin.servers.col.status"), sortable: true, sortValue: (r) => r.status, render: (r) => <StatusBadge status={r.enabled ? (r.visible ? "active" : "hidden") : "disabled"} /> },
     { key: "host", header: t("admin.servers.col.host"), minWidth: "190px", render: (r) => <span className="mono">{r.target.transfer_host}:{r.target.transfer_port}</span> },
-    { key: "blueprint", header: t("admin.servers.col.blueprint"), minWidth: "180px", render: (r) => <span>{r.portal_config?.limbo_blueprint_id || t("admin.servers.defaultWorld")}</span> },
     { key: "updated", header: t("common.updated"), sortable: true, sortValue: (r) => r.updated_at ?? "", render: (r) => <span className="muted-cell">{formatRelativeTime(r.updated_at)}</span> },
     { key: "open", header: "", mandatory: true, width: "44px", minWidth: "44px", align: "right", sticky: "right", render: () => <Icon name="chevronRight" size={16} /> },
   ];
@@ -109,11 +144,21 @@ export function DownstreamServersPage() {
           onStateChange={list.setState}
           loading={q.isLoading}
           onRowClick={(r) => navigate(`/nodes/${encodeURIComponent(r.id)}`)}
-          selectable={(row) => row.id !== "default"}
+          selectable
           selectionActions={(rows) => (
-            <Button size="sm" variant="danger-soft" icon="trash" onClick={() => setBulkDeleteRows(rows)}>
-              {t("common.delete")}
-            </Button>
+            <>
+              <Button size="sm" variant="secondary" icon={rows.every((row) => row.enabled) ? "close" : "check"} loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, patch: { enabled: !rows.every((row) => row.enabled) } })}>
+                {rows.every((row) => row.enabled) ? t("common.disable") : t("common.enable")}
+              </Button>
+              <Button size="sm" variant="secondary" icon={rows.every((row) => row.visible) ? "eyeOff" : "eye"} loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, patch: { visible: !rows.every((row) => row.visible) } })}>
+                {rows.every((row) => row.visible) ? t("common.hide") : t("common.show")}
+              </Button>
+              {rows.every((row) => row.id !== "default") ? (
+                <Button size="sm" variant="danger-soft" icon="trash" onClick={() => setBulkDeleteRows(rows)}>
+                  {t("common.delete")}
+                </Button>
+              ) : null}
+            </>
           )}
           empty={<EmptyState icon="server" title={t("admin.servers.empty")} />}
           testId="downstream-servers"
@@ -125,11 +170,14 @@ export function DownstreamServersPage() {
         icon="server"
         iconTone="primary"
         title={t("admin.servers.add")}
-        footer={<><Button variant="ghost" onClick={() => setOpen(false)}>{t("common.cancel")}</Button><Button variant="primary" loading={createMut.isPending} disabled={!slug.trim() || !displayName.trim()} onClick={() => createMut.mutate()}>{t("common.save")}</Button></>}
+        footer={<><Button variant="ghost" onClick={() => setOpen(false)}>{t("common.cancel")}</Button><Button variant="primary" loading={createMut.isPending} disabled={!displayName.trim()} onClick={() => createMut.mutate()}>{t("common.save")}</Button></>}
       >
         <div className="form-grid two">
-          <Field label={t("admin.servers.col.slug")}><Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="survival" /></Field>
           <Field label={t("admin.servers.col.name")}><Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Survival" /></Field>
+          <Field label={t("admin.servers.connectionAddress")}><Input value={connectionAddress} onChange={(e) => setConnectionAddress(e.target.value)} placeholder="127.0.0.1:25565" /></Field>
+          <Field label={t("admin.servers.matchDomains")} hint={t("admin.servers.matchDomains.hint")} style={{ gridColumn: "1 / -1" }}>
+            <Input value={matchDomains} onChange={(e) => setMatchDomains(e.target.value)} placeholder="play.example.com, survival.example.com" />
+          </Field>
         </div>
       </Dialog>
       <ConfirmDialog

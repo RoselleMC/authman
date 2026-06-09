@@ -18,7 +18,7 @@ export function Card({ title, actions, children, noBody, bodyStyle, className, t
       {title || actions ? (
         <div className="card__head">
           {title ? <h3 className="card__title">{title}</h3> : <span />}
-          {actions ? <div style={{ display: "flex", gap: 8, alignItems: "center" }}>{actions}</div> : null}
+          {actions ? <div className="card__actions">{actions}</div> : null}
         </div>
       ) : null}
       {noBody ? children : <div className="card__body" style={bodyStyle}>{children}</div>}

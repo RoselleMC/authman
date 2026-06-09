@@ -70,23 +70,19 @@ type ipGeoSettingsRequest struct {
 
 type downstreamServerRequest struct {
 	ID                 string         `json:"id"`
-	Slug               string         `json:"slug"`
 	DisplayName        string         `json:"display_name"`
 	Status             string         `json:"status"`
+	Enabled            *bool          `json:"enabled"`
+	Visible            *bool          `json:"visible"`
 	RegistrationOpen   bool           `json:"registration_open"`
-	PortalTheme        map[string]any `json:"portal_theme"`
-	PortalConfig       map[string]any `json:"portal_config"`
+	RoutingConfig      map[string]any `json:"routing_config"`
 	ExtensionProviders []string       `json:"extension_providers"`
 }
 
 type portalSettingsRequest struct {
-	DefaultTargetServer string `json:"default_target_server"`
-	HoldingServer       string `json:"holding_server"`
-	RequestedHost       string `json:"requested_host"`
-	SourceID            string `json:"source_id"`
-	TransferCookieKey   string `json:"transfer_cookie_key"`
-	DialogEnabled       bool   `json:"dialog_enabled"`
-	DialogFallbackChat  bool   `json:"dialog_fallback_chat_enabled"`
+	TransferCookieKey  string `json:"transfer_cookie_key"`
+	DialogEnabled      bool   `json:"dialog_enabled"`
+	DialogFallbackChat bool   `json:"dialog_fallback_chat_enabled"`
 }
 
 type adminRoleUpdateRequest struct {
@@ -397,7 +393,9 @@ func (s *Server) handleAdminPassportDetail(w http.ResponseWriter, r *http.Reques
 			profileBans[profile.ID] = ban
 		}
 	}
-	api.WriteJSON(w, http.StatusOK, passportDetailData(passport, profiles, credential, presences, bans, profileBans, eventData), nil)
+	data := passportDetailData(passport, profiles, credential, presences, bans, profileBans, eventData)
+	data["skin"] = s.passportSkinData(r.Context(), passport)
+	api.WriteJSON(w, http.StatusOK, data, nil)
 }
 
 func (s *Server) handleAdminUpdatePassport(w http.ResponseWriter, r *http.Request) {
@@ -1029,18 +1027,12 @@ func (s *Server) handleAdminMojangRoutes(w http.ResponseWriter, r *http.Request)
 		routes := s.mojangVerifier.RoutesSnapshot()
 		healthy := 0
 		for _, route := range routes {
-			state := string(route.State)
-			if state == "" {
-				state = "healthy"
-			}
+			state := mojangRouteState(route)
 			cooldown := int64(0)
 			if route.CooldownUntil.After(now) {
 				cooldown = int64(route.CooldownUntil.Sub(now).Seconds())
 			}
-			if route.Disabled {
-				state = string(mojang.RouteDisabled)
-			}
-			if !route.Disabled && (state == "healthy" || cooldown == 0) {
+			if state == string(mojang.RouteHealthy) {
 				healthy++
 			}
 			routeData = append(routeData, map[string]any{
@@ -1607,13 +1599,7 @@ func clampInt(value int, min int, max int) int {
 }
 
 func mojangRouteData(route mojang.Route, now time.Time) map[string]any {
-	state := string(route.State)
-	if state == "" {
-		state = "healthy"
-	}
-	if route.Disabled {
-		state = string(mojang.RouteDisabled)
-	}
+	state := mojangRouteState(route)
 	cooldown := int64(0)
 	if route.CooldownUntil.After(now) {
 		cooldown = int64(route.CooldownUntil.Sub(now).Seconds())
@@ -1629,6 +1615,19 @@ func mojangRouteData(route mojang.Route, now time.Time) map[string]any {
 		"cooldown_remaining_seconds": cooldown,
 		"last_error":                 route.LastFailureError,
 	}
+}
+
+func mojangRouteState(route mojang.Route) string {
+	if route.Disabled {
+		return string(mojang.RouteDisabled)
+	}
+	if route.State != "" {
+		return string(route.State)
+	}
+	if route.Kind == mojang.RouteDirect {
+		return string(mojang.RouteHealthy)
+	}
+	return "unknown"
 }
 
 func mojangEventData(event mojang.Event) map[string]any {
@@ -1787,10 +1786,6 @@ func (s *Server) handleAdminUpdatePortalSettings(w http.ResponseWriter, r *http.
 	if server.PortalConfig == nil {
 		server.PortalConfig = map[string]any{}
 	}
-	server.PortalConfig["default_target_server"] = strings.TrimSpace(req.DefaultTargetServer)
-	server.PortalConfig["holding_server"] = strings.TrimSpace(req.HoldingServer)
-	server.PortalConfig["requested_host"] = strings.TrimSpace(req.RequestedHost)
-	server.PortalConfig["source_id"] = strings.TrimSpace(req.SourceID)
 	cookieKey := strings.TrimSpace(req.TransferCookieKey)
 	if cookieKey == "" {
 		cookieKey = "authman:transfer_grant"
@@ -1813,10 +1808,6 @@ func portalSettingsData(server store.DownstreamServer) map[string]any {
 		cfg = map[string]any{}
 	}
 	return map[string]any{
-		"default_target_server":        strings.TrimSpace(stringFromAnyServer(cfg["default_target_server"])),
-		"holding_server":               strings.TrimSpace(stringFromAnyServer(cfg["holding_server"])),
-		"requested_host":               strings.TrimSpace(stringFromAnyServer(cfg["requested_host"])),
-		"source_id":                    strings.TrimSpace(stringFromAnyServer(cfg["source_id"])),
 		"transfer_cookie_key":          strings.TrimSpace(stringFromAnyServer(cfg["transfer_cookie_key"])),
 		"dialog_enabled":               boolFromAnyServer(cfg["dialog_enabled"], true),
 		"dialog_fallback_chat_enabled": boolFromAnyServer(cfg["dialog_fallback_chat_enabled"], true),
@@ -1824,18 +1815,11 @@ func portalSettingsData(server store.DownstreamServer) map[string]any {
 }
 
 func downstreamServerFromRequest(req downstreamServerRequest) (store.DownstreamServer, *api.Error) {
-	slug := strings.ToLower(strings.TrimSpace(req.Slug))
-	if slug == "" {
-		return store.DownstreamServer{}, api.NewError(http.StatusBadRequest, "server.slug_required", "server slug is required")
-	}
-	if !validSlug(slug) {
-		return store.DownstreamServer{}, api.NewError(http.StatusBadRequest, "server.slug_invalid", "server slug is invalid")
-	}
 	name := strings.TrimSpace(req.DisplayName)
 	if name == "" {
 		return store.DownstreamServer{}, api.NewError(http.StatusBadRequest, "server.display_name_required", "display name is required")
 	}
-	status := strings.TrimSpace(req.Status)
+	status := statusFromServerFlags(req.Enabled, req.Visible, req.Status)
 	if status == "" {
 		status = "active"
 	}
@@ -1846,14 +1830,27 @@ func downstreamServerFromRequest(req downstreamServerRequest) (store.DownstreamS
 	}
 	return store.DownstreamServer{
 		ID:                 strings.TrimSpace(req.ID),
-		Slug:               slug,
+		Slug:               strings.TrimSpace(req.ID),
 		DisplayName:        name,
 		Status:             status,
 		RegistrationOpen:   req.RegistrationOpen,
-		PortalTheme:        req.PortalTheme,
-		PortalConfig:       req.PortalConfig,
+		PortalTheme:        map[string]any{},
+		PortalConfig:       req.RoutingConfig,
 		ExtensionProviders: req.ExtensionProviders,
 	}, nil
+}
+
+func statusFromServerFlags(enabled *bool, visible *bool, fallback string) string {
+	if enabled == nil && visible == nil {
+		return strings.TrimSpace(fallback)
+	}
+	if enabled != nil && !*enabled {
+		return "disabled"
+	}
+	if visible != nil && !*visible {
+		return "hidden"
+	}
+	return "active"
 }
 
 func validSlug(slug string) bool {

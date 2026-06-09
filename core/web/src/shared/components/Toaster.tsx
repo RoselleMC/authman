@@ -49,10 +49,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       counter += 1;
       const id = counter;
       const tone = args.tone ?? "info";
-      setToasts((list) => [...list, { id, tone, title: args.title, msg: args.msg }]);
+      setToasts((list) => [...list, { id, tone, title: t(args.title, args.title), msg: args.msg ? t(args.msg, args.msg) : undefined }]);
       window.setTimeout(() => dismiss(id), args.duration ?? 3600);
     },
-    [dismiss],
+    [dismiss, t],
   );
 
   const value = useMemo<ToastContextValue>(

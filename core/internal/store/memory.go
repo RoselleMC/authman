@@ -40,6 +40,7 @@ type Memory struct {
 	downstreamServers   map[string]DownstreamServer
 	limboBlueprints     map[string]LimboBlueprint
 	profileSkins        map[string]ProfileSkin
+	passportSkins       map[string]PassportSkin
 	transferGrants      map[string]auth.TransferGrant
 	extensionData       map[string]ExtensionPlayerData
 	adminRoles          map[string]rbac.Role
@@ -72,6 +73,7 @@ func NewMemory() *Memory {
 		downstreamServers:   make(map[string]DownstreamServer),
 		limboBlueprints:     make(map[string]LimboBlueprint),
 		profileSkins:        make(map[string]ProfileSkin),
+		passportSkins:       make(map[string]PassportSkin),
 		transferGrants:      make(map[string]auth.TransferGrant),
 		extensionData:       make(map[string]ExtensionPlayerData),
 		adminRoles:          make(map[string]rbac.Role),
@@ -287,6 +289,77 @@ func (m *Memory) DeleteProfileSkin(ctx context.Context, profileID string, proper
 	return profile, nil
 }
 
+func (m *Memory) SetProfileSkinSource(ctx context.Context, profileID string, skinSource string, properties []identity.ProfileProperty) (identity.Profile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	profileID = strings.TrimSpace(profileID)
+	profile, ok := m.profilesByID[profileID]
+	if !ok {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	switch strings.TrimSpace(skinSource) {
+	case "passport", "mojang", "custom", "none":
+		profile.SkinSource = strings.TrimSpace(skinSource)
+	default:
+		profile.SkinSource = "none"
+	}
+	profile.ProfileProperties = append([]identity.ProfileProperty(nil), properties...)
+	profile.UpdatedAt = time.Now().UTC()
+	m.profilesByID[profileID] = profile
+	m.refreshProfilePlayerLocked(profileID)
+	return profile, nil
+}
+
+func (m *Memory) GetPassportSkin(ctx context.Context, passportID string) (PassportSkin, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	skin, ok := m.passportSkins[strings.TrimSpace(passportID)]
+	if !ok {
+		return PassportSkin{}, fmt.Errorf("passport skin not found: %w", ErrNotFound)
+	}
+	return clonePassportSkin(skin), nil
+}
+
+func (m *Memory) SetPassportSkin(ctx context.Context, passportID string, skin PassportSkin) (identity.Passport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	passportID = strings.TrimSpace(passportID)
+	passport, ok := m.passportsByID[passportID]
+	if !ok {
+		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	now := time.Now().UTC()
+	skin.PassportID = passportID
+	if skin.Model != "slim" {
+		skin.Model = "wide"
+	}
+	if skin.SkinContentType == "" {
+		skin.SkinContentType = "image/png"
+	}
+	if skin.CreatedAt.IsZero() {
+		skin.CreatedAt = now
+	}
+	skin.UpdatedAt = now
+	m.passportSkins[passportID] = clonePassportSkin(skin)
+	passport.UpdatedAt = now
+	m.passportsByID[passportID] = passport
+	return passport, nil
+}
+
+func (m *Memory) DeletePassportSkin(ctx context.Context, passportID string) (identity.Passport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	passportID = strings.TrimSpace(passportID)
+	passport, ok := m.passportsByID[passportID]
+	if !ok {
+		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	delete(m.passportSkins, passportID)
+	passport.UpdatedAt = time.Now().UTC()
+	m.passportsByID[passportID] = passport
+	return passport, nil
+}
+
 func (m *Memory) ListProfilesForPassport(ctx context.Context, passportID string) []identity.Profile {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -473,6 +546,13 @@ func (m *Memory) UpdatePassportPassword(ctx context.Context, passportID string, 
 }
 
 func cloneProfileSkin(skin ProfileSkin) ProfileSkin {
+	skin.SkinPNG = append([]byte(nil), skin.SkinPNG...)
+	skin.CapePNG = append([]byte(nil), skin.CapePNG...)
+	skin.ElytraPNG = append([]byte(nil), skin.ElytraPNG...)
+	return skin
+}
+
+func clonePassportSkin(skin PassportSkin) PassportSkin {
 	skin.SkinPNG = append([]byte(nil), skin.SkinPNG...)
 	skin.CapePNG = append([]byte(nil), skin.CapePNG...)
 	skin.ElytraPNG = append([]byte(nil), skin.ElytraPNG...)
@@ -1335,8 +1415,11 @@ func (m *Memory) UpsertDownstreamServer(ctx context.Context, server DownstreamSe
 	defer m.mu.Unlock()
 	now := time.Now().UTC()
 	if server.ID == "" {
-		m.nextID++
-		server.ID = "server-" + strconv.Itoa(m.nextID)
+		uuid, err := identity.RandomProfileUUID()
+		if err != nil {
+			return DownstreamServer{}, err
+		}
+		server.ID = uuid.String()
 		server.CreatedAt = now
 	} else if existing, ok := m.downstreamServers[server.ID]; ok && !existing.CreatedAt.IsZero() {
 		server.CreatedAt = existing.CreatedAt

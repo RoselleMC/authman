@@ -18,6 +18,7 @@ export function MinecraftSkinPreview({ skinUrl, capeUrl, elytraUrl, model, name 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return undefined;
+    const theme = readSkinPreviewTheme(canvas);
     const viewer = new SkinViewer({
       canvas,
       width: canvas.clientWidth || 360,
@@ -25,15 +26,13 @@ export function MinecraftSkinPreview({ skinUrl, capeUrl, elytraUrl, model, name 
       skin: assetURL(skinUrl),
       model: model === "slim" ? "slim" : "default",
       enableControls: true,
-      background: 0xf7fbf7,
+      background: theme.background,
       zoom: 0.86,
       nameTag: name,
       animation: new IdleAnimation(),
       preserveDrawingBuffer: true,
     });
-    viewer.globalLight.intensity = 3;
-    viewer.cameraLight.intensity = 0.6;
-    viewer.renderer.setClearColor(0xf7fbf7, 1);
+    applySkinPreviewTheme(viewer, canvas);
     viewer.resetEars();
     viewer.controls.enablePan = true;
     viewer.controls.screenSpacePanning = true;
@@ -56,8 +55,11 @@ export function MinecraftSkinPreview({ skinUrl, capeUrl, elytraUrl, model, name 
       viewer.setSize(width, 420);
     });
     resize.observe(canvas);
+    const themeObserver = new MutationObserver(() => applySkinPreviewTheme(viewer, canvas));
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => {
       resize.disconnect();
+      themeObserver.disconnect();
       canvas.removeEventListener("contextmenu", preventContextMenu);
       viewer.dispose();
       viewerRef.current = null;
@@ -105,4 +107,32 @@ function assetURL(url: string | null | undefined) {
     return `${cfg.apiBase}${url.slice(4)}`;
   }
   return url;
+}
+
+function applySkinPreviewTheme(viewer: SkinViewer, canvas: HTMLCanvasElement) {
+  const theme = readSkinPreviewTheme(canvas);
+  viewer.renderer.setClearColor(theme.background, 1);
+  viewer.globalLight.intensity = theme.dark ? 3.4 : 3;
+  viewer.cameraLight.intensity = theme.dark ? 1.1 : 0.6;
+}
+
+function readSkinPreviewTheme(canvas: HTMLCanvasElement) {
+  const style = getComputedStyle(canvas);
+  return {
+    background: cssColorToHex(style.getPropertyValue("--skin-preview-canvas-bg").trim(), 0xf7fbf7),
+    dark: document.documentElement.getAttribute("data-theme") === "dark",
+  };
+}
+
+function cssColorToHex(color: string, fallback: number) {
+  if (!color) return fallback;
+  const ctx = document.createElement("canvas").getContext("2d");
+  if (!ctx) return fallback;
+  ctx.fillStyle = "#000";
+  ctx.fillStyle = color;
+  const normalized = ctx.fillStyle;
+  if (/^#[0-9a-f]{6}$/i.test(normalized)) {
+    return Number.parseInt(normalized.slice(1), 16);
+  }
+  return fallback;
 }

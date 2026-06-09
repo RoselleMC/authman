@@ -52,8 +52,16 @@ func (r *Registry) Create(ctx context.Context, name string, now time.Time) (Node
 }
 
 func (r *Registry) CreateKind(ctx context.Context, name string, kind string, now time.Time) (Node, string, error) {
+	return r.CreateKindForServer(ctx, name, kind, "", now)
+}
+
+func (r *Registry) CreateKindForServer(ctx context.Context, name string, kind string, serverID string, now time.Time) (Node, string, error) {
 	if name == "" {
 		return Node{}, "", fmt.Errorf("node name is required")
+	}
+	kind = NormalizeKind(kind)
+	if strings.TrimSpace(serverID) == "" {
+		serverID = "default"
 	}
 	token, err := auth.NewOpaqueToken(32)
 	if err != nil {
@@ -61,11 +69,18 @@ func (r *Registry) CreateKind(ctx context.Context, name string, kind string, now
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if kind == "downstream_velocity" {
+		for _, existing := range r.nodes {
+			if !existing.Disabled && NormalizeKind(existing.Mode) == "downstream_velocity" && existing.ServerID == serverID {
+				return Node{}, "", fmt.Errorf("downstream server already has a node")
+			}
+		}
+	}
 	r.nextID++
 	node := Node{
 		ID:               fmt.Sprintf("node-%d", r.nextID),
-		ServerID:         "default",
-		Mode:             NormalizeKind(kind),
+		ServerID:         serverID,
+		Mode:             kind,
 		Name:             name,
 		TokenHash:        auth.HashToken("node", token),
 		TokenFingerprint: auth.TokenFingerprint(token),
@@ -156,6 +171,13 @@ func (r *Registry) Register(ctx context.Context, registration Registration, now 
 			node.LastHeartbeatAt = &now
 			r.nodes[id] = node
 			return node, nil
+		}
+	}
+	if kind == "downstream_velocity" {
+		for _, existing := range r.nodes {
+			if !existing.Disabled && NormalizeKind(existing.Mode) == "downstream_velocity" && existing.ServerID == serverID {
+				return Node{}, fmt.Errorf("downstream server already has a node")
+			}
 		}
 	}
 	r.nextID++

@@ -32,6 +32,7 @@ const profileSelectColumns = "uuid, uuid, protocol_name, normalized_name, displa
 const nodeSelectColumns = "id, server_id, mode, name, token_hash, token_fingerprint, instance_fingerprint, plugin_version, velocity_version, disabled, runtime_config, created_at, last_heartbeat_at"
 const limboBlueprintSelectColumns = "id, name, description, filename, content_type, size_bytes, sha256, schematic, preview, config, created_at, updated_at"
 const profileSkinSelectColumns = "profile_id, model, skin_png, skin_content_type, skin_sha256, COALESCE(cape_png, ''::bytea), COALESCE(cape_content_type, ''), COALESCE(cape_sha256, ''), COALESCE(elytra_png, ''::bytea), COALESCE(elytra_content_type, ''), COALESCE(elytra_sha256, ''), created_at, updated_at"
+const passportSkinSelectColumns = "passport_id, model, skin_png, skin_content_type, skin_sha256, COALESCE(cape_png, ''::bytea), COALESCE(cape_content_type, ''), COALESCE(cape_sha256, ''), COALESCE(elytra_png, ''::bytea), COALESCE(elytra_content_type, ''), COALESCE(elytra_sha256, ''), created_at, updated_at"
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*Postgres, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -432,6 +433,116 @@ func (p *Postgres) DeleteProfileSkin(ctx context.Context, profileID string, prop
 		return identity.Profile{}, err
 	}
 	return profile, nil
+}
+
+func (p *Postgres) SetProfileSkinSource(ctx context.Context, profileID string, skinSource string, properties []identity.ProfileProperty) (identity.Profile, error) {
+	profileID = strings.TrimSpace(profileID)
+	propsJSON, err := json.Marshal(properties)
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	profile, err := scanProfileRow(p.pool.QueryRow(ctx, `
+		UPDATE profiles
+		SET skin_source = $2,
+			profile_properties = $3::jsonb,
+			updated_at = now()
+		WHERE uuid = $1
+		RETURNING `+profileSelectColumns+`
+	`, profileID, normalizeSkinSource(skinSource), string(propsJSON)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	return profile, err
+}
+
+func (p *Postgres) GetPassportSkin(ctx context.Context, passportID string) (PassportSkin, error) {
+	skin, err := scanPassportSkinRow(p.pool.QueryRow(ctx, `
+		SELECT `+passportSkinSelectColumns+`
+		FROM passport_skins
+		WHERE passport_id = $1
+	`, strings.TrimSpace(passportID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PassportSkin{}, fmt.Errorf("passport skin not found: %w", ErrNotFound)
+	}
+	return skin, err
+}
+
+func (p *Postgres) SetPassportSkin(ctx context.Context, passportID string, skin PassportSkin) (identity.Passport, error) {
+	passportID = strings.TrimSpace(passportID)
+	if passportID == "" {
+		return identity.Passport{}, fmt.Errorf("passport id is required")
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return identity.Passport{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO passport_skins (
+			passport_id, model, skin_png, skin_content_type, skin_sha256,
+			cape_png, cape_content_type, cape_sha256,
+			elytra_png, elytra_content_type, elytra_sha256
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		ON CONFLICT (passport_id) DO UPDATE
+		SET model = EXCLUDED.model,
+			skin_png = EXCLUDED.skin_png,
+			skin_content_type = EXCLUDED.skin_content_type,
+			skin_sha256 = EXCLUDED.skin_sha256,
+			cape_png = EXCLUDED.cape_png,
+			cape_content_type = EXCLUDED.cape_content_type,
+			cape_sha256 = EXCLUDED.cape_sha256,
+			elytra_png = EXCLUDED.elytra_png,
+			elytra_content_type = EXCLUDED.elytra_content_type,
+			elytra_sha256 = EXCLUDED.elytra_sha256,
+			updated_at = now()
+	`, passportID, normalizeSkinModel(skin.Model), skin.SkinPNG, defaultContentType(skin.SkinContentType), skin.SkinSHA256, nullableBytes(skin.CapePNG), nullString(skin.CapeContentType), nullString(skin.CapeSHA256), nullableBytes(skin.ElytraPNG), nullString(skin.ElytraContentType), nullString(skin.ElytraSHA256)); err != nil {
+		return identity.Passport{}, err
+	}
+	passport, err := scanPassportRow(tx.QueryRow(ctx, `
+		UPDATE passports
+		SET updated_at = now()
+		WHERE uuid = $1
+		RETURNING `+passportSelectColumns+`
+	`, passportID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	if err != nil {
+		return identity.Passport{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return identity.Passport{}, err
+	}
+	return passport, nil
+}
+
+func (p *Postgres) DeletePassportSkin(ctx context.Context, passportID string) (identity.Passport, error) {
+	passportID = strings.TrimSpace(passportID)
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return identity.Passport{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM passport_skins WHERE passport_id = $1`, passportID); err != nil {
+		return identity.Passport{}, err
+	}
+	passport, err := scanPassportRow(tx.QueryRow(ctx, `
+		UPDATE passports
+		SET updated_at = now()
+		WHERE uuid = $1
+		RETURNING `+passportSelectColumns+`
+	`, passportID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	if err != nil {
+		return identity.Passport{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return identity.Passport{}, err
+	}
+	return passport, nil
 }
 
 func (p *Postgres) ListProfilesForPassport(ctx context.Context, passportID string) []identity.Profile {
@@ -1192,8 +1303,31 @@ func (p *Postgres) Create(ctx context.Context, name string, now time.Time) (node
 }
 
 func (p *Postgres) CreateKind(ctx context.Context, name string, kind string, now time.Time) (node.Node, string, error) {
+	return p.CreateKindForServer(ctx, name, kind, "", now)
+}
+
+func (p *Postgres) CreateKindForServer(ctx context.Context, name string, kind string, serverID string, now time.Time) (node.Node, string, error) {
 	if name == "" {
 		return node.Node{}, "", fmt.Errorf("node name is required")
+	}
+	kind = node.NormalizeKind(kind)
+	serverID = strings.TrimSpace(serverID)
+	if serverID == "" {
+		serverID = "default"
+	}
+	if kind == "downstream_velocity" {
+		var existing string
+		err := p.pool.QueryRow(ctx, `
+			SELECT id FROM velocity_nodes
+			WHERE disabled = false AND mode = 'downstream_velocity' AND server_id = $1
+			LIMIT 1
+		`, serverID).Scan(&existing)
+		if err == nil {
+			return node.Node{}, "", fmt.Errorf("downstream server already has a node")
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return node.Node{}, "", err
+		}
 	}
 	token, err := auth.NewOpaqueToken(32)
 	if err != nil {
@@ -1205,8 +1339,8 @@ func (p *Postgres) CreateKind(ctx context.Context, name string, kind string, now
 	}
 	n := node.Node{
 		ID:               id,
-		ServerID:         "default",
-		Mode:             node.NormalizeKind(kind),
+		ServerID:         serverID,
+		Mode:             kind,
 		Name:             name,
 		TokenHash:        auth.HashToken("node", token),
 		TokenFingerprint: auth.TokenFingerprint(token),
@@ -1298,6 +1432,20 @@ func (p *Postgres) Register(ctx context.Context, registration node.Registration,
 	}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return node.Node{}, err
+	}
+	if registration.Mode == "downstream_velocity" {
+		var existing string
+		err := p.pool.QueryRow(ctx, `
+			SELECT id FROM velocity_nodes
+			WHERE disabled = false AND mode = 'downstream_velocity' AND server_id = $1 AND instance_fingerprint <> $2
+			LIMIT 1
+		`, registration.ServerID, registration.InstanceFingerprint).Scan(&existing)
+		if err == nil {
+			return node.Node{}, fmt.Errorf("downstream server already has a node")
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return node.Node{}, err
+		}
 	}
 	id, err := randomID("node")
 	if err != nil {
@@ -1772,11 +1920,12 @@ func (p *Postgres) GetDownstreamServer(ctx context.Context, idOrSlug string) (Do
 func (p *Postgres) UpsertDownstreamServer(ctx context.Context, server DownstreamServer) (DownstreamServer, error) {
 	server = normalizeDownstreamServer(server)
 	if server.ID == "" {
-		id, err := randomID("server")
+		id, err := identity.RandomProfileUUID()
 		if err != nil {
 			return DownstreamServer{}, err
 		}
-		server.ID = id
+		server.ID = id.String()
+		server.Slug = server.ID
 	}
 	theme, err := json.Marshal(server.PortalTheme)
 	if err != nil {
@@ -2639,6 +2788,26 @@ func scanProfileSkinRow(row playerScanner) (ProfileSkin, error) {
 	return skin, err
 }
 
+func scanPassportSkinRow(row playerScanner) (PassportSkin, error) {
+	var skin PassportSkin
+	err := row.Scan(
+		&skin.PassportID,
+		&skin.Model,
+		&skin.SkinPNG,
+		&skin.SkinContentType,
+		&skin.SkinSHA256,
+		&skin.CapePNG,
+		&skin.CapeContentType,
+		&skin.CapeSHA256,
+		&skin.ElytraPNG,
+		&skin.ElytraContentType,
+		&skin.ElytraSHA256,
+		&skin.CreatedAt,
+		&skin.UpdatedAt,
+	)
+	return skin, err
+}
+
 func unmarshalIPGeo(raw []byte) *identity.IPGeo {
 	if len(raw) == 0 {
 		return nil
@@ -3014,7 +3183,7 @@ func normalizeSkinModel(value string) string {
 
 func normalizeSkinSource(value string) string {
 	switch strings.TrimSpace(value) {
-	case "mojang", "custom", "none":
+	case "mojang", "custom", "passport", "none":
 		return strings.TrimSpace(value)
 	default:
 		return "none"
@@ -3134,6 +3303,22 @@ CREATE TABLE IF NOT EXISTS profile_skins (
 ALTER TABLE profile_skins ADD COLUMN IF NOT EXISTS elytra_png bytea;
 ALTER TABLE profile_skins ADD COLUMN IF NOT EXISTS elytra_content_type text;
 ALTER TABLE profile_skins ADD COLUMN IF NOT EXISTS elytra_sha256 text;
+
+CREATE TABLE IF NOT EXISTS passport_skins (
+	passport_id text PRIMARY KEY REFERENCES passports(uuid) ON DELETE CASCADE,
+	model text NOT NULL DEFAULT 'wide' CHECK (model IN ('slim', 'wide')),
+	skin_png bytea NOT NULL,
+	skin_content_type text NOT NULL DEFAULT 'image/png',
+	skin_sha256 text NOT NULL,
+	cape_png bytea,
+	cape_content_type text,
+	cape_sha256 text,
+	elytra_png bytea,
+	elytra_content_type text,
+	elytra_sha256 text,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS offline_passport_credentials (
 	passport_id text PRIMARY KEY REFERENCES passports(uuid) ON DELETE CASCADE,
@@ -3435,8 +3620,8 @@ VALUES (
 	'Default Server',
 	'active',
 	true,
-	'{"primary_color":"#16a34a","accent_color":"#2563eb","portal_message":"Welcome to Authman","display_name":"Default Server","description":"Default Authman downstream context"}'::jsonb,
-	'{"registration_strategy":"open","show_in_global":true,"host":"127.0.0.1","port":25565,"transfer_host":"127.0.0.1","transfer_port":25565,"motd":"Welcome to Authman","grant_required":true,"gate_enabled":true,"grant_ttl_seconds":45,"allowed_portal_sources":[],"portal_hosts":[]}'::jsonb,
+	'{}'::jsonb,
+	'{"registration_strategy":"open","show_in_global":true,"host":"127.0.0.1","port":25565,"transfer_host":"127.0.0.1","transfer_port":25565,"motd":"Default Server","grant_required":true,"gate_enabled":true,"grant_ttl_seconds":45,"allowed_portal_sources":[],"portal_hosts":[]}'::jsonb,
 	ARRAY['authman.identity']::text[]
 )
 ON CONFLICT (id) DO NOTHING;

@@ -647,33 +647,31 @@ function AdminsPanel() {
 
   return (
     <SettingsStack>
-      <Card
-        title={t("admin.settings.admins")}
-        noBody
-        actions={
-          <Button
-            variant="secondary"
-            size="sm"
-            icon="plus"
-            disabled={!canEditAdmins}
-            title={canEditAdmins ? undefined : t("admin.settings.readOnly")}
-            onClick={() => setDialogOpen(true)}
-            data-testid="add-admin"
-          >
-            {t("admin.settings.addAdmin")}
-          </Button>
-        }
-      >
+      <Card noBody className="table-card">
         {usersQ.error ? (
           <ErrorState error={usersQ.error} onRetry={() => usersQ.refetch()} />
         ) : (
           <AdvancedList
+            title={t("admin.settings.admins")}
             loading={usersQ.isLoading}
             rows={adminUsers}
             columns={columns}
             rowKey={(r) => r.id}
             state={list.state}
             onStateChange={list.setState}
+            primaryActions={
+              <Button
+                variant="secondary"
+                size="sm"
+                icon="plus"
+                disabled={!canEditAdmins}
+                title={canEditAdmins ? undefined : t("admin.settings.readOnly")}
+                onClick={() => setDialogOpen(true)}
+                data-testid="add-admin"
+              >
+                {t("admin.settings.addAdmin")}
+              </Button>
+            }
             empty={<EmptyState icon="users" title={t("admin.settings.emptyAdmins")} />}
             testId="admin-users-table"
           />

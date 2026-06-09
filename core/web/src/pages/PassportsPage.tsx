@@ -159,7 +159,7 @@ export function PassportsPage() {
 
   return (
     <PageShell>
-      <PageHeader title={t("admin.passports.heading")} />
+      <PageHeader title={t("admin.passports.heading")} desc={t("admin.passports.desc")} />
       {q.error ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : null}
       <Card noBody className="table-card">
         <AdvancedList

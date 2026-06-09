@@ -14,6 +14,24 @@ export interface PortalConfig {
   message?: string;
 }
 
+export interface PortalIPGeo {
+  status?: string;
+  country?: string;
+  countryCode?: string;
+  regionName?: string;
+  city?: string;
+  query?: string;
+}
+
+export interface PortalBan {
+  id: string;
+  scope: "passport" | "profile" | string;
+  reason?: string;
+  created_at?: string;
+  expires_at?: string | null;
+  revoked_at?: string | null;
+}
+
 export interface PortalPlayer {
   id: string;
   uuid: string;
@@ -23,25 +41,49 @@ export interface PortalPlayer {
   kind: "premium" | "offline";
   registration_server_label: string | null;
   last_seen_server_label: string | null;
+  last_seen_at?: string | null;
+  last_seen_ip?: string | null;
+  last_seen_geo?: PortalIPGeo | null;
   connected_servers: Array<{ slug: string; display_name: string }>;
 }
 
 export interface PortalPassport {
   id: string;
   uuid: string;
+  uuid_compact?: string;
   username: string;
   kind: "premium" | "offline";
   status: string;
+  avatar_url?: string;
   profile_count: number;
+  online?: boolean;
+  presence_count?: number;
+  raw_offline_name?: string;
+  registration_server?: string | null;
+  last_seen_server?: string | null;
+  last_seen_at?: string | null;
+  last_seen_ip?: string | null;
+  last_seen_geo?: PortalIPGeo | null;
+  active_ban?: PortalBan | null;
+  ban_expires_at?: string | null;
+  locked_until?: string | null;
 }
 
 export interface PortalProfile {
   id: string;
   uuid: string;
+  avatar_url?: string;
   protocol_name: string;
   normalized_name: string;
   display_name: string;
   status: "active" | "locked" | "archived";
+  online?: boolean;
+  presence_count?: number;
+  last_seen_ip?: string | null;
+  last_seen_geo?: PortalIPGeo | null;
+  active_ban?: PortalBan | null;
+  ban_expires_at?: string | null;
+  locked_until?: string | null;
 }
 
 export interface PortalSession {
@@ -53,32 +95,25 @@ export interface PortalSession {
   expires_at?: string;
 }
 
-export interface PortalServer {
-  slug: string;
-  display_name: string;
-  description?: string;
-  primary_color?: string;
-  accent_color?: string;
-  logo_url?: string;
-  portal_message?: string;
-  registration_open: boolean;
-  prefer_dark?: boolean;
+export interface PortalProfileSkin {
+  source: string;
+  effective_source: string;
+  model: "wide" | "slim" | string;
+  default_variant: string;
+  default_model: string;
+  skin_url: string;
+  cape_url?: string | null;
+  elytra_url?: string | null;
+  avatar_url: string;
+  has_custom_skin: boolean;
+  has_custom_cape: boolean;
+  has_custom_elytra: boolean;
+  updated_at?: string | null;
 }
 
 export interface CheckNameResult {
   available: boolean;
   reason?: string;
-}
-
-export interface ExtensionData {
-  id?: string;
-  provider: string;
-  label?: string;
-  visibility?: string;
-  data?: unknown;
-  schema?: unknown;
-  server_slug?: string;
-  updated_at?: string;
 }
 
 export interface ExampleStatus {
@@ -121,15 +156,19 @@ export async function apiFetch<T>(path: string, options: RequestInit & { bodyJSO
 }
 
 export async function getExampleStatus() {
-  return apiFetch<ExampleStatus>("/api/_example/status");
+  const response = await fetch("/api/_example/status", { credentials: "include" });
+  if (!response.ok) {
+    return {
+      core_url_configured: true,
+      core_health_status: response.status,
+      core_reachable: false
+    };
+  }
+  return (await response.json()) as ExampleStatus;
 }
 
 export async function getPortalConfig() {
   return apiFetch<PortalConfig>("/api/portal/config", { skipCSRF: true });
-}
-
-export async function getServers() {
-  return apiFetch<PortalServer[]>("/api/portal/servers", { skipCSRF: true });
 }
 
 export async function getSession() {
@@ -187,6 +226,25 @@ export async function selectProfile(profileID: string) {
   return session;
 }
 
+export async function createProfile(protocolName: string) {
+  return apiFetch<PortalSession>("/api/portal/profiles", {
+    method: "POST",
+    bodyJSON: { protocol_name: protocolName }
+  });
+}
+
+export async function archiveProfile(profileID: string) {
+  return apiFetch<PortalSession>(`/api/portal/profiles/${encodeURIComponent(profileID)}/archive`, {
+    method: "POST"
+  });
+}
+
+export async function restoreProfile(profileID: string) {
+  return apiFetch<PortalSession>(`/api/portal/profiles/${encodeURIComponent(profileID)}/restore`, {
+    method: "POST"
+  });
+}
+
 export async function checkName(rawUsername: string, serverSlug?: string) {
   return apiFetch<CheckNameResult>("/api/portal/offline/check-name", {
     method: "POST",
@@ -210,9 +268,27 @@ export async function changePassword(currentPassword: string, newPassword: strin
   });
 }
 
-export async function getExtensionData(serverSlug?: string) {
-  const path = serverSlug
-    ? `/api/portal/player/extension-data/${encodeURIComponent(serverSlug)}`
-    : "/api/portal/player/extension-data";
-  return apiFetch<ExtensionData[]>(path);
+export async function getProfileSkin() {
+  return apiFetch<PortalProfileSkin>("/api/portal/profile/skin");
+}
+
+export async function uploadProfileSkin(input: {
+  skin?: File | null;
+  cape?: File | null;
+  elytra?: File | null;
+  model: "wide" | "slim";
+}) {
+  const form = new FormData();
+  form.set("model", input.model);
+  if (input.skin) form.set("skin", input.skin);
+  if (input.cape) form.set("cape", input.cape);
+  if (input.elytra) form.set("elytra", input.elytra);
+  return apiFetch<PortalProfileSkin>("/api/portal/profile/skin", {
+    method: "POST",
+    body: form
+  });
+}
+
+export async function deleteProfileSkin() {
+  return apiFetch<PortalProfileSkin>("/api/portal/profile/skin", { method: "DELETE" });
 }

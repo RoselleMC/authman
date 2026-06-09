@@ -21,8 +21,9 @@ import (
 )
 
 type createNodeRequest struct {
-	Name string `json:"name"`
-	Kind string `json:"kind"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	ServerID string `json:"server_id"`
 }
 
 type updateNodeRequest struct {
@@ -60,7 +61,18 @@ func (s *Server) handleAdminCreateNode(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createAdminNode(w http.ResponseWriter, r *http.Request, adminID string, req createNodeRequest) {
 	nodeKind := node.NormalizeKind(req.Kind)
-	created, token, err := s.nodes.CreateKind(r.Context(), req.Name, nodeKind, time.Now())
+	serverID := strings.TrimSpace(req.ServerID)
+	if nodeKind == "downstream_velocity" {
+		if serverID == "" {
+			api.WriteError(w, api.NewError(http.StatusBadRequest, "server.required", "downstream node requires a server id"))
+			return
+		}
+		if _, err := s.store.GetDownstreamServer(r.Context(), serverID); err != nil {
+			api.WriteError(w, api.NewError(http.StatusNotFound, "server.not_found", "server not found"))
+			return
+		}
+	}
+	created, token, err := s.nodes.CreateKindForServer(r.Context(), req.Name, nodeKind, serverID, time.Now())
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "node.create_failed", err.Error()))
 		return
@@ -1481,22 +1493,7 @@ func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]
 		}
 		return base
 	}
-	base["portal_requested_server_id"] = ""
-	base["portal_requested_host"] = ""
-	base["portal_source_id"] = strings.TrimSpace(n.Name)
-	base["default_target_server"] = ""
-	base["holding_server"] = ""
-	base["limbo_world"] = ""
-	base["limbo_blueprint_id"] = ""
-	base["limbo_spawn"] = map[string]any{"x": 0, "y": 65, "z": 0, "yaw": 0, "pitch": 0}
 	if server, err := s.store.GetDownstreamServer(ctx, "default"); err == nil {
-		target := store.DownstreamTargetFromServer(server)
-		base["portal_requested_server_id"] = target.ServerID
-		base["default_target_server"] = stringFromAnyServer(server.PortalConfig["default_target_server"])
-		base["holding_server"] = stringFromAnyServer(server.PortalConfig["holding_server"])
-		base["portal_requested_host"] = stringFromAnyServer(server.PortalConfig["requested_host"])
-		base["portal_source_id"] = stringFromAnyServer(server.PortalConfig["source_id"])
-		base["limbo_blueprint_id"] = strings.TrimSpace(stringFromAnyServer(server.PortalConfig["limbo_blueprint_id"]))
 		if cookieKey := stringFromAnyServer(server.PortalConfig["transfer_cookie_key"]); cookieKey != "" {
 			base["transfer_cookie_key"] = cookieKey
 		}

@@ -60,6 +60,22 @@ type ProfileSkin struct {
 	UpdatedAt         time.Time
 }
 
+type PassportSkin struct {
+	PassportID        string
+	Model             string
+	SkinPNG           []byte
+	SkinContentType   string
+	SkinSHA256        string
+	CapePNG           []byte
+	CapeContentType   string
+	CapeSHA256        string
+	ElytraPNG         []byte
+	ElytraContentType string
+	ElytraSHA256      string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
 type ExtensionPlayerData struct {
 	ID         string
 	ServerID   string
@@ -225,6 +241,10 @@ type PlayerStore interface {
 	GetProfileSkin(ctx context.Context, profileID string) (ProfileSkin, error)
 	SetProfileSkin(ctx context.Context, profileID string, skin ProfileSkin, properties []identity.ProfileProperty) (identity.Profile, error)
 	DeleteProfileSkin(ctx context.Context, profileID string, properties []identity.ProfileProperty, skinSource string) (identity.Profile, error)
+	SetProfileSkinSource(ctx context.Context, profileID string, skinSource string, properties []identity.ProfileProperty) (identity.Profile, error)
+	GetPassportSkin(ctx context.Context, passportID string) (PassportSkin, error)
+	SetPassportSkin(ctx context.Context, passportID string, skin PassportSkin) (identity.Passport, error)
+	DeletePassportSkin(ctx context.Context, passportID string) (identity.Passport, error)
 	ListProfilesForPassport(ctx context.Context, passportID string) []identity.Profile
 	ListPassports(ctx context.Context) []identity.Passport
 	ListProfiles(ctx context.Context) []identity.Profile

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AdvancedList,
   ApiError,
   BackLink,
   Badge,
@@ -15,22 +14,17 @@ import {
   DetailGrid,
   DetailSummary,
   Dialog,
-  EmptyState,
   Field,
   Icon,
-  IconButton,
   Input,
   PageShell,
   SecretReveal,
   Select,
   StatusBadge,
-  Tabs,
   coerceVelocityNode,
   formatRelativeTime,
   useI18n,
-  useListState,
   useToast,
-  type ListColumn,
   type SafeVelocityNode,
 } from "@authman/shared";
 import {
@@ -45,8 +39,6 @@ import {
   type DownstreamServerInput,
 } from "../api/admin";
 
-type Tab = "routing" | "portal" | "instances";
-
 interface IssuedToken {
   token_once: string;
   token_fingerprint: string;
@@ -55,12 +47,11 @@ interface IssuedToken {
 
 function toInput(server: DownstreamServer): DownstreamServerInput {
   return {
-    slug: server.slug,
     display_name: server.display_name,
-    status: server.status,
-    registration_open: server.registration_open,
-    portal_theme: { ...server.portal_theme },
-    portal_config: { ...server.portal_config },
+    enabled: server.enabled,
+    visible: server.visible,
+    registration_open: true,
+    routing_config: { ...server.routing_config },
     extension_providers: [...server.extension_providers],
   };
 }
@@ -73,27 +64,31 @@ function splitCSV(value: string): string[] {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
-function NodeStatusBadge({ status }: { status: SafeVelocityNode["status"] }) {
-  const { t } = useI18n();
-  const tone: "success" | "warning" | "neutral" = status === "active" ? "success" : status === "stale" ? "warning" : "neutral";
-  return <Badge tone={tone} dot>{t(`admin.nodes.status.${status}`, status)}</Badge>;
+function addressFromConfig(cfg: DownstreamServer["routing_config"]): string {
+  const host = String(cfg.transfer_host || cfg.host || "127.0.0.1").trim();
+  const port = Number(cfg.transfer_port || cfg.port || 25565);
+  return `${host}:${Number.isFinite(port) && port > 0 ? port : 25565}`;
 }
 
-function nodeRuntimeSummary(n: SafeVelocityNode, t: (key: string, fallback?: string) => string) {
-  const cfg = n.runtime_config ?? {};
-  const initial = typeof cfg.downstream_initial_server === "string" && cfg.downstream_initial_server ? cfg.downstream_initial_server : "—";
-  const holding = typeof cfg.downstream_holding_server === "string" && cfg.downstream_holding_server ? cfg.downstream_holding_server : "—";
-  return `${t("admin.nodes.runtime.initial")}: ${initial} · ${t("admin.nodes.runtime.holding")}: ${holding}`;
+function parseAddress(value: string): { host: string; port: number } {
+  const trimmed = value.trim();
+  const lastColon = trimmed.lastIndexOf(":");
+  if (lastColon > 0) {
+    const host = trimmed.slice(0, lastColon).trim();
+    const port = Number(trimmed.slice(lastColon + 1).trim());
+    return { host: host || "127.0.0.1", port: Number.isFinite(port) && port > 0 ? port : 25565 };
+  }
+  return { host: trimmed || "127.0.0.1", port: 25565 };
 }
 
 function nodeBelongsToServer(n: SafeVelocityNode, server: DownstreamServer): boolean {
-  const cfg = n.runtime_config ?? {};
-  const candidates = [
-    n.server_id,
-    typeof cfg.server_id === "string" ? cfg.server_id : "",
-    typeof cfg.portal_requested_server_id === "string" ? cfg.portal_requested_server_id : "",
-  ].filter(Boolean);
-  return candidates.includes(server.id) || candidates.includes(server.slug);
+  return n.server_id === server.id || n.server_id === server.slug;
+}
+
+function NodeStatusBadge({ node }: { node: SafeVelocityNode }) {
+  const { t } = useI18n();
+  const tone: "success" | "warning" | "neutral" = node.status === "active" ? "success" : node.status === "stale" ? "warning" : "neutral";
+  return <Badge tone={tone} dot>{t(`admin.nodes.status.${node.status}`, node.status)}</Badge>;
 }
 
 export function DownstreamServerDetailPage() {
@@ -102,13 +97,13 @@ export function DownstreamServerDetailPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const qc = useQueryClient();
-  const [tab, setTab] = useState<Tab>("routing");
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [deleteNodeTarget, setDeleteNodeTarget] = useState<SafeVelocityNode | null>(null);
-  const [bulkDeleteNodes, setBulkDeleteNodes] = useState<SafeVelocityNode[]>([]);
+  const [deleteNodeOpen, setDeleteNodeOpen] = useState(false);
   const [issueOpen, setIssueOpen] = useState(false);
-  const [issueName, setIssueName] = useState("");
   const [issuedToken, setIssuedToken] = useState<IssuedToken | null>(null);
+  const [input, setInput] = useState<DownstreamServerInput | null>(null);
+  const [matchDomains, setMatchDomains] = useState("");
+  const [downstreamAddress, setDownstreamAddress] = useState("");
   const q = useQuery({ queryKey: ["admin.downstreamServer", id], queryFn: () => fetchDownstreamServer(id), enabled: !!id });
   const blueprints = useQuery({ queryKey: ["admin.limboBlueprints"], queryFn: fetchLimboBlueprints });
   const nodesQ = useQuery({
@@ -118,36 +113,39 @@ export function DownstreamServerDetailPage() {
     refetchIntervalInBackground: false,
   });
   const server = q.data;
-  const nodeList = useListState({ urlPrefix: "serverNodes", urlSync: false, defaults: { pageSize: 10, hidden: ["fingerprint"] } });
-  const [input, setInput] = useState<DownstreamServerInput | null>(null);
-  const [portalHosts, setPortalHosts] = useState("");
-  const [allowedSources, setAllowedSources] = useState("");
-
-  useEffect(() => {
-    if (!server) return;
-    setInput(toInput(server));
-    setPortalHosts(csv(server.portal_config.portal_hosts));
-    setAllowedSources(csv(server.portal_config.allowed_portal_sources));
-  }, [server]);
-
+  const node = useMemo(() => {
+    if (!server) return null;
+    return (nodesQ.data ?? []).map(coerceVelocityNode).find((n) => nodeBelongsToServer(n, server)) ?? null;
+  }, [nodesQ.data, server]);
   const blueprintOptions = useMemo(() => [
     { value: "", label: t("admin.servers.defaultWorld") },
     ...(blueprints.data ?? []).map((bp) => ({ value: bp.id, label: bp.name })),
   ], [blueprints.data, t]);
-  const nodes = useMemo(() => {
-    if (!server) return [];
-    return (nodesQ.data ?? []).map(coerceVelocityNode).filter((n) => nodeBelongsToServer(n, server));
-  }, [nodesQ.data, server]);
+
+  useEffect(() => {
+    if (!server) return;
+    setInput(toInput(server));
+    setMatchDomains(csv(server.routing_config.portal_hosts));
+    setDownstreamAddress(addressFromConfig(server.routing_config));
+  }, [server]);
 
   const updateMut = useMutation({
-    mutationFn: () => {
-      if (!input) throw new Error("server input missing");
+    mutationFn: (nextInput?: DownstreamServerInput) => {
+      const currentInput = nextInput ?? input;
+      if (!currentInput) throw new Error("server input missing");
+      const target = parseAddress(downstreamAddress);
       return updateDownstreamServer(id, {
-        ...input,
-        portal_config: {
-          ...input.portal_config,
-          portal_hosts: splitCSV(portalHosts),
-          allowed_portal_sources: splitCSV(allowedSources),
+        ...currentInput,
+        routing_config: {
+          ...currentInput.routing_config,
+          host: target.host,
+          port: target.port,
+          transfer_host: target.host,
+          transfer_port: target.port,
+          portal_hosts: splitCSV(matchDomains),
+          allowed_portal_sources: [],
+          gate_enabled: true,
+          grant_required: true,
         },
       });
     },
@@ -158,6 +156,12 @@ export function DownstreamServerDetailPage() {
     },
     onError: () => toast.danger(t("common.unknown")),
   });
+  function updateStatus(patch: Partial<Pick<DownstreamServerInput, "enabled" | "visible">>) {
+    if (!input) return;
+    const next = { ...input, ...patch };
+    setInput(next);
+    updateMut.mutate(next);
+  }
   const deleteMut = useMutation({
     mutationFn: () => deleteDownstreamServer(id),
     onSuccess: () => {
@@ -167,270 +171,143 @@ export function DownstreamServerDetailPage() {
     },
     onError: () => toast.danger(t("common.unknown")),
   });
-  const deleteNodeMut = useMutation({
-    mutationFn: (n: SafeVelocityNode) => deleteNode(n.id),
-    onSuccess: () => {
-      toast.push({ tone: "success", title: t("admin.nodes.delete.toast") });
-      setDeleteNodeTarget(null);
-      void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
-    },
-    onError: (err) => toast.danger(err instanceof ApiError ? err.message : t("common.unknown")),
-  });
-  const bulkDeleteNodeMut = useMutation({
-    mutationFn: async (rows: SafeVelocityNode[]) => {
-      await Promise.all(rows.map((row) => deleteNode(row.id)));
-    },
-    onSuccess: () => {
-      toast.push({ tone: "success", title: t("admin.nodes.delete.toast") });
-      setBulkDeleteNodes([]);
-      void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
-    },
-    onError: (err) => toast.danger(err instanceof ApiError ? err.message : t("common.unknown")),
-  });
   const issueNodeMut = useMutation({
-    mutationFn: (name: string) => createNode({ name, kind: "downstream_velocity" }),
-    onSuccess: (res, name) => {
-      setIssuedToken({ token_once: res.token_once, token_fingerprint: res.token_fingerprint, name });
+    mutationFn: () => createNode({ name: input?.display_name || id, kind: "downstream_velocity", server_id: id }),
+    onSuccess: (res) => {
+      setIssuedToken({ token_once: res.token_once, token_fingerprint: res.token_fingerprint, name: res.node.name });
       setIssueOpen(false);
-      setIssueName("");
+      void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? err.message : t("common.unknown")),
+  });
+  const deleteNodeMut = useMutation({
+    mutationFn: () => node ? deleteNode(node.id) : Promise.resolve(),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.nodes.delete.toast") });
+      setDeleteNodeOpen(false);
       void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
     },
     onError: (err) => toast.danger(err instanceof ApiError ? err.message : t("common.unknown")),
   });
 
-  if (!server || !input) return <PageShell><BackLink onClick={() => navigate("/nodes")}>{t("admin.servers.heading")}</BackLink><Card title={q.isLoading ? t("common.loading") : t("common.unknown")}><span /></Card></PageShell>;
-
-  const cfg = input.portal_config;
-  function setConfig(next: Partial<DownstreamServerInput["portal_config"]>) {
-    setInput((current) => current ? { ...current, portal_config: { ...current.portal_config, ...next } } : current);
+  if (!server || !input) {
+    return <PageShell><BackLink onClick={() => navigate("/nodes")}>{t("admin.servers.heading")}</BackLink><Card title={q.isLoading ? t("common.loading") : t("common.unknown")}><span /></Card></PageShell>;
   }
-  const nodeColumns: ListColumn<SafeVelocityNode>[] = [
-    {
-      key: "name",
-      header: t("admin.nodes.col.name"),
-      mandatory: true,
-      sortable: true,
-      sortValue: (n) => n.name,
-      filter: { type: "text" },
-      render: (n) => (
-        <div className="node-name">
-          <span className="node-ico"><Icon name="server" size={15} /></span>
-          {n.name}
-        </div>
-      ),
-    },
-    {
-      key: "status",
-      header: t("admin.nodes.col.status"),
-      sortable: true,
-      sortValue: (n) => n.status,
-      filter: {
-        type: "select",
-        options: [
-          { value: "", label: t("common.all") },
-          { value: "active", label: t("admin.nodes.status.active") },
-          { value: "stale", label: t("admin.nodes.status.stale") },
-          { value: "offline", label: t("status.offline") },
-        ],
-      },
-      render: (n) => <NodeStatusBadge status={n.status} />,
-    },
-    { key: "runtime", header: t("admin.nodes.col.runtime"), minWidth: "220px", render: (n) => <span className="muted-cell">{nodeRuntimeSummary(n, t)}</span> },
-    {
-      key: "fingerprint",
-      header: t("admin.nodes.col.fingerprint"),
-      minWidth: "170px",
-      render: (n) => <code className="mono fingerprint" title={t("admin.nodes.fingerprint.title")}>{n.instance_fingerprint || n.token_fingerprint}</code>,
-    },
-    {
-      key: "version",
-      header: t("admin.nodes.col.version"),
-      minWidth: "150px",
-      sortable: true,
-      sortValue: (n) => n.plugin_version ?? "",
-      render: (n) => <span className="muted-cell">{n.plugin_version || "—"}{n.velocity_version ? ` / ${n.velocity_version}` : ""}</span>,
-    },
-    {
-      key: "heartbeat",
-      header: t("admin.nodes.col.heartbeat"),
-      sortable: true,
-      sortValue: (n) => n.last_seen_at ?? "",
-      render: (n) => <span className="muted-cell">{formatRelativeTime(n.last_seen_at)}</span>,
-    },
-    {
-      key: "actions",
-      header: "",
-      align: "right",
-      width: "52px",
-      minWidth: "52px",
-      sticky: "right",
-      render: (n) => (
-        <div className="row-actions">
-          <IconButton
-            name="close"
-            size={16}
-            label={t("admin.nodes.delete")}
-            onClick={(event) => {
-              event.stopPropagation();
-              setDeleteNodeTarget(n);
-            }}
-            data-testid={`delete-node-${n.id}`}
-          />
-        </div>
-      ),
-    },
-  ];
+  const cfg = input.routing_config;
+  function setConfig(next: Partial<DownstreamServerInput["routing_config"]>) {
+    setInput((current) => current ? { ...current, routing_config: { ...current.routing_config, ...next } } : current);
+  }
 
   return (
     <PageShell testId="downstream-server-detail-page">
       <div className="detail-toolbar">
         <BackLink onClick={() => navigate("/nodes")}>{t("admin.servers.heading")}</BackLink>
-        <Tabs<Tab> value={tab} onChange={setTab} tabs={[
-          { value: "routing", label: t("admin.servers.routing"), icon: "server" },
-          { value: "portal", label: t("admin.servers.portal"), icon: "box" },
-          { value: "instances", label: t("admin.servers.instances"), icon: "layers" },
-        ]} />
       </div>
       <DetailGrid>
         <DetailAside>
           <DetailSummary
             title={input.display_name}
             icon="server"
-            titleMeta={<StatusBadge status={input.status} />}
-            meta={<><span className="muted-cell">{t("admin.servers.col.slug")}</span><strong className="mono">{input.slug}</strong></>}
+            titleMeta={<StatusBadge status={input.enabled ? (input.visible ? "active" : "hidden") : "disabled"} />}
+            meta={<span className="muted-cell">{t("admin.servers.internalId")}: <span className="mono">{server.id}</span></span>}
           >
             <div className="id-uuid">
-              <span className="id-uuid-label">{t("admin.servers.col.host")}</span>
-              <strong className="mono">{cfg.transfer_host}:{cfg.transfer_port}</strong>
+              <span className="id-uuid-label">{t("admin.servers.connectionAddress")}</span>
+              <strong className="mono">{downstreamAddress}</strong>
             </div>
           </DetailSummary>
           <DetailActions title={t("common.actions")}>
-            <Button variant="primary" icon="check" block loading={updateMut.isPending} onClick={() => updateMut.mutate()}>{t("common.save")}</Button>
+            <Button variant="primary" icon="check" block loading={updateMut.isPending} onClick={() => updateMut.mutate(undefined)}>{t("common.save")}</Button>
+            <Button
+              variant={input.enabled ? "secondary" : "primary"}
+              icon={input.enabled ? "close" : "check"}
+              block
+              loading={updateMut.isPending}
+              onClick={() => updateStatus({ enabled: !input.enabled })}
+            >
+              {input.enabled ? t("common.disable") : t("common.enable")}
+            </Button>
+            <Button
+              variant="secondary"
+              icon={input.visible ? "eyeOff" : "eye"}
+              block
+              loading={updateMut.isPending}
+              onClick={() => updateStatus({ visible: !input.visible })}
+            >
+              {input.visible ? t("common.hide") : t("common.show")}
+            </Button>
             {server.id !== "default" ? <Button variant="danger-soft" icon="trash" block onClick={() => setDeleteOpen(true)}>{t("common.delete")}</Button> : null}
           </DetailActions>
         </DetailAside>
         <DetailBody>
-          {tab === "routing" ? (
-            <>
-              <Card title={t("admin.servers.identity")}>
-                <div className="form-grid two">
-                  <Field label={t("admin.servers.col.slug")}><Input value={input.slug} onChange={(e) => setInput({ ...input, slug: e.target.value })} disabled={server.id === "default"} /></Field>
-                  <Field label={t("admin.servers.col.name")}><Input value={input.display_name} onChange={(e) => setInput({ ...input, display_name: e.target.value })} /></Field>
-                  <Field label={t("admin.servers.col.status")}>
-                    <Select value={input.status} onChange={(status) => setInput({ ...input, status })} options={[{ value: "active", label: t("status.active") }, { value: "hidden", label: t("status.hidden") }, { value: "disabled", label: t("status.disabled") }]} />
-                  </Field>
+          <Card title={t("admin.servers.identity")}>
+            <div className="form-grid">
+              <Field label={t("admin.servers.col.name")} style={{ gridColumn: "1 / -1" }}>
+                <Input value={input.display_name} onChange={(e) => setInput({ ...input, display_name: e.target.value })} />
+              </Field>
+            </div>
+          </Card>
+
+          <Card title={t("admin.servers.routing")}>
+            <div className="form-grid two">
+              <Field label={t("admin.servers.matchDomains")} hint={t("admin.servers.matchDomains.hint")} style={{ gridColumn: "1 / -1" }}>
+                <Input value={matchDomains} onChange={(e) => setMatchDomains(e.target.value)} placeholder="play.example.com, survival.example.com" />
+              </Field>
+              <Field label={t("admin.servers.connectionAddress")} hint={t("admin.servers.connectionAddress.hint")} style={{ gridColumn: "1 / -1" }}>
+                <Input value={downstreamAddress} onChange={(e) => setDownstreamAddress(e.target.value)} placeholder="127.0.0.1:25565" />
+              </Field>
+            </div>
+          </Card>
+
+          <Card title={t("admin.servers.loginPresentation")}>
+            <div className="form-grid two">
+              <Field label={t("admin.servers.field.motd")}>
+                <Input value={String(cfg.motd ?? "")} onChange={(e) => setConfig({ motd: e.target.value })} />
+              </Field>
+              <Field label={t("admin.servers.col.blueprint")}>
+                <Select value={String(cfg.limbo_blueprint_id ?? "")} onChange={(value) => setConfig({ limbo_blueprint_id: value })} options={blueprintOptions} />
+              </Field>
+            </div>
+          </Card>
+
+          <Card title={t("admin.servers.instance")}>
+            {node ? (
+              <div className="server-instance-card">
+                <div>
+                  <div className="node-name">
+                    <span className="node-ico"><Icon name="server" size={15} /></span>
+                    <strong>{node.name}</strong>
+                  </div>
+                  <p className="muted-cell">
+                    {node.plugin_version || "—"}{node.velocity_version ? ` / ${node.velocity_version}` : ""} · {formatRelativeTime(node.last_seen_at)}
+                  </p>
+                  <p className="muted-cell mono">{node.instance_fingerprint || node.token_fingerprint}</p>
                 </div>
-              </Card>
-              <Card title={t("admin.servers.routing")}>
-                <div className="form-grid two">
-                  <Field label={t("admin.servers.field.host")}><Input value={String(cfg.host ?? "")} onChange={(e) => setConfig({ host: e.target.value })} /></Field>
-                  <Field label={t("admin.servers.field.port")}><Input type="number" value={cfg.port ?? 25565} onChange={(e) => setConfig({ port: Number(e.target.value) })} /></Field>
-                  <Field label={t("admin.servers.field.transferHost")}><Input value={String(cfg.transfer_host ?? "")} onChange={(e) => setConfig({ transfer_host: e.target.value })} /></Field>
-                  <Field label={t("admin.servers.field.transferPort")}><Input type="number" value={cfg.transfer_port ?? 25565} onChange={(e) => setConfig({ transfer_port: Number(e.target.value) })} /></Field>
-                  <Field label={t("admin.servers.field.portalHosts")} hint={t("admin.servers.csvHint")} style={{ gridColumn: "1 / -1" }}><Input value={portalHosts} onChange={(e) => setPortalHosts(e.target.value)} /></Field>
+                <div className="row-actions">
+                  <NodeStatusBadge node={node} />
+                  <Button size="sm" variant="danger-soft" icon="close" onClick={() => setDeleteNodeOpen(true)}>{t("admin.nodes.delete")}</Button>
                 </div>
-              </Card>
-            </>
-          ) : tab === "portal" ? (
-            <>
-              <Card title={t("admin.servers.portal")}>
-                <div className="form-grid two">
-                  <Field label={t("admin.servers.field.motd")}><Input value={String(cfg.motd ?? "")} onChange={(e) => setConfig({ motd: e.target.value })} /></Field>
-                  <Field label={t("admin.servers.field.grantTtl")}><Input type="number" value={cfg.grant_ttl_seconds ?? 45} onChange={(e) => setConfig({ grant_ttl_seconds: Number(e.target.value) })} /></Field>
-                  <Field label={t("admin.servers.col.blueprint")}>
-                    <Select value={String(cfg.limbo_blueprint_id ?? "")} onChange={(value) => setConfig({ limbo_blueprint_id: value })} options={blueprintOptions} />
-                  </Field>
-                  <Field label={t("admin.servers.field.allowedSources")} hint={t("admin.servers.csvHint")} style={{ gridColumn: "1 / -1" }}><Input value={allowedSources} onChange={(e) => setAllowedSources(e.target.value)} /></Field>
-                </div>
-              </Card>
-              <Card title={t("admin.servers.portalTheme")}>
-                <div className="form-grid two">
-                  <Field label={t("admin.servers.field.portalDisplayName")}><Input value={String(input.portal_theme.display_name ?? "")} onChange={(e) => setInput({ ...input, portal_theme: { ...input.portal_theme, display_name: e.target.value } })} /></Field>
-                  <Field label={t("admin.servers.field.portalMessage")}><Input value={String(input.portal_theme.portal_message ?? "")} onChange={(e) => setInput({ ...input, portal_theme: { ...input.portal_theme, portal_message: e.target.value } })} /></Field>
-                  <Field label={t("admin.servers.field.primaryColor")}><Input type="color" value={String(input.portal_theme.primary_color ?? "#16a34a")} onChange={(e) => setInput({ ...input, portal_theme: { ...input.portal_theme, primary_color: e.target.value } })} /></Field>
-                  <Field label={t("admin.servers.field.accentColor")}><Input type="color" value={String(input.portal_theme.accent_color ?? "#2563eb")} onChange={(e) => setInput({ ...input, portal_theme: { ...input.portal_theme, accent_color: e.target.value } })} /></Field>
-                </div>
-              </Card>
-            </>
-          ) : (
-            <>
-              <Card
-                title={t("admin.servers.instances")}
-                noBody
-                className="table-card"
-              >
-                <AdvancedList
-                  loading={nodesQ.isLoading}
-                  rows={nodes}
-                  columns={nodeColumns}
-                  rowKey={(r) => r.id}
-                  state={nodeList.state}
-                  onStateChange={nodeList.setState}
-                  onRowClick={(r) => navigate(`/nodes/${encodeURIComponent(r.id)}`)}
-                  primaryActions={<Button variant="primary" icon="plus" onClick={() => setIssueOpen(true)} data-testid="server-node-issue-open">{t("admin.nodes.issueToken")}</Button>}
-                  selectable
-                  selectionActions={(selectedRows) => (
-                    <Button size="sm" variant="danger-soft" icon="close" onClick={() => setBulkDeleteNodes(selectedRows)}>
-                      {t("admin.nodes.delete")}
-                    </Button>
-                  )}
-                  empty={(
-                    <EmptyState
-                      icon="server"
-                      title={t("admin.servers.instances.empty")}
-                      description={t("admin.servers.instances.empty.desc")}
-                    />
-                  )}
-                  testId="server-node-instances"
-                />
-                <div className="card-foot-note">
-                  <Icon name="info" size={13} /> {t("admin.servers.instances.footnote").replace("{server}", server.id)}
-                </div>
-              </Card>
-            </>
-          )}
+              </div>
+            ) : (
+              <div className="empty-inline">
+                <p className="muted-cell">{t("admin.servers.instance.empty")}</p>
+                <Button variant="primary" icon="plus" onClick={() => setIssueOpen(true)} data-testid="server-node-issue-open">{t("admin.servers.instance.issue")}</Button>
+              </div>
+            )}
+          </Card>
         </DetailBody>
       </DetailGrid>
-      <Dialog
-        open={issueOpen}
-        onClose={() => !issueNodeMut.isPending && setIssueOpen(false)}
-        icon="plus"
-        iconTone="primary"
-        title={t("admin.servers.instances.issueToken")}
-        desc={t("admin.servers.instances.issueToken.desc").replace("{server}", server.id)}
-        testId="dialog-server-node-issue"
-        footer={(
-          <>
-            <Button variant="ghost" onClick={() => setIssueOpen(false)} disabled={issueNodeMut.isPending}>
-              {t("common.cancel")}
-            </Button>
-            <Button
-              variant="primary"
-              icon="check"
-              loading={issueNodeMut.isPending}
-              disabled={!issueName.trim() || issueNodeMut.isPending}
-              onClick={() => issueNodeMut.mutate(issueName.trim())}
-              data-testid="server-node-issue-submit"
-            >
-              {t("admin.nodes.issueToken.submit")}
-            </Button>
-          </>
-        )}
-      >
-        <Field label={t("admin.nodes.field.name")} hint={t("admin.nodes.field.name.hint")}>
-          <Input
-            value={issueName}
-            onChange={(e) => setIssueName(e.target.value)}
-            placeholder={`${server.slug}-velocity-1`}
-            mono
-            data-testid="server-node-issue-name"
-          />
-        </Field>
-        <p className="dialog-note">
-          {t("admin.nodes.field.serverId")}: <code className="mono">{server.id}</code>
-        </p>
-      </Dialog>
 
+      <ConfirmDialog
+        open={issueOpen}
+        onCancel={() => setIssueOpen(false)}
+        onConfirm={() => issueNodeMut.mutate()}
+        title={t("admin.servers.instance.issue")}
+        body={t("admin.servers.instance.issue.desc")}
+        confirmLabel={t("admin.nodes.issueToken.submit")}
+        loading={issueNodeMut.isPending}
+        testId="dialog-server-node-issue"
+      />
       <Dialog
         open={!!issuedToken}
         onClose={() => setIssuedToken(null)}
@@ -450,45 +327,16 @@ export function DownstreamServerDetailPage() {
           </>
         ) : null}
       </Dialog>
-
-      <Dialog
-        open={!!deleteNodeTarget}
-        onClose={() => !deleteNodeMut.isPending && setDeleteNodeTarget(null)}
-        icon="close"
-        iconTone="danger"
-        title={t("admin.nodes.delete")}
-        desc={t("admin.nodes.delete.desc")}
-        testId="dialog-delete-server-node"
-        footer={(
-          <>
-            <Button variant="ghost" onClick={() => setDeleteNodeTarget(null)} disabled={deleteNodeMut.isPending}>
-              {t("common.cancel")}
-            </Button>
-            <Button
-              variant="danger"
-              icon="close"
-              loading={deleteNodeMut.isPending}
-              onClick={() => deleteNodeTarget && deleteNodeMut.mutate(deleteNodeTarget)}
-            >
-              {t("admin.nodes.delete")}
-            </Button>
-          </>
-        )}
-      >
-        <p className="dialog-note" style={{ marginTop: 0 }}>
-          {deleteNodeTarget?.name} · {deleteNodeTarget?.instance_fingerprint || deleteNodeTarget?.token_fingerprint}
-        </p>
-      </Dialog>
       <ConfirmDialog
-        open={bulkDeleteNodes.length > 0}
-        onCancel={() => setBulkDeleteNodes([])}
-        onConfirm={() => bulkDeleteNodeMut.mutate(bulkDeleteNodes)}
+        open={deleteNodeOpen}
+        onCancel={() => setDeleteNodeOpen(false)}
+        onConfirm={() => deleteNodeMut.mutate()}
         title={t("admin.nodes.delete")}
         body={t("admin.nodes.delete.desc")}
         confirmLabel={t("admin.nodes.delete")}
         destructive
-        loading={bulkDeleteNodeMut.isPending}
-        testId="dialog-bulk-delete-server-node"
+        loading={deleteNodeMut.isPending}
+        testId="dialog-delete-server-node"
       />
       <ConfirmDialog
         open={deleteOpen}

@@ -141,6 +141,7 @@ export function ProfilesPage() {
     <PageShell>
       <PageHeader
         title={t("admin.profiles.heading")}
+        desc={t("admin.profiles.desc")}
         action={<Button icon="plus" onClick={() => setOpen(true)}>{t("admin.profiles.create")}</Button>}
       />
       {q.error ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : null}

@@ -183,6 +183,7 @@ export interface PassportRow {
 }
 
 export interface PassportDetail extends PassportRow {
+  skin: PassportSkinInfo;
   profiles: ProfileSummary[];
   credential: {
     password_updated_at: string | null;
@@ -196,7 +197,7 @@ export interface PassportDetail extends PassportRow {
 
 export interface ProfileRow extends ProfileSummary {
   uuid_compact?: string;
-  skin_source: "mojang" | "custom" | "offline_custom" | "none";
+  skin_source: "mojang" | "custom" | "passport" | "offline_custom" | "none";
   passport: { id: string; kind: "premium" | "offline"; username: string; status: string } | null;
   last_seen_at: string | null;
   last_seen_ip: string | null;
@@ -214,6 +215,24 @@ export interface ProfileDetail extends ProfileRow {
 }
 
 export interface ProfileSkinInfo {
+  source: string;
+  use_passport_skin?: boolean;
+  effective_source: "custom" | "passport" | "mojang" | "textures" | "default";
+  model: "slim" | "wide" | string;
+  default_variant: string;
+  default_model: "slim" | "wide" | string;
+  skin_url: string;
+  cape_url?: string | null;
+  elytra_url?: string | null;
+  avatar_url: string;
+  has_custom_skin: boolean;
+  has_custom_cape: boolean;
+  has_custom_elytra: boolean;
+  updated_at?: string | null;
+  passport_skin?: PassportSkinInfo | null;
+}
+
+export interface PassportSkinInfo {
   source: string;
   effective_source: "custom" | "mojang" | "textures" | "default";
   model: "slim" | "wide" | string;
@@ -285,17 +304,35 @@ export async function updateProfileStatus(id: string, status: ProfileRow["status
   return res.data;
 }
 
-export async function uploadProfileSkin(id: string, input: { skin: File; cape?: File | null; elytra?: File | null; model: "slim" | "wide" }): Promise<ProfileSkinInfo> {
+export async function uploadProfileSkin(id: string, input: { skin?: File | null; cape?: File | null; elytra?: File | null; model: "slim" | "wide" }): Promise<ProfileSkinInfo> {
   const form = new FormData();
   form.set("model", input.model);
-  form.set("skin", input.skin);
+  if (input.skin) form.set("skin", input.skin);
   if (input.cape) form.set("cape", input.cape);
   if (input.elytra) form.set("elytra", input.elytra);
   return multipartFetch<ProfileSkinInfo>(`/admin/profiles/${encodeURIComponent(id)}/skin`, { method: "POST", body: form });
 }
 
+export async function updateProfileSkinSource(id: string, input: { use_passport_skin: boolean }): Promise<ProfileSkinInfo> {
+  const res = await apiFetch<ProfileSkinInfo>(`/admin/profiles/${encodeURIComponent(id)}/skin/source`, { method: "POST", body: input });
+  return res.data;
+}
+
 export async function deleteProfileSkin(id: string): Promise<ProfileSkinInfo> {
   return multipartFetch<ProfileSkinInfo>(`/admin/profiles/${encodeURIComponent(id)}/skin`, { method: "DELETE" });
+}
+
+export async function uploadPassportSkin(id: string, input: { skin?: File | null; cape?: File | null; elytra?: File | null; model: "slim" | "wide" }): Promise<PassportSkinInfo> {
+  const form = new FormData();
+  form.set("model", input.model);
+  if (input.skin) form.set("skin", input.skin);
+  if (input.cape) form.set("cape", input.cape);
+  if (input.elytra) form.set("elytra", input.elytra);
+  return multipartFetch<PassportSkinInfo>(`/admin/passports/${encodeURIComponent(id)}/skin`, { method: "POST", body: form });
+}
+
+export async function deletePassportSkin(id: string): Promise<PassportSkinInfo> {
+  return multipartFetch<PassportSkinInfo>(`/admin/passports/${encodeURIComponent(id)}/skin`, { method: "DELETE" });
 }
 
 export async function createProfileBan(id: string, input: { reason: string; expires_at?: string | null; expires_in_seconds?: number }): Promise<{ ban: PlayerBan; ended_presences: number }> {
@@ -375,7 +412,7 @@ export async function disableNode(id: string): Promise<void> {
 export async function deleteNode(id: string): Promise<void> {
   await apiFetch<null>(`/admin/velocity/nodes/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
-export async function createNode(input: { name: string; kind?: "limbo_portal" | "downstream_velocity" }): Promise<{ token_once: string; token_fingerprint: string; node: VelocityNode }> {
+export async function createNode(input: { name: string; kind?: "limbo_portal" | "downstream_velocity"; server_id?: string }): Promise<{ token_once: string; token_fingerprint: string; node: VelocityNode }> {
   const path = input.kind === "limbo_portal" ? "/admin/login-portals" : input.kind === "downstream_velocity" ? "/admin/downstream/nodes" : "/admin/nodes";
   const res = await apiFetch<{ token_once: string; token_fingerprint: string; node: VelocityNode }>(path, { method: "POST", body: input });
   return res.data;
@@ -390,25 +427,16 @@ export interface PortalRuntimeConfig {
   chat_cooldown_millis?: number;
   auth_timeout_seconds?: number;
   completion_delay_seconds?: number;
-  default_target_server?: string;
-  holding_server?: string;
   transfer_cookie_key?: string;
   gate_initial_server?: string;
   gate_holding_server?: string;
   gate_validation_timeout_seconds?: number;
-  portal_requested_server_id?: string;
-  portal_requested_host?: string;
-  portal_source_id?: string;
   dialog_enabled?: boolean;
   dialog_fallback_chat_enabled?: boolean;
   email_verification_mode?: string;
 }
 
 export interface PortalSettings {
-  default_target_server: string;
-  holding_server: string;
-  requested_host: string;
-  source_id: string;
   transfer_cookie_key: string;
   dialog_enabled: boolean;
   dialog_fallback_chat_enabled: boolean;
@@ -549,16 +577,11 @@ export interface DownstreamServer {
   slug: string;
   display_name: string;
   status: "active" | "hidden" | "disabled";
+  enabled: boolean;
+  visible: boolean;
   registration_open: boolean;
-  portal_theme: {
-    primary_color?: string;
-    accent_color?: string;
-    portal_message?: string;
-    display_name?: string;
-    description?: string;
-  };
-  portal_config: {
-    registration_strategy: "open" | "closed" | "invite";
+  routing_config: {
+    registration_strategy?: "open" | "closed" | "invite";
     show_in_global: boolean;
     host?: string;
     port?: number;
@@ -595,12 +618,11 @@ export interface DownstreamServer {
 }
 
 export interface DownstreamServerInput {
-  slug: string;
   display_name: string;
-  status: "active" | "hidden" | "disabled";
+  enabled: boolean;
+  visible: boolean;
   registration_open: boolean;
-  portal_theme: DownstreamServer["portal_theme"];
-  portal_config: DownstreamServer["portal_config"];
+  routing_config: DownstreamServer["routing_config"];
   extension_providers: string[];
 }
 

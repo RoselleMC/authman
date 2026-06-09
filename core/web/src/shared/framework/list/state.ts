@@ -18,6 +18,7 @@ export function makeDefaultState(defaults?: ListStateDefaults): ListState {
     pageSize: defaults?.pageSize ?? DEFAULT_PAGE_SIZE,
     filters: { ...(defaults?.filters ?? {}) },
     hidden: [...(defaults?.hidden ?? [])],
+    filtersVisible: defaults?.filtersVisible ?? false,
     sortKey: defaults?.sortKey,
     sortDir: defaults?.sortDir,
   };
@@ -169,7 +170,7 @@ export function readStateFromParams(
   const sortKey = params.get(prefixed(prefix, "sort")) ?? base.sortKey;
   const rawDir = params.get(prefixed(prefix, "dir")) ?? base.sortDir;
   const sortDir = rawDir === "asc" || rawDir === "desc" ? rawDir : undefined;
-  return { page, pageSize, hidden, filters, sortKey: sortKey || undefined, sortDir };
+  return { page, pageSize, hidden, filters, filtersVisible: base.filtersVisible, sortKey: sortKey || undefined, sortDir };
 }
 
 /**

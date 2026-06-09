@@ -247,12 +247,9 @@ export function NodeDetailPage() {
                 <Icon name="info" size={13} /> {t("admin.nodes.detail.portalGlobal")}
               </p>
               <ConfigGrid testId="node-portal-runtime">
-                <ConfigRow k={t("admin.portal.field.defaultTarget")} v={text(cfg.default_target_server, "—")} mono />
-                <ConfigRow k={t("admin.portal.field.world")} v={text(cfg.limbo_world, "—")} mono />
-                <ConfigRow k={t("admin.portal.field.requestedHost")} v={text(cfg.portal_requested_host, "—")} mono />
-                <ConfigRow k={t("admin.portal.field.source")} v={text(cfg.portal_source_id, "—")} mono />
                 <ConfigRow k={t("admin.portal.field.cookie")} v={text(cfg.transfer_cookie_key, "authman:transfer_grant")} mono />
                 <ConfigRow k={t("admin.portal.field.dialog")} v={boolValue(cfg.dialog_enabled, true) ? t("common.enabled") : t("common.disabled")} />
+                <ConfigRow k={t("admin.portal.field.fallback")} v={boolValue(cfg.dialog_fallback_chat_enabled, true) ? t("common.enabled") : t("common.disabled")} />
               </ConfigGrid>
             </Card>
           )}

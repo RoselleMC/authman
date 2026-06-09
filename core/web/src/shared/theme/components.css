@@ -51,6 +51,11 @@
 .iconbtn:hover { background: var(--color-surface-muted); color: var(--color-text); }
 .iconbtn--bordered { border-color: var(--color-border); background: var(--color-surface); }
 .iconbtn--bordered:hover { border-color: var(--color-border-strong); }
+.iconbtn.is-active, .iconbtn[aria-pressed="true"] {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary-soft-border);
+  color: var(--color-primary);
+}
 
 /* ---------- Preference selects (language/theme) ---------- */
 .pref-select {
@@ -360,7 +365,17 @@
 }
 .card__head { padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--color-border); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 .card__title { font-size: var(--font-size-md); font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.card__actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; }
+.card__actions .btn:not(.btn--lg):not(.btn--block) { height: 30px; padding: 0 var(--space-3); font-size: var(--font-size-sm); }
 .card__body { padding: var(--space-5); }
+.card-copy {
+  margin: var(--space-4) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 
 .panel { background: var(--color-surface-muted); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
 
@@ -532,9 +547,12 @@ thead .adv-list-select-hit { min-height: 38px; }
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
 }
-.adv-list-toolbar__left { min-height: 30px; display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.adv-list-toolbar__left { min-height: 30px; display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
 .adv-list-toolbar__right { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
 .adv-list-primary-actions { display: inline-flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.adv-list-title { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.adv-list-title h3 { margin: 0; font-size: 14px; line-height: 1.25; font-weight: 650; color: var(--color-text); }
+.adv-list-title p { margin: 0; max-width: 68ch; font-size: 12.5px; line-height: 1.45; color: var(--color-text-muted); overflow-wrap: anywhere; }
 
 .adv-list-vis { position: relative; display: inline-block; }
 .adv-list-vis__menu {

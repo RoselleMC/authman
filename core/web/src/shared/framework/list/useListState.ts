@@ -21,7 +21,7 @@ export interface UseListStateOptions {
   defaults?: ListStateDefaults;
   /**
    * Optional persistence scope, normally the current admin user id.
-   * Layout preferences (page size + hidden columns) are saved per scope and
+   * Layout preferences (page size, hidden columns, and filter-row visibility) are saved per scope and
    * URL prefix, while filters/page remain transient.
    */
   storageScope?: string;
@@ -70,8 +70,8 @@ export function useListState(opts: UseListStateOptions = {}): UseListStateReturn
   // External URL changes (back button / shared link) update our local state.
   useEffect(() => {
     if (!urlSync) return;
-    const decoded = readStateFromParams(params, urlPrefix, effectiveDefaults);
     const last = lastWriteRef.current;
+    const decoded = { ...readStateFromParams(params, urlPrefix, effectiveDefaults), filtersVisible: last.filtersVisible };
     if (
       decoded.page !== last.page ||
       decoded.pageSize !== last.pageSize ||
@@ -129,6 +129,7 @@ export function useListState(opts: UseListStateOptions = {}): UseListStateReturn
 interface StoredLayout {
   pageSize?: number;
   hidden?: string[];
+  filtersVisible?: boolean;
 }
 
 function makeStorageKey(scope: string | undefined, prefix: string) {
@@ -147,6 +148,7 @@ function readStoredLayout(key: string): StoredLayout | null {
     return {
       pageSize: Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : undefined,
       hidden: Array.isArray(parsed.hidden) ? parsed.hidden.filter((v): v is string => typeof v === "string") : undefined,
+      filtersVisible: typeof parsed.filtersVisible === "boolean" ? parsed.filtersVisible : undefined,
     };
   } catch {
     return null;
@@ -156,7 +158,7 @@ function readStoredLayout(key: string): StoredLayout | null {
 function writeStoredLayout(key: string, state: ListState) {
   if (!key || typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(key, JSON.stringify({ pageSize: state.pageSize, hidden: state.hidden }));
+    window.localStorage.setItem(key, JSON.stringify({ pageSize: state.pageSize, hidden: state.hidden, filtersVisible: state.filtersVisible }));
   } catch {
     // localStorage can be disabled; URL state still works.
   }
@@ -168,5 +170,6 @@ function mergeStoredDefaults(defaults: ListStateDefaults | undefined, stored: St
     ...defaults,
     pageSize: stored.pageSize ?? defaults?.pageSize,
     hidden: stored.hidden ?? defaults?.hidden,
+    filtersVisible: stored.filtersVisible ?? defaults?.filtersVisible,
   };
 }

@@ -73,12 +73,7 @@ export function LimboBlueprintsPage({ embedded = false, basePath = "/limbo-bluep
   const uploadButton = <Button variant="primary" icon="plus" onClick={() => setUploadOpen(true)}>{t("admin.limboBlueprints.upload")}</Button>;
   const content = (
     <div data-testid="limbo-blueprints-page">
-      {embedded ? (
-        <div className="section-toolbar">
-          <span />
-          {uploadButton}
-        </div>
-      ) : (
+      {embedded ? null : (
         <PageHeader
           title={t("admin.limboBlueprints.heading")}
           desc={t("admin.limboBlueprints.desc")}
@@ -87,12 +82,14 @@ export function LimboBlueprintsPage({ embedded = false, basePath = "/limbo-bluep
       )}
       <Card noBody className="table-card">
         <AdvancedList
+          title={embedded ? t("admin.limboBlueprints.heading") : undefined}
           columns={columns}
           rowKey={(r) => r.id}
           rows={q.data ?? []}
           state={list.state}
           onStateChange={list.setState}
           loading={q.isLoading}
+          primaryActions={embedded ? uploadButton : undefined}
           onRowClick={(r) => navigate(`${basePath}/${encodeURIComponent(r.id)}`)}
           empty={<EmptyState icon="box" title={t("admin.limboBlueprints.empty")} />}
           testId="limbo-blueprints"

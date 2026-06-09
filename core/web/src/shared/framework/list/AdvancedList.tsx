@@ -1,5 +1,6 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "../../components/Icon";
+import { IconButton } from "../../components/IconButton";
 import { Select } from "../../components/Select";
 import { useI18n } from "../../i18n/I18nProvider";
 import { cx } from "../../utils/cx";
@@ -31,6 +32,10 @@ function cellStyle<T>(column: ListColumn<T>, head = false): CSSProperties {
 }
 
 interface BaseProps<T> {
+  /** Optional toolbar title. Use this instead of wrapping table lists in a Card title. */
+  title?: ReactNode;
+  /** Optional short text shown below the toolbar title. */
+  description?: ReactNode;
   columns: ReadonlyArray<ListColumn<T>>;
   rowKey: (row: T) => string;
   state: ListState;
@@ -92,6 +97,8 @@ export function AdvancedList<T>(props: AdvancedListProps<T>) {
   const { t } = useI18n();
   const {
     columns,
+    title,
+    description,
     rowKey,
     state,
     onStateChange,
@@ -146,6 +153,9 @@ export function AdvancedList<T>(props: AdvancedListProps<T>) {
     const sortDir = state.sortKey === column.key && state.sortDir === "asc" ? "desc" : "asc";
     onStateChange(withPageReset({ ...state, sortKey: column.key, sortDir }));
   }
+  function toggleFiltersVisible() {
+    onStateChange({ ...state, filtersVisible: !state.filtersVisible });
+  }
   function rowSelectable(row: T) {
     if (!selectionEnabled) return false;
     if (typeof selectable === "function") return selectable(row);
@@ -180,6 +190,12 @@ export function AdvancedList<T>(props: AdvancedListProps<T>) {
     <div className="adv-list" data-testid={testId}>
       <div className="adv-list-toolbar" data-testid={testId ? `${testId}-toolbar` : undefined}>
         <div className="adv-list-toolbar__left">
+          {title || description ? (
+            <div className="adv-list-title">
+              {title ? <h3>{title}</h3> : null}
+              {description ? <p>{description}</p> : null}
+            </div>
+          ) : null}
           {activeFilters.length > 0 ? (
             <button
               type="button"
@@ -200,6 +216,18 @@ export function AdvancedList<T>(props: AdvancedListProps<T>) {
             </div>
           ) : null}
           {toolbarActions}
+          {hasFilterRow ? (
+            <IconButton
+              bordered
+              name="filter"
+              size={16}
+              label={state.filtersVisible ? t("list.hideFilters") : t("list.showFilters")}
+              aria-pressed={state.filtersVisible}
+              className={cx("adv-list-filter-toggle", state.filtersVisible && "is-active")}
+              onClick={toggleFiltersVisible}
+              data-testid={testId ? `${testId}-filter-toggle` : "list-filter-toggle"}
+            />
+          ) : null}
           <ColumnVisibilityMenu
             columns={columns}
             hidden={state.hidden}
@@ -250,7 +278,7 @@ export function AdvancedList<T>(props: AdvancedListProps<T>) {
                 </th>
               ))}
             </tr>
-            {hasFilterRow ? (
+            {hasFilterRow && state.filtersVisible ? (
               <tr className="adv-list-filter-row" data-testid={testId ? `${testId}-filter-row` : undefined}>
                 {selectionEnabled ? <th className="adv-list-select-cell" style={{ width: 42, minWidth: 42 }} /> : null}
                 {visible.map((c) => (

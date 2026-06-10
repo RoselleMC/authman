@@ -372,6 +372,13 @@ type verifyLimboSessionRequest struct {
 	RequestedHost   string `json:"requested_host"`
 }
 
+type limboLoginPolicyRequest struct {
+	Username        string `json:"username"`
+	ClaimedUUID     string `json:"claimed_uuid"`
+	ProtocolVersion int    `json:"protocol_version"`
+	RequestedHost   string `json:"requested_host"`
+}
+
 type resolvePortalTargetRequest struct {
 	ServerID      string `json:"server_id"`
 	Slug          string `json:"slug"`
@@ -523,12 +530,110 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 	}, nil)
 }
 
+func (s *Server) handleNodeResolveLimboLoginPolicy(w http.ResponseWriter, r *http.Request) {
+	n, nodeErr := s.requireNode(r)
+	if nodeErr != nil {
+		api.WriteError(w, nodeErr)
+		return
+	}
+	if !node.IsLimboPortal(n.Mode) {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "node.kind_forbidden", "only limbo portal nodes can resolve login policy"))
+		return
+	}
+	var req limboLoginPolicyRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	username := strings.TrimSpace(req.Username)
+	if username == "" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "session.username_required", "username is required"))
+		return
+	}
+	writePolicy := func(mode string, reason string, premium *yggdrasil.Profile) {
+		details := map[string]any{
+			"username":         username,
+			"claimed_uuid":     strings.TrimSpace(req.ClaimedUUID),
+			"login_mode":       mode,
+			"reason":           reason,
+			"requested_host":   req.RequestedHost,
+			"protocol_version": req.ProtocolVersion,
+		}
+		if premium != nil {
+			details["premium_uuid"] = dashedProfileUUID(premium.ID)
+			details["premium_name"] = premium.Name
+			details["claimed_uuid_matches_mojang"] = sameProfileUUID(req.ClaimedUUID, premium.ID)
+		}
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, username, "limbo.login_policy", details)
+		data := map[string]any{
+			"login_mode": mode,
+			"reason":     reason,
+		}
+		if premium != nil {
+			data["premium_profile"] = map[string]any{
+				"uuid":   dashedProfileUUID(premium.ID),
+				"id":     strings.TrimSpace(premium.ID),
+				"name":   premium.Name,
+				"source": "mojang",
+			}
+		}
+		api.WriteJSON(w, http.StatusOK, data, nil)
+	}
+	if s.mojangVerifier == nil {
+		if _, ok := s.resolveOfflineAfterMojangFailure(r.Context(), username); ok {
+			writePolicy("offline", "registered_offline_during_mojang_outage", nil)
+			return
+		}
+		api.WriteError(w, api.NewError(http.StatusServiceUnavailable, "mojang.verifier_unavailable", "Mojang verifier is not configured"))
+		return
+	}
+	profile, err := s.mojangVerifier.LookupProfileByName(r.Context(), username)
+	if err == nil {
+		if sameProfileUUID(req.ClaimedUUID, profile.ID) {
+			writePolicy("hybrid", "premium_claim_uuid_match", &profile)
+			return
+		}
+		writePolicy("offline", "premium_claim_uuid_mismatch", &profile)
+		return
+	}
+	if errors.Is(err, yggdrasil.ErrProfileNotFound) {
+		writePolicy("offline", "premium_profile_not_found", nil)
+		return
+	}
+	if _, ok := s.resolveOfflineAfterMojangFailure(r.Context(), username); ok {
+		writePolicy("offline", "registered_offline_during_mojang_outage", nil)
+		return
+	}
+	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, username, "limbo.login_policy_failure", map[string]any{
+		"username":         username,
+		"claimed_uuid":     strings.TrimSpace(req.ClaimedUUID),
+		"requested_host":   req.RequestedHost,
+		"protocol_version": req.ProtocolVersion,
+		"reason":           err.Error(),
+	})
+	api.WriteError(w, api.NewError(http.StatusServiceUnavailable, "mojang.verifier_unavailable", err.Error()))
+}
+
 func (s *Server) resolveOfflineAfterMojangFailure(ctx context.Context, username string) (identity.Player, bool) {
 	player, err := s.ResolveOffline(ctx, strings.TrimSpace(username))
 	if err != nil || player.Kind != identity.PlayerKindOffline {
 		return identity.Player{}, false
 	}
 	return player, true
+}
+
+func sameProfileUUID(left string, right string) bool {
+	leftUUID, leftErr := identity.ParseUUID(left)
+	rightUUID, rightErr := identity.ParseUUID(right)
+	return leftErr == nil && rightErr == nil && leftUUID == rightUUID
+}
+
+func dashedProfileUUID(value string) string {
+	uuid, err := identity.ParseUUID(value)
+	if err != nil {
+		return strings.TrimSpace(value)
+	}
+	return uuid.String()
 }
 
 func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request) {
@@ -615,6 +720,12 @@ type authenticatePlayerRequest struct {
 	Password string `json:"password"`
 }
 
+type registerOfflinePlayerRequest struct {
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	RequestedHost string `json:"requested_host"`
+}
+
 type upsertExtensionDataRequest struct {
 	PlayerID   string                `json:"player_id"`
 	Username   string                `json:"username"`
@@ -672,6 +783,57 @@ func (s *Server) handleNodeAuthenticatePlayer(w http.ResponseWriter, r *http.Req
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"authenticated": true,
 		"player":        playerData(player),
+	}, nil)
+}
+
+func (s *Server) handleNodeRegisterOfflinePlayer(w http.ResponseWriter, r *http.Request) {
+	n, nodeErr := s.requireNode(r)
+	if nodeErr != nil {
+		api.WriteError(w, nodeErr)
+		return
+	}
+	if !node.IsLimboPortal(n.Mode) {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "node.kind_forbidden", "only limbo portal nodes can register offline passports"))
+		return
+	}
+	var req registerOfflinePlayerRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	username := strings.TrimSpace(req.Username)
+	if username == "" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "player.username_required", "username is required"))
+		return
+	}
+	passwordHash, err := auth.HashPassword(req.Password, s.passwordParams)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "auth.password_policy_failed", "password does not satisfy policy"))
+		return
+	}
+	pp, err := s.store.CreateOfflinePassportProfile(r.Context(), username, username, passwordHash)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "player.offline_registration_failed", err.Error()))
+		return
+	}
+	now := time.Now()
+	s.recordPassportProfileSeen(r, pp.Passport, pp.Profile, n.ServerID, now)
+	player := identity.PlayerFromPassportProfileLink(pp)
+	player.ProfileProperties = s.effectiveProfileProperties(r.Context(), pp.Profile, &pp.Passport)
+	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "offline.register", playerEventDetails(player, map[string]any{
+		"passport_id":    pp.Passport.ID,
+		"profile_id":     pp.Profile.ID,
+		"requested_host": req.RequestedHost,
+		"server_id":      n.ServerID,
+	}))
+	api.WriteJSON(w, http.StatusCreated, map[string]any{
+		"player": playerData(player),
+		"auth": map[string]any{
+			"required": false,
+			"kind":     "offline_password",
+			"locked":   player.Locked,
+			"username": pp.Passport.Username,
+		},
 	}, nil)
 }
 

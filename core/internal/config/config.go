@@ -25,6 +25,7 @@ type Config struct {
 	NodeAccessToken    string
 	CORSAllowedOrigins []string
 	MojangSessionURL   string
+	MojangProfileURL   string
 	MojangRoutes       []mojang.Route
 	MojangTimeout      time.Duration
 	MojangCooldown     time.Duration
@@ -49,6 +50,7 @@ func Load() (Config, error) {
 		NodeAccessToken:    envString("AUTHMAN_NODE_ACCESS_TOKEN", ""),
 		CORSAllowedOrigins: envCSV("AUTHMAN_CORS_ALLOWED_ORIGINS"),
 		MojangSessionURL:   envString("AUTHMAN_MOJANG_SESSION_URL", mojang.DefaultSessionServerURL),
+		MojangProfileURL:   envString("AUTHMAN_MOJANG_PROFILE_URL", mojang.DefaultProfileAPIURL),
 		MojangRoutes:       mojangRoutes(),
 		MojangTimeout:      envDuration("AUTHMAN_MOJANG_TIMEOUT", 5*time.Second),
 		MojangCooldown:     envDuration("AUTHMAN_MOJANG_FAILURE_COOLDOWN", 30*time.Second),

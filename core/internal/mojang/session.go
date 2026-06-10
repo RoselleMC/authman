@@ -17,16 +17,20 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-const DefaultSessionServerURL = "https://sessionserver.mojang.com"
+const (
+	DefaultSessionServerURL = "https://sessionserver.mojang.com"
+	DefaultProfileAPIURL    = "https://api.mojang.com"
+)
 
 type SessionVerifier struct {
-	mu       sync.Mutex
-	Pool     *Pool
-	BaseURL  string
-	Timeout  time.Duration
-	Cache    *ProfileCache
-	Now      func() time.Time
-	ClientFn func(Route) (*http.Client, error)
+	mu         sync.Mutex
+	Pool       *Pool
+	BaseURL    string
+	ProfileURL string
+	Timeout    time.Duration
+	Cache      *ProfileCache
+	Now        func() time.Time
+	ClientFn   func(Route) (*http.Client, error)
 }
 
 func (v *SessionVerifier) HasJoined(ctx context.Context, request yggdrasil.HasJoinedRequest) (yggdrasil.Profile, error) {
@@ -53,6 +57,57 @@ func (v *SessionVerifier) HasJoined(ctx context.Context, request yggdrasil.HasJo
 	defer v.mu.Unlock()
 	_, err := v.Pool.Execute(ctx, routeTransportFunc(func(ctx context.Context, route Route) error {
 		routeProfile, routeErr := v.fetch(ctx, route, base, timeout, request)
+		if routeErr != nil {
+			if errors.Is(routeErr, yggdrasil.ErrProfileNotFound) {
+				profileNotFound = true
+				return nil
+			}
+			return routeErr
+		}
+		profile = routeProfile
+		cache.Put(key, routeProfile, now)
+		return nil
+	}))
+	if err == nil {
+		if profileNotFound {
+			return yggdrasil.Profile{}, yggdrasil.ErrProfileNotFound
+		}
+		return profile, nil
+	}
+	if cached, ok := cache.Get(key, now); ok {
+		return cached, nil
+	}
+	if errors.Is(err, ErrAllRoutesFailed) {
+		return yggdrasil.Profile{}, fmt.Errorf("%w: %v", ErrAllRoutesFailed, err)
+	}
+	return yggdrasil.Profile{}, err
+}
+
+func (v *SessionVerifier) LookupProfileByName(ctx context.Context, username string) (yggdrasil.Profile, error) {
+	username = strings.TrimSpace(username)
+	if username == "" || v.Pool == nil || len(v.Pool.Routes) == 0 {
+		return yggdrasil.Profile{}, yggdrasil.ErrProfileNotFound
+	}
+	key := ProfileNameCacheKey(username)
+	base := strings.TrimRight(v.ProfileURL, "/")
+	if base == "" {
+		base = DefaultProfileAPIURL
+	}
+	timeout := v.Timeout
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+	cache := v.Cache
+	if cache == nil {
+		cache = NewProfileCache(30*time.Second, 5*time.Minute)
+	}
+	now := v.now()
+	var profile yggdrasil.Profile
+	var profileNotFound bool
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	_, err := v.Pool.Execute(ctx, routeTransportFunc(func(ctx context.Context, route Route) error {
+		routeProfile, routeErr := v.fetchProfileByName(ctx, route, base, timeout, username)
 		if routeErr != nil {
 			if errors.Is(routeErr, yggdrasil.ErrProfileNotFound) {
 				profileNotFound = true
@@ -143,6 +198,47 @@ func (v *SessionVerifier) fetch(ctx context.Context, route Route, baseURL string
 		query.Set("ip", request.IP)
 	}
 	endpoint.RawQuery = query.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return yggdrasil.Profile{}, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return yggdrasil.Profile{}, fmt.Errorf("%w: %v", ErrRouteUnavailable, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
+		return yggdrasil.Profile{}, yggdrasil.ErrProfileNotFound
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return yggdrasil.Profile{}, rateLimitFromResponse(resp)
+	}
+	if routeErr := ErrorFromStatus(resp.StatusCode); routeErr != nil {
+		return yggdrasil.Profile{}, routeErr
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return yggdrasil.Profile{}, yggdrasil.ErrProfileNotFound
+	}
+	var profile yggdrasil.Profile
+	if err := json.NewDecoder(resp.Body).Decode(&profile); err != nil {
+		return yggdrasil.Profile{}, fmt.Errorf("%w: malformed mojang profile", ErrRouteUnavailable)
+	}
+	if profile.ID == "" || profile.Name == "" {
+		return yggdrasil.Profile{}, fmt.Errorf("%w: incomplete mojang profile", ErrRouteUnavailable)
+	}
+	return profile, nil
+}
+
+func (v *SessionVerifier) fetchProfileByName(ctx context.Context, route Route, baseURL string, timeout time.Duration, username string) (yggdrasil.Profile, error) {
+	client, err := v.client(route)
+	if err != nil {
+		return yggdrasil.Profile{}, err
+	}
+	client.Timeout = timeout
+	endpoint, err := url.Parse(baseURL + "/users/profiles/minecraft/" + url.PathEscape(username))
+	if err != nil {
+		return yggdrasil.Profile{}, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return yggdrasil.Profile{}, err
@@ -274,6 +370,10 @@ func NewProfileCache(freshTTL time.Duration, staleTTL time.Duration) *ProfileCac
 
 func CacheKey(request yggdrasil.HasJoinedRequest) string {
 	return request.Username + "\x00" + request.ServerID + "\x00" + request.IP
+}
+
+func ProfileNameCacheKey(username string) string {
+	return "profile-name\x00" + strings.ToLower(strings.TrimSpace(username))
 }
 
 func (c *ProfileCache) Put(key string, profile yggdrasil.Profile, now time.Time) {

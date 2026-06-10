@@ -127,9 +127,10 @@ func newMojangVerifier(cfg config.Config) *mojang.SessionVerifier {
 			Routes:          cfg.MojangRoutes,
 			FailureCooldown: cfg.MojangCooldown,
 		},
-		BaseURL: cfg.MojangSessionURL,
-		Timeout: cfg.MojangTimeout,
-		Cache:   mojang.NewProfileCache(cfg.MojangCacheFresh, cfg.MojangCacheStale),
+		BaseURL:    cfg.MojangSessionURL,
+		ProfileURL: cfg.MojangProfileURL,
+		Timeout:    cfg.MojangTimeout,
+		Cache:      mojang.NewProfileCache(cfg.MojangCacheFresh, cfg.MojangCacheStale),
 	}
 }
 
@@ -365,8 +366,10 @@ func (s *Server) routes() {
 	s.coreMux.HandleFunc("GET /api/admin/system/summary", s.handleAdminSystemSummary)
 	s.coreMux.HandleFunc("POST /api/node/heartbeat", s.handleNodeHeartbeat)
 	s.coreMux.HandleFunc("POST /api/node/actions/ack", s.handleNodeAckActions)
+	s.coreMux.HandleFunc("POST /api/node/limbo/login-policy", s.handleNodeResolveLimboLoginPolicy)
 	s.coreMux.HandleFunc("POST /api/node/limbo/sessions/verify", s.handleNodeVerifyLimboSession)
 	s.coreMux.HandleFunc("POST /api/node/players/resolve", s.handleNodeResolvePlayer)
+	s.coreMux.HandleFunc("POST /api/node/players/register-offline", s.handleNodeRegisterOfflinePlayer)
 	s.coreMux.HandleFunc("POST /api/node/players/authenticate", s.handleNodeAuthenticatePlayer)
 	s.coreMux.HandleFunc("POST /api/node/limbo/targets/resolve", s.handleNodeResolvePortalTarget)
 	s.coreMux.HandleFunc("GET /api/node/limbo/blueprints/{id}", s.handleNodeLimboBlueprint)

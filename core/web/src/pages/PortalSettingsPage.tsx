@@ -18,8 +18,6 @@ import { fetchPortalSettings, updatePortalSettings, type PortalSettings } from "
 
 const EMPTY: PortalSettings = {
   transfer_cookie_key: "authman:transfer_grant",
-  dialog_enabled: true,
-  dialog_fallback_chat_enabled: true,
   fallback_server_id: "",
   available_servers: [],
 };
@@ -102,30 +100,10 @@ export function PortalSettingsPage({ embedded = false }: { embedded?: boolean } 
                 testId="portal-fallback-server"
               />
             </Field>
-            <label className="toggle-row">
-              <input
-                type="checkbox"
-                checked={form.dialog_enabled}
-                onChange={(e) => patch("dialog_enabled", e.target.checked)}
-                data-testid="portal-dialog-enabled"
-              />
-              <span>
-                <strong>{t("admin.portal.field.dialog")}</strong>
-                <small>{t("admin.portal.field.dialog.hint")}</small>
-              </span>
-            </label>
-            <label className="toggle-row">
-              <input
-                type="checkbox"
-                checked={form.dialog_fallback_chat_enabled}
-                onChange={(e) => patch("dialog_fallback_chat_enabled", e.target.checked)}
-                data-testid="portal-dialog-fallback"
-              />
-              <span>
-                <strong>{t("admin.portal.field.fallback")}</strong>
-                <small>{t("admin.portal.field.fallback.hint")}</small>
-              </span>
-            </label>
+            <div className="settings-note" data-testid="portal-protocol-requirement">
+              <Icon name="info" size={14} />
+              <span>{t("admin.portal.protocolRequirement")}</span>
+            </div>
           </div>
           <p className="card-foot-note" style={{ marginTop: 16 }}>
             <Icon name="info" size={13} /> {t("admin.portal.footnote")}

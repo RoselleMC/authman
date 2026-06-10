@@ -1,7 +1,7 @@
 import { Badge, type BadgeTone } from "./Badge";
 import { useI18n } from "../i18n/I18nProvider";
 
-export type PlayerStatus = "active" | "locked" | "pending_verification" | "deleted" | "online" | "offline_status";
+export type PlayerStatus = "active" | "locked" | "pending_verification" | "deleted" | "archived" | "online" | "offline_status";
 
 interface Map {
   tone: BadgeTone;
@@ -13,6 +13,7 @@ const MAP: Record<PlayerStatus, Map> = {
   locked: { tone: "danger", key: "status.locked" },
   pending_verification: { tone: "warning", key: "status.pending" },
   deleted: { tone: "neutral", key: "status.deleted" },
+  archived: { tone: "neutral", key: "status.archived" },
   online: { tone: "success", key: "status.online" },
   offline_status: { tone: "neutral", key: "status.offline" },
 };

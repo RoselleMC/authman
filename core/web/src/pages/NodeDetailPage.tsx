@@ -248,8 +248,7 @@ export function NodeDetailPage() {
               </p>
               <ConfigGrid testId="node-portal-runtime">
                 <ConfigRow k={t("admin.portal.field.cookie")} v={text(cfg.transfer_cookie_key, "authman:transfer_grant")} mono />
-                <ConfigRow k={t("admin.portal.field.dialog")} v={boolValue(cfg.dialog_enabled, true) ? t("common.enabled") : t("common.disabled")} />
-                <ConfigRow k={t("admin.portal.field.fallback")} v={boolValue(cfg.dialog_fallback_chat_enabled, true) ? t("common.enabled") : t("common.disabled")} />
+                <ConfigRow k={t("admin.portal.field.protocol")} v={t("admin.portal.protocolRange")} />
               </ConfigGrid>
             </Card>
           )}

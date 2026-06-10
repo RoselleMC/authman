@@ -1498,18 +1498,16 @@ func (s *Server) nodeData(ctx context.Context, n node.Node) map[string]any {
 func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]any {
 	kind := node.NormalizeKind(n.Mode)
 	base := map[string]any{
-		"node_name":                    strings.TrimSpace(n.Name),
-		"server_id":                    strings.TrimSpace(n.ServerID),
-		"heartbeat_interval_seconds":   60,
-		"resolve_raw_offline_names":    true,
-		"max_password_attempts":        3,
-		"chat_cooldown_millis":         150,
-		"auth_timeout_seconds":         90,
-		"completion_delay_seconds":     3,
-		"transfer_cookie_key":          "authman:transfer_grant",
-		"dialog_enabled":               true,
-		"dialog_fallback_chat_enabled": true,
-		"email_verification_mode":      "disabled",
+		"node_name":                  strings.TrimSpace(n.Name),
+		"server_id":                  strings.TrimSpace(n.ServerID),
+		"heartbeat_interval_seconds": 60,
+		"resolve_raw_offline_names":  true,
+		"max_password_attempts":      3,
+		"chat_cooldown_millis":       150,
+		"auth_timeout_seconds":       90,
+		"completion_delay_seconds":   3,
+		"transfer_cookie_key":        "authman:transfer_grant",
+		"email_verification_mode":    "disabled",
 	}
 	if kind == "downstream_velocity" {
 		base["downstream_initial_server"] = ""
@@ -1546,8 +1544,6 @@ func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]
 	if settings.TransferCookieKey != "" {
 		base["transfer_cookie_key"] = settings.TransferCookieKey
 	}
-	base["dialog_enabled"] = settings.DialogEnabled
-	base["dialog_fallback_chat_enabled"] = settings.DialogFallbackChat
 	return base
 }
 

@@ -31,6 +31,8 @@ import (
 
 const version = "0.1.0-dev"
 
+const minDialogProtocol = 771 // Minecraft 1.21.6
+
 var miniMessageLineBreakRE = regexp.MustCompile(`(?i)\r\n|\r|\n|<\s*(?:newline|br)\s*/?>`)
 
 type config struct {
@@ -44,6 +46,7 @@ type config struct {
 	DefaultHost    string
 	LoginMode      string
 	OnlineServerID string
+	LogLevel       string
 }
 
 type portal struct {
@@ -77,12 +80,16 @@ func main() {
 	flag.StringVar(&cfg.DefaultHost, "default-host", getenv("AUTHMAN_LIMBO_DEFAULT_HOST", ""), "default requested host")
 	flag.StringVar(&cfg.LoginMode, "login-mode", getenv("AUTHMAN_LIMBO_LOGIN_MODE", "hybrid"), "limbo login mode: hybrid, offline, or online")
 	flag.StringVar(&cfg.OnlineServerID, "online-server-id", getenv("AUTHMAN_LIMBO_ONLINE_SERVER_ID", "authman-limbo"), "serverId challenge used for online-mode session verification")
+	flag.StringVar(&cfg.LogLevel, "log-level", getenv("AUTHMAN_LIMBO_LOG_LEVEL", "info"), "log level: debug, info, warn, or error")
 	flag.Parse()
 
 	if err := validateConfig(cfg); err != nil {
 		fatal(err)
 	}
-	logger := slog.Default()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: parseLogLevel(cfg.LogLevel),
+	}))
+	slog.SetDefault(logger)
 	world, spawn, err := loadWorld(cfg)
 	if err != nil {
 		fatal(err)
@@ -114,6 +121,12 @@ func main() {
 		LoginMode:         p.loginMode(),
 		SessionVerifier:   limbgo.SessionVerifierFunc(p.verifySession),
 		OnlineServerID:    cfg.OnlineServerID,
+		ProtocolPolicy: limbgo.ProtocolPolicyFunc(func(_ context.Context, req limbgo.ProtocolRequest) error {
+			if req.ProtocolVersion >= minDialogProtocol {
+				return nil
+			}
+			return limbgo.RejectProtocolText("Authman Limbo requires Minecraft 1.21.6 or newer.")
+		}),
 	}
 	server, err := limbgo.NewServer(limbgo.Config{
 		Addr:           cfg.Listen,
@@ -121,8 +134,6 @@ func main() {
 		JoinResolver:   limbgo.JoinResolverFunc(p.resolveJoin),
 		Events: limbgo.PlayerEventHandlerFuncs{
 			Join:        p.handleJoin,
-			Chat:        p.handleChat,
-			Command:     p.handleCommand,
 			DialogClick: p.handleDialogClick,
 		},
 		Logger: logger,
@@ -324,38 +335,6 @@ func (p *portal) handleJoin(ctx context.Context, session limbgo.PlayerSession, e
 	return p.showLoginDialog(ctx, session)
 }
 
-func (p *portal) handleChat(ctx context.Context, session limbgo.PlayerSession, event *limbgo.ChatEvent) error {
-	p.logger.Info("limbo chat event", "player", event.Player.Name, "protocol", event.Protocol, "first", firstWord(event.Message))
-	if p.locked {
-		return session.SendMessage(ctx, &component.Text{Content: "Authman portal is locked."})
-	}
-	parts := strings.Fields(event.Message)
-	if len(parts) >= 1 && strings.EqualFold(parts[0], "login") {
-		password := ""
-		if len(parts) >= 2 {
-			password = strings.Join(parts[1:], " ")
-		}
-		return p.authenticateAndTransfer(ctx, session, password)
-	}
-	return p.showLoginDialog(ctx, session)
-}
-
-func (p *portal) handleCommand(ctx context.Context, session limbgo.PlayerSession, event *limbgo.CommandEvent) error {
-	p.logger.Info("limbo command event", "player", event.Player.Name, "protocol", event.Protocol, "first", firstWord(event.Command))
-	if p.locked {
-		return session.SendMessage(ctx, &component.Text{Content: "Authman portal is locked."})
-	}
-	parts := strings.Fields(event.Command)
-	if len(parts) >= 1 && strings.EqualFold(parts[0], "login") {
-		password := ""
-		if len(parts) >= 2 {
-			password = strings.Join(parts[1:], " ")
-		}
-		return p.authenticateAndTransfer(ctx, session, password)
-	}
-	return p.showLoginDialog(ctx, session)
-}
-
 func (p *portal) handleDialogClick(ctx context.Context, session limbgo.PlayerSession, event *limbgo.DialogClickEvent) error {
 	p.logger.Info("limbo dialog event", "player", event.Player.Name, "protocol", event.Protocol, "id", event.ID, "payload_bytes", len(event.Payload))
 	if event.ID != "authman:login_submit" {
@@ -366,7 +345,7 @@ func (p *portal) handleDialogClick(ctx context.Context, session limbgo.PlayerSes
 		values, err := parseDialogStringPayload(event.Payload)
 		if err != nil {
 			p.logger.Warn("failed to parse dialog payload", "player", event.Player.Name, "err", err)
-			return session.SendMessage(ctx, &component.Text{Content: "Authman could not read the dialog response. Use /login <password> instead."})
+			return session.SendMessage(ctx, &component.Text{Content: "Authman could not read the dialog response. Please try again."})
 		}
 		password = strings.TrimSpace(values["password"])
 	}
@@ -374,8 +353,8 @@ func (p *portal) handleDialogClick(ctx context.Context, session limbgo.PlayerSes
 }
 
 func (p *portal) showLoginDialog(ctx context.Context, session limbgo.PlayerSession) error {
-	if !boolFromMap(p.runtime, "dialog_enabled", true) || !session.Capabilities().Dialog {
-		return session.SendMessage(ctx, &component.Text{Content: "Use /login <password> to authenticate with Authman."})
+	if !session.Capabilities().Dialog {
+		return session.Disconnect(ctx, &component.Text{Content: "Authman Limbo requires Minecraft 1.21.6 or newer."})
 	}
 	resolved, err := p.client.resolvePlayer(ctx, session.Player())
 	if err != nil {
@@ -552,6 +531,19 @@ func getenv(key, fallback string) string {
 	return value
 }
 
+func parseLogLevel(value string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 func stringFromMap(values map[string]any, key string) string {
 	if values == nil {
 		return ""
@@ -562,26 +554,6 @@ func stringFromMap(values map[string]any, key string) string {
 	default:
 		return ""
 	}
-}
-
-func boolFromMap(values map[string]any, key string, fallback bool) bool {
-	if values == nil {
-		return fallback
-	}
-	switch value := values[key].(type) {
-	case bool:
-		return value
-	default:
-		return fallback
-	}
-}
-
-func firstWord(value string) string {
-	parts := strings.Fields(value)
-	if len(parts) == 0 {
-		return ""
-	}
-	return parts[0]
 }
 
 func parseDialogStringPayload(payload []byte) (map[string]string, error) {

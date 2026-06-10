@@ -459,15 +459,11 @@ export interface PortalRuntimeConfig {
   gate_initial_server?: string;
   gate_holding_server?: string;
   gate_validation_timeout_seconds?: number;
-  dialog_enabled?: boolean;
-  dialog_fallback_chat_enabled?: boolean;
   email_verification_mode?: string;
 }
 
 export interface PortalSettings {
   transfer_cookie_key: string;
-  dialog_enabled: boolean;
-  dialog_fallback_chat_enabled: boolean;
   fallback_server_id: string;
   available_servers?: Array<{
     id: string;

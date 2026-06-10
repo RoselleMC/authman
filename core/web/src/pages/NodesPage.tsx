@@ -47,21 +47,15 @@ function nodeRuntimeSummary(n: SafeVelocityNode, t: (key: string, fallback?: str
   return `${t("admin.nodes.runtime.initial")}: ${initial} · ${t("admin.nodes.runtime.holding")}: ${holding}`;
 }
 
-function configBool(cfg: Record<string, unknown>, key: string, fallback: boolean): boolean {
-  const value = cfg[key];
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function LimboAuthBadges({ node }: { node: SafeVelocityNode }) {
+function LimboAuthBadges({ node: _node }: { node: SafeVelocityNode }) {
   const { t } = useI18n();
-  const cfg = node.runtime_config ?? {};
   return (
     <div className="row-actions" style={{ justifyContent: "flex-start" }}>
-      <Badge tone={configBool(cfg, "dialog_enabled", true) ? "success" : "neutral"} dot>
+      <Badge tone="success" dot>
         {t("admin.loginPortals.auth.dialog")}
       </Badge>
-      <Badge tone={configBool(cfg, "dialog_fallback_chat_enabled", true) ? "info" : "neutral"} dot>
-        {t("admin.loginPortals.auth.chat")}
+      <Badge tone="info" dot>
+        {t("admin.loginPortals.auth.protocol")}
       </Badge>
     </div>
   );

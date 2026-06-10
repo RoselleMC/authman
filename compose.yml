@@ -46,6 +46,7 @@ services:
       AUTHMAN_LIMBO_DEFAULT_HOST: "default"
       AUTHMAN_LIMBO_LOGIN_MODE: "${AUTHMAN_LIMBO_LOGIN_MODE:-hybrid}"
       AUTHMAN_LIMBO_ONLINE_SERVER_ID: "${AUTHMAN_LIMBO_ONLINE_SERVER_ID:-authman-limbo}"
+      AUTHMAN_LIMBO_LOG_LEVEL: "${AUTHMAN_LIMBO_LOG_LEVEL:-info}"
     ports:
       - "25665:25565"
     depends_on:

@@ -69,6 +69,18 @@
 .node-ico { width: 28px; height: 28px; border-radius: 7px; background: var(--color-surface-muted); color: var(--color-text-muted); display: flex; align-items: center; justify-content: center; }
 .fingerprint { font-size: 12.5px; color: var(--color-text-muted); background: var(--color-surface-muted); padding: 2px 8px; border-radius: 5px; }
 .card-foot-note { display: flex; align-items: center; gap: 7px; padding: 11px 20px; border-top: 1px solid var(--color-border); font-size: 12px; color: var(--color-text-subtle); }
+.settings-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
 
 /* ---------- mojang ---------- */
 .proxy-route { display: flex; flex-direction: column; gap: 2px; }

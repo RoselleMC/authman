@@ -80,10 +80,8 @@ type downstreamServerRequest struct {
 }
 
 type portalSettingsRequest struct {
-	TransferCookieKey  string `json:"transfer_cookie_key"`
-	DialogEnabled      bool   `json:"dialog_enabled"`
-	DialogFallbackChat bool   `json:"dialog_fallback_chat_enabled"`
-	FallbackServerID   string `json:"fallback_server_id"`
+	TransferCookieKey string `json:"transfer_cookie_key"`
+	FallbackServerID  string `json:"fallback_server_id"`
 }
 
 type adminRoleUpdateRequest struct {
@@ -1881,10 +1879,8 @@ func (s *Server) handleAdminUpdatePortalSettings(w http.ResponseWriter, r *http.
 		cookieKey = "authman:transfer_grant"
 	}
 	settings := portalSettings{
-		TransferCookieKey:  cookieKey,
-		DialogEnabled:      req.DialogEnabled,
-		DialogFallbackChat: req.DialogFallbackChat,
-		FallbackServerID:   normalizePortalFallbackServerID(req.FallbackServerID),
+		TransferCookieKey: cookieKey,
+		FallbackServerID:  normalizePortalFallbackServerID(req.FallbackServerID),
 	}
 	if settings.FallbackServerID != "" {
 		if _, err := s.store.GetDownstreamServer(r.Context(), settings.FallbackServerID); err != nil {
@@ -1901,26 +1897,20 @@ func (s *Server) handleAdminUpdatePortalSettings(w http.ResponseWriter, r *http.
 }
 
 type portalSettings struct {
-	TransferCookieKey  string
-	DialogEnabled      bool
-	DialogFallbackChat bool
-	FallbackServerID   string
+	TransferCookieKey string
+	FallbackServerID  string
 }
 
 func (s *Server) portalSettings(ctx context.Context) portalSettings {
 	defaults := portalSettings{
-		TransferCookieKey:  "authman:transfer_grant",
-		DialogEnabled:      true,
-		DialogFallbackChat: true,
-		FallbackServerID:   "",
+		TransferCookieKey: "authman:transfer_grant",
+		FallbackServerID:  "",
 	}
 	raw, err := s.store.GetSystemSetting(ctx, "portal")
 	if err == nil {
 		return portalSettings{
-			TransferCookieKey:  stringValue(raw["transfer_cookie_key"], defaults.TransferCookieKey),
-			DialogEnabled:      boolFromAnyServer(raw["dialog_enabled"], defaults.DialogEnabled),
-			DialogFallbackChat: boolFromAnyServer(raw["dialog_fallback_chat_enabled"], defaults.DialogFallbackChat),
-			FallbackServerID:   normalizePortalFallbackServerID(stringValue(raw["fallback_server_id"], defaults.FallbackServerID)),
+			TransferCookieKey: stringValue(raw["transfer_cookie_key"], defaults.TransferCookieKey),
+			FallbackServerID:  normalizePortalFallbackServerID(stringValue(raw["fallback_server_id"], defaults.FallbackServerID)),
 		}
 	}
 	return defaults
@@ -1936,10 +1926,8 @@ func normalizePortalFallbackServerID(value string) string {
 
 func portalSettingsMap(settings portalSettings) map[string]any {
 	return map[string]any{
-		"transfer_cookie_key":          strings.TrimSpace(settings.TransferCookieKey),
-		"dialog_enabled":               settings.DialogEnabled,
-		"dialog_fallback_chat_enabled": settings.DialogFallbackChat,
-		"fallback_server_id":           strings.TrimSpace(settings.FallbackServerID),
+		"transfer_cookie_key": strings.TrimSpace(settings.TransferCookieKey),
+		"fallback_server_id":  strings.TrimSpace(settings.FallbackServerID),
 	}
 }
 
@@ -1954,11 +1942,9 @@ func portalSettingsData(settings portalSettings, servers []store.DownstreamServe
 		})
 	}
 	return map[string]any{
-		"transfer_cookie_key":          strings.TrimSpace(settings.TransferCookieKey),
-		"dialog_enabled":               settings.DialogEnabled,
-		"dialog_fallback_chat_enabled": settings.DialogFallbackChat,
-		"fallback_server_id":           strings.TrimSpace(settings.FallbackServerID),
-		"available_servers":            available,
+		"transfer_cookie_key": strings.TrimSpace(settings.TransferCookieKey),
+		"fallback_server_id":  strings.TrimSpace(settings.FallbackServerID),
+		"available_servers":   available,
 	}
 }
 

@@ -223,10 +223,16 @@ export function ProfileDetailPage() {
             ) : (
               <Button variant="danger-soft" icon="alert" block onClick={() => { setBanReason(""); resetDuration(setBanDurationValue, setBanDurationUnit); setDialog("ban"); }}>{t("admin.bans.banProfile")}</Button>
             )}
-            <Button variant="secondary" icon={p.status === "locked" ? "unlock" : "lock"} block onClick={() => { setStatus(p.status === "locked" ? "active" : "locked"); setDialog("status"); }}>
-              {p.status === "locked" ? t("admin.player.unlock") : t("admin.player.lock")}
-            </Button>
-            <Button variant="secondary" icon="box" block onClick={() => { setStatus("archived"); setDialog("status"); }}>{t("admin.profiles.archive")}</Button>
+            {p.status === "archived" ? (
+              <Button variant="secondary" icon="refresh" block onClick={() => { setStatus("active"); setDialog("status"); }}>{t("admin.profiles.restore")}</Button>
+            ) : (
+              <>
+                <Button variant="secondary" icon={p.status === "locked" ? "unlock" : "lock"} block onClick={() => { setStatus(p.status === "locked" ? "active" : "locked"); setDialog("status"); }}>
+                  {p.status === "locked" ? t("admin.player.unlock") : t("admin.player.lock")}
+                </Button>
+                <Button variant="secondary" icon="box" block onClick={() => { setStatus("archived"); setDialog("status"); }}>{t("admin.profiles.archive")}</Button>
+              </>
+            )}
             <Button variant="secondary" icon="link" block onClick={() => { setPassportID(""); setDialog("bind"); }}>{t("admin.profiles.bind")}</Button>
             {p.passport ? <Button variant="danger" icon="link" block onClick={() => setDialog("unbind")}>{t("admin.profiles.unbind")}</Button> : null}
           </DetailActions>

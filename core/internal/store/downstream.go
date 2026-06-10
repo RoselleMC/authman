@@ -46,34 +46,6 @@ type DownstreamTarget struct {
 	ExtensionProviders   []string
 }
 
-func defaultDownstreamServer(now time.Time) DownstreamServer {
-	return DownstreamServer{
-		ID:               "default",
-		Slug:             "default",
-		DisplayName:      "Default Server",
-		Status:           "active",
-		RegistrationOpen: true,
-		PortalTheme:      map[string]any{},
-		PortalConfig: map[string]any{
-			"registration_strategy":  "open",
-			"show_in_global":         true,
-			"host":                   "127.0.0.1",
-			"port":                   DefaultDownstreamPort,
-			"transfer_host":          "127.0.0.1",
-			"transfer_port":          DefaultDownstreamPort,
-			"motd":                   "Welcome to Authman",
-			"server_icon":            "",
-			"gate_enabled":           true,
-			"grant_ttl_seconds":      DefaultTransferGrantTTLSeconds,
-			"allowed_portal_sources": []string{},
-			"portal_hosts":           []string{},
-		},
-		ExtensionProviders: []string{"authman.identity"},
-		CreatedAt:          now,
-		UpdatedAt:          now,
-	}
-}
-
 func normalizeDownstreamServer(server DownstreamServer) DownstreamServer {
 	if server.Slug == "" {
 		server.Slug = server.ID

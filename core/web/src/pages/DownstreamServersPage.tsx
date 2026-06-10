@@ -180,11 +180,9 @@ export function DownstreamServersPage() {
               <Button size="sm" variant="secondary" icon={rows.every((row) => row.visible) ? "eyeOff" : "eye"} loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, patch: { visible: !rows.every((row) => row.visible) } })}>
                 {rows.every((row) => row.visible) ? t("common.hide") : t("common.show")}
               </Button>
-              {rows.every((row) => row.id !== "default") ? (
-                <Button size="sm" variant="danger-soft" icon="trash" onClick={() => setBulkDeleteRows(rows)}>
-                  {t("common.delete")}
-                </Button>
-              ) : null}
+              <Button size="sm" variant="danger-soft" icon="trash" onClick={() => setBulkDeleteRows(rows)}>
+                {t("common.delete")}
+              </Button>
             </>
           )}
           empty={<EmptyState icon="server" title={t("admin.servers.empty")} />}

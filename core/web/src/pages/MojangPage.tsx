@@ -310,7 +310,7 @@ export function ProxyPoolPage() {
           selectable={(row) => row.kind !== "direct"}
           selectionActions={(rows) => (
             <Button size="sm" variant="danger-soft" icon="close" onClick={() => setBulkDeleteRows(rows)}>
-              {t("admin.mojang.delete")}
+              {t("common.delete")}
             </Button>
           )}
           empty={<EmptyState icon="activity" title={t("admin.mojang.empty.proxies")} />}

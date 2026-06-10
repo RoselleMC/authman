@@ -83,6 +83,7 @@ type portalSettingsRequest struct {
 	TransferCookieKey  string `json:"transfer_cookie_key"`
 	DialogEnabled      bool   `json:"dialog_enabled"`
 	DialogFallbackChat bool   `json:"dialog_fallback_chat_enabled"`
+	FallbackServerID   string `json:"fallback_server_id"`
 }
 
 type adminRoleUpdateRequest struct {
@@ -1838,13 +1839,18 @@ func (s *Server) handleAdminDeleteDownstreamServer(w http.ResponseWriter, r *htt
 		return
 	}
 	id := strings.TrimSpace(r.PathValue("id"))
-	if id == "" || id == "default" {
-		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.delete_default", "default server cannot be deleted"))
+	if id == "" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.id_required", "server id is required"))
 		return
 	}
 	if err := s.store.DeleteDownstreamServer(r.Context(), id); err != nil {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "server.not_found", "server not found"))
 		return
+	}
+	settings := s.portalSettings(r.Context())
+	if strings.EqualFold(settings.FallbackServerID, id) {
+		settings.FallbackServerID = ""
+		_ = s.store.SetSystemSetting(r.Context(), "portal", portalSettingsMap(settings))
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, id, "server.delete", nil)
 	api.WriteJSON(w, http.StatusOK, map[string]any{"ok": true}, nil)
@@ -1855,12 +1861,8 @@ func (s *Server) handleAdminPortalSettings(w http.ResponseWriter, r *http.Reques
 		api.WriteError(w, err)
 		return
 	}
-	server, err := s.store.GetDownstreamServer(r.Context(), "default")
-	if err != nil {
-		api.WriteError(w, api.NewError(http.StatusInternalServerError, "portal_settings.not_found", "portal settings are not initialized"))
-		return
-	}
-	api.WriteJSON(w, http.StatusOK, portalSettingsData(server), nil)
+	settings := s.portalSettings(r.Context())
+	api.WriteJSON(w, http.StatusOK, portalSettingsData(settings, s.store.ListDownstreamServers(r.Context())), nil)
 }
 
 func (s *Server) handleAdminUpdatePortalSettings(w http.ResponseWriter, r *http.Request) {
@@ -1874,47 +1876,89 @@ func (s *Server) handleAdminUpdatePortalSettings(w http.ResponseWriter, r *http.
 		api.WriteError(w, err)
 		return
 	}
-	server, err := s.store.GetDownstreamServer(r.Context(), "default")
-	if err != nil {
-		server = store.DownstreamServer{
-			ID:                 "default",
-			Slug:               "default",
-			DisplayName:        "Default Server",
-			Status:             "active",
-			RegistrationOpen:   true,
-			PortalTheme:        map[string]any{},
-			PortalConfig:       map[string]any{},
-			ExtensionProviders: []string{"authman.identity"},
-		}
-	}
-	if server.PortalConfig == nil {
-		server.PortalConfig = map[string]any{}
-	}
 	cookieKey := strings.TrimSpace(req.TransferCookieKey)
 	if cookieKey == "" {
 		cookieKey = "authman:transfer_grant"
 	}
-	server.PortalConfig["transfer_cookie_key"] = cookieKey
-	server.PortalConfig["dialog_enabled"] = req.DialogEnabled
-	server.PortalConfig["dialog_fallback_chat_enabled"] = req.DialogFallbackChat
-	server, err = s.store.UpsertDownstreamServer(r.Context(), server)
-	if err != nil {
+	settings := portalSettings{
+		TransferCookieKey:  cookieKey,
+		DialogEnabled:      req.DialogEnabled,
+		DialogFallbackChat: req.DialogFallbackChat,
+		FallbackServerID:   normalizePortalFallbackServerID(req.FallbackServerID),
+	}
+	if settings.FallbackServerID != "" {
+		if _, err := s.store.GetDownstreamServer(r.Context(), settings.FallbackServerID); err != nil {
+			api.WriteError(w, api.NewError(http.StatusBadRequest, "portal_settings.fallback_not_found", "fallback server not found"))
+			return
+		}
+	}
+	if err := s.store.SetSystemSetting(r.Context(), "portal", portalSettingsMap(settings)); err != nil {
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "portal_settings.save_failed", err.Error()))
 		return
 	}
-	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, "portal-settings", "portal_settings.update", nil)
-	api.WriteJSON(w, http.StatusOK, portalSettingsData(server), nil)
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, "portal-settings", "portal_settings.update", portalSettingsMap(settings))
+	api.WriteJSON(w, http.StatusOK, portalSettingsData(settings, s.store.ListDownstreamServers(r.Context())), nil)
 }
 
-func portalSettingsData(server store.DownstreamServer) map[string]any {
-	cfg := server.PortalConfig
-	if cfg == nil {
-		cfg = map[string]any{}
+type portalSettings struct {
+	TransferCookieKey  string
+	DialogEnabled      bool
+	DialogFallbackChat bool
+	FallbackServerID   string
+}
+
+func (s *Server) portalSettings(ctx context.Context) portalSettings {
+	defaults := portalSettings{
+		TransferCookieKey:  "authman:transfer_grant",
+		DialogEnabled:      true,
+		DialogFallbackChat: true,
+		FallbackServerID:   "",
+	}
+	raw, err := s.store.GetSystemSetting(ctx, "portal")
+	if err == nil {
+		return portalSettings{
+			TransferCookieKey:  stringValue(raw["transfer_cookie_key"], defaults.TransferCookieKey),
+			DialogEnabled:      boolFromAnyServer(raw["dialog_enabled"], defaults.DialogEnabled),
+			DialogFallbackChat: boolFromAnyServer(raw["dialog_fallback_chat_enabled"], defaults.DialogFallbackChat),
+			FallbackServerID:   normalizePortalFallbackServerID(stringValue(raw["fallback_server_id"], defaults.FallbackServerID)),
+		}
+	}
+	return defaults
+}
+
+func normalizePortalFallbackServerID(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "disconnect") {
+		return ""
+	}
+	return value
+}
+
+func portalSettingsMap(settings portalSettings) map[string]any {
+	return map[string]any{
+		"transfer_cookie_key":          strings.TrimSpace(settings.TransferCookieKey),
+		"dialog_enabled":               settings.DialogEnabled,
+		"dialog_fallback_chat_enabled": settings.DialogFallbackChat,
+		"fallback_server_id":           strings.TrimSpace(settings.FallbackServerID),
+	}
+}
+
+func portalSettingsData(settings portalSettings, servers []store.DownstreamServer) map[string]any {
+	available := make([]map[string]any, 0, len(servers))
+	for _, server := range servers {
+		available = append(available, map[string]any{
+			"id":           server.ID,
+			"slug":         server.Slug,
+			"display_name": server.DisplayName,
+			"status":       server.Status,
+		})
 	}
 	return map[string]any{
-		"transfer_cookie_key":          strings.TrimSpace(stringFromAnyServer(cfg["transfer_cookie_key"])),
-		"dialog_enabled":               boolFromAnyServer(cfg["dialog_enabled"], true),
-		"dialog_fallback_chat_enabled": boolFromAnyServer(cfg["dialog_fallback_chat_enabled"], true),
+		"transfer_cookie_key":          strings.TrimSpace(settings.TransferCookieKey),
+		"dialog_enabled":               settings.DialogEnabled,
+		"dialog_fallback_chat_enabled": settings.DialogFallbackChat,
+		"fallback_server_id":           strings.TrimSpace(settings.FallbackServerID),
+		"available_servers":            available,
 	}
 }
 

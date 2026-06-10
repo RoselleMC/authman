@@ -838,7 +838,8 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 		serverID = n.ServerID
 	}
 	if serverID == "" {
-		serverID = "default"
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.id_required", "server id is required"))
+		return
 	}
 	server, err := s.store.GetDownstreamServer(r.Context(), serverID)
 	if err != nil {
@@ -1115,7 +1116,8 @@ func (s *Server) handleNodeUpsertExtensionData(w http.ResponseWriter, r *http.Re
 		serverID = n.ServerID
 	}
 	if serverID == "" {
-		serverID = "default"
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.id_required", "server id is required"))
+		return
 	}
 	visibility := req.Visibility
 	if visibility == "" {
@@ -1283,10 +1285,16 @@ func (s *Server) resolveDownstreamTarget(ctx context.Context, n node.Node, serve
 		}
 	}
 	if candidate == "" {
-		candidate = strings.TrimSpace(n.ServerID)
+		if !node.IsLimboPortal(n.Mode) {
+			candidate = strings.TrimSpace(n.ServerID)
+		}
 	}
 	if candidate == "" {
-		candidate = "default"
+		settings := s.portalSettings(ctx)
+		if settings.FallbackServerID == "" {
+			return store.DownstreamServer{}, store.DownstreamTarget{}, api.NewError(http.StatusNotFound, "portal.target_unmatched", "no downstream server matched the requested host")
+		}
+		candidate = settings.FallbackServerID
 	}
 	server, err := s.store.GetDownstreamServer(ctx, candidate)
 	if err != nil {
@@ -1463,9 +1471,6 @@ func bearerToken(r *http.Request) (string, bool) {
 
 func (s *Server) nodeData(ctx context.Context, n node.Node) map[string]any {
 	serverID := n.ServerID
-	if serverID == "" {
-		serverID = "default"
-	}
 	serverLabel := serverID
 	if server, err := s.store.GetDownstreamServer(ctx, serverID); err == nil {
 		serverLabel = server.DisplayName
@@ -1537,13 +1542,12 @@ func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]
 		}
 		return base
 	}
-	if server, err := s.store.GetDownstreamServer(ctx, "default"); err == nil {
-		if cookieKey := stringFromAnyServer(server.PortalConfig["transfer_cookie_key"]); cookieKey != "" {
-			base["transfer_cookie_key"] = cookieKey
-		}
-		base["dialog_enabled"] = boolFromAnyServer(server.PortalConfig["dialog_enabled"], true)
-		base["dialog_fallback_chat_enabled"] = boolFromAnyServer(server.PortalConfig["dialog_fallback_chat_enabled"], true)
+	settings := s.portalSettings(ctx)
+	if settings.TransferCookieKey != "" {
+		base["transfer_cookie_key"] = settings.TransferCookieKey
 	}
+	base["dialog_enabled"] = settings.DialogEnabled
+	base["dialog_fallback_chat_enabled"] = settings.DialogFallbackChat
 	return base
 }
 

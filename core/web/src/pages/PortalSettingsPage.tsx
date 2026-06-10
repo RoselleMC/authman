@@ -10,6 +10,7 @@ import {
   Input,
   PageHeader,
   PageShell,
+  Select,
   useI18n,
   useToast,
 } from "@authman/shared";
@@ -19,6 +20,8 @@ const EMPTY: PortalSettings = {
   transfer_cookie_key: "authman:transfer_grant",
   dialog_enabled: true,
   dialog_fallback_chat_enabled: true,
+  fallback_server_id: "",
+  available_servers: [],
 };
 
 export function PortalSettingsPage({ embedded = false }: { embedded?: boolean } = {}) {
@@ -83,6 +86,20 @@ export function PortalSettingsPage({ embedded = false }: { embedded?: boolean } 
                 placeholder="authman:transfer_grant"
                 mono
                 data-testid="portal-cookie-key"
+              />
+            </Field>
+            <Field label={t("admin.portal.field.fallbackServer")} hint={t("admin.portal.field.fallbackServer.hint")}>
+              <Select
+                value={form.fallback_server_id || "disconnect"}
+                onChange={(value) => patch("fallback_server_id", value === "disconnect" ? "" : value)}
+                options={[
+                  { value: "disconnect", label: t("admin.portal.fallback.disconnect") },
+                  ...(form.available_servers ?? []).map((server) => ({
+                    value: server.id,
+                    label: server.display_name || server.slug || server.id,
+                  })),
+                ]}
+                testId="portal-fallback-server"
               />
             </Field>
             <label className="toggle-row">

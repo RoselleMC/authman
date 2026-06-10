@@ -341,6 +341,7 @@ func (s *Server) routes() {
 	s.coreMux.HandleFunc("GET /api/admin/external-tokens/{id}", s.handleAdminExternalTokenDetail)
 	s.coreMux.HandleFunc("PUT /api/admin/external-tokens/{id}", s.handleAdminUpdateExternalToken)
 	s.coreMux.HandleFunc("DELETE /api/admin/external-tokens/{id}", s.handleAdminRevokeExternalToken)
+	s.coreMux.HandleFunc("DELETE /api/admin/external-tokens/{id}/record", s.handleAdminDeleteExternalTokenRecord)
 	s.coreMux.HandleFunc("GET /api/admin/extensions", s.handleAdminExtensions)
 	s.coreMux.HandleFunc("GET /api/admin/account", s.handleAdminAccount)
 	s.coreMux.HandleFunc("PUT /api/admin/account/profile", s.handleAdminAccountProfile)

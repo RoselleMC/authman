@@ -159,11 +159,11 @@ export function ProfilesPage() {
           onRowClick={(r) => navigate(`/profiles/${r.id}`)}
           selectionActions={(rows) => (
             <>
-              {rows.every((row) => row.status !== "locked") ? <Button size="sm" variant="secondary" icon="lock" loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, status: "locked" })}>{t("admin.player.lock")}</Button> : null}
-              {rows.every((row) => row.status === "locked") ? <Button size="sm" variant="secondary" icon="unlock" loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, status: "active" })}>{t("admin.player.unlock")}</Button> : null}
-              {rows.every((row) => !row.active_ban) ? <Button size="sm" variant="danger-soft" icon="alert" onClick={() => setBulkBanRows(rows)}>{t("admin.bans.banProfile")}</Button> : null}
-              {rows.every((row) => !!row.active_ban) ? <Button size="sm" variant="secondary" icon="unlock" loading={revokeMut.isPending} onClick={() => revokeMut.mutate(rows)}>{t("admin.bans.unban")}</Button> : null}
-              {rows.every((row) => row.status !== "archived") ? <Button size="sm" variant="secondary" icon="box" loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, status: "archived" })}>{t("admin.profiles.archive")}</Button> : null}
+              {rows.every((row) => row.status !== "locked") ? <Button size="sm" variant="secondary" icon="lock" loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, status: "locked" })}>{t("common.lock")}</Button> : null}
+              {rows.every((row) => row.status === "locked") ? <Button size="sm" variant="secondary" icon="unlock" loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, status: "active" })}>{t("common.unlock")}</Button> : null}
+              {rows.every((row) => !row.active_ban) ? <Button size="sm" variant="danger-soft" icon="alert" onClick={() => setBulkBanRows(rows)}>{t("common.ban")}</Button> : null}
+              {rows.every((row) => !!row.active_ban) ? <Button size="sm" variant="secondary" icon="unlock" loading={revokeMut.isPending} onClick={() => revokeMut.mutate(rows)}>{t("common.unban")}</Button> : null}
+              {rows.every((row) => row.status !== "archived") ? <Button size="sm" variant="secondary" icon="box" loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, status: "archived" })}>{t("common.archive")}</Button> : null}
             </>
           )}
           empty={<EmptyState icon="user" title={t("admin.profiles.empty")} />}

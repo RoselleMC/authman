@@ -221,6 +221,33 @@ func (s *Server) handleAdminRevokeExternalToken(w http.ResponseWriter, r *http.R
 	api.WriteJSON(w, http.StatusOK, externalTokenData(updated), nil)
 }
 
+func (s *Server) handleAdminDeleteExternalTokenRecord(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireAdminPermission(r, true, "external_api.delete")
+	if err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	existing, storeErr := s.store.GetExternalAPIToken(r.Context(), id)
+	if storeErr != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "external_api.token_not_found", "external API token not found"))
+		return
+	}
+	if existing.Status != store.ExternalAPITokenRevoked {
+		api.WriteError(w, api.NewError(http.StatusConflict, "external_api.token_not_revoked", "external API token must be revoked before it can be deleted"))
+		return
+	}
+	if deleteErr := s.store.DeleteExternalAPIToken(r.Context(), id); deleteErr != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "external_api.token_delete_failed", deleteErr.Error()))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, existing.ID, "external_api.token.delete", map[string]any{
+		"name":              existing.Name,
+		"token_fingerprint": existing.TokenFingerprint,
+	})
+	api.WriteJSON(w, http.StatusOK, externalTokenData(existing), nil)
+}
+
 func normalizeExternalTokenStatus(raw string, fallback store.ExternalAPITokenStatus) store.ExternalAPITokenStatus {
 	switch strings.TrimSpace(strings.ToLower(raw)) {
 	case string(store.ExternalAPITokenActive):

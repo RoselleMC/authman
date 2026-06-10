@@ -56,7 +56,7 @@ function toForm(n: SafeVelocityNode): FormState {
   const cfg = n.runtime_config ?? {};
   return {
     name: n.name,
-    server_id: text(cfg.server_id, n.server_id || "default"),
+    server_id: text(cfg.server_id, n.server_id || ""),
     heartbeat_interval_seconds: numberText(cfg.heartbeat_interval_seconds, 60),
     resolve_raw_offline_names: boolValue(cfg.resolve_raw_offline_names, true),
     transfer_cookie_key: text(cfg.transfer_cookie_key, "authman:transfer_grant"),
@@ -69,7 +69,7 @@ function toForm(n: SafeVelocityNode): FormState {
 function toRuntime(form: FormState): Record<string, unknown> {
   return {
     node_name: form.name.trim(),
-    server_id: form.server_id.trim() || "default",
+    server_id: form.server_id.trim(),
     heartbeat_interval_seconds: Number(form.heartbeat_interval_seconds) || 60,
     resolve_raw_offline_names: form.resolve_raw_offline_names,
     transfer_cookie_key: form.transfer_cookie_key.trim() || "authman:transfer_grant",

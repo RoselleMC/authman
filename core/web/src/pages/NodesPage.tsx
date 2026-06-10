@@ -353,7 +353,7 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
           selectable
           selectionActions={(selectedRows) => (
             <Button size="sm" variant="danger-soft" icon="close" onClick={() => setBulkDeleteRows(selectedRows)}>
-              {t("admin.nodes.delete")}
+              {t("common.delete")}
             </Button>
           )}
           empty={

@@ -87,8 +87,6 @@ func NewMemory() *Memory {
 		adminTrustedDevices: make(map[string]AdminTrustedDevice),
 		externalAPITokens:   make(map[string]ExternalAPIToken),
 	}
-	server := defaultDownstreamServer(time.Now().UTC())
-	m.downstreamServers[server.ID] = server
 	return m
 }
 

@@ -60,7 +60,8 @@ func (r *Registry) CreateKindForServer(ctx context.Context, name string, kind st
 		return Node{}, "", fmt.Errorf("node name is required")
 	}
 	kind = NormalizeKind(kind)
-	if strings.TrimSpace(serverID) == "" {
+	serverID = strings.TrimSpace(serverID)
+	if serverID == "" && kind == "downstream_velocity" {
 		serverID = "default"
 	}
 	token, err := auth.NewOpaqueToken(32)
@@ -150,8 +151,8 @@ func (r *Registry) Register(ctx context.Context, registration Registration, now 
 	if registration.Kind == "" {
 		kind = NormalizeKind(registration.Mode)
 	}
-	serverID := registration.ServerID
-	if serverID == "" {
+	serverID := strings.TrimSpace(registration.ServerID)
+	if serverID == "" && kind == "downstream_velocity" {
 		serverID = "default"
 	}
 	r.mu.Lock()

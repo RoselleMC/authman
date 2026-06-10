@@ -270,7 +270,7 @@ export function DownstreamServerDetailPage() {
             >
               {input.visible ? t("common.hide") : t("common.show")}
             </Button>
-            {server.id !== "default" ? <Button variant="danger-soft" icon="trash" block onClick={() => setDeleteOpen(true)}>{t("common.delete")}</Button> : null}
+            <Button variant="danger-soft" icon="trash" block onClick={() => setDeleteOpen(true)}>{t("common.delete")}</Button>
           </DetailActions>
         </DetailAside>
         <DetailBody>

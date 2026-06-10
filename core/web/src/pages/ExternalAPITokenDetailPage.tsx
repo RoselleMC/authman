@@ -21,7 +21,7 @@ import {
   useI18n,
   useToast,
 } from "@authman/shared";
-import { fetchExternalAPIToken, revokeExternalAPIToken, updateExternalAPIToken, type ExternalAPIToken } from "../api/admin";
+import { deleteExternalAPITokenRecord, fetchExternalAPIToken, revokeExternalAPIToken, updateExternalAPIToken, type ExternalAPIToken } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
 function ExternalTokenStatusBadge({ status }: { status: ExternalAPIToken["status"] }) {
@@ -45,7 +45,9 @@ export function ExternalAPITokenDetailPage() {
   const qc = useQueryClient();
   const { hasPermission } = useSession();
   const canWrite = hasPermission("external_api.write");
+  const canDelete = hasPermission("external_api.delete");
   const [revokeOpen, setRevokeOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const q = useQuery({
     queryKey: ["admin.externalToken", id],
     queryFn: () => fetchExternalAPIToken(id),
@@ -74,6 +76,17 @@ export function ExternalAPITokenDetailPage() {
     onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
   });
 
+  const deleteMut = useMutation({
+    mutationFn: () => deleteExternalAPITokenRecord(id),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.settings.externalApi.deleted") });
+      setDeleteOpen(false);
+      void qc.invalidateQueries({ queryKey: ["admin.externalTokens"] });
+      navigate("/settings/external-api");
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
+  });
+
   if (q.error) {
     return (
       <PageShell testId="external-api-token-detail-page">
@@ -94,6 +107,7 @@ export function ExternalAPITokenDetailPage() {
   const nextStatus: ExternalAPIToken["status"] = token.status === "active" ? "disabled" : "active";
   const canToggle = canWrite && token.status !== "revoked";
   const canRevoke = canWrite && token.status !== "revoked";
+  const canHardDelete = canDelete && token.status === "revoked";
 
   return (
     <PageShell testId="external-api-token-detail-page">
@@ -124,15 +138,28 @@ export function ExternalAPITokenDetailPage() {
             >
               {nextStatus === "active" ? t("common.enable") : t("common.disable")}
             </Button>
-            <Button
-              variant="danger-soft"
-              icon="trash"
-              block
-              disabled={!canRevoke}
-              onClick={() => setRevokeOpen(true)}
-            >
-              {t("admin.settings.externalApi.revoke")}
-            </Button>
+            {token.status === "revoked" ? (
+              <Button
+                variant="danger"
+                icon="trash"
+                block
+                disabled={!canHardDelete}
+                loading={deleteMut.isPending}
+                onClick={() => setDeleteOpen(true)}
+              >
+                {t("common.delete")}
+              </Button>
+            ) : (
+              <Button
+                variant="danger-soft"
+                icon="close"
+                block
+                disabled={!canRevoke}
+                onClick={() => setRevokeOpen(true)}
+              >
+                {t("common.revoke")}
+              </Button>
+            )}
           </DetailActions>
         </DetailAside>
         <DetailBody>
@@ -159,12 +186,22 @@ export function ExternalAPITokenDetailPage() {
       <ConfirmDialog
         open={revokeOpen}
         destructive
-        title={t("admin.settings.externalApi.revoke")}
+        title={t("common.revoke")}
         body={t("admin.settings.externalApi.revoke.desc").replace("{name}", token.name)}
-        confirmLabel={t("admin.settings.externalApi.revoke")}
+        confirmLabel={t("common.revoke")}
         loading={revokeMut.isPending}
         onCancel={() => setRevokeOpen(false)}
         onConfirm={() => revokeMut.mutate()}
+      />
+      <ConfirmDialog
+        open={deleteOpen}
+        destructive
+        title={t("common.delete")}
+        body={t("admin.settings.externalApi.delete.desc").replace("{name}", token.name)}
+        confirmLabel={t("common.delete")}
+        loading={deleteMut.isPending}
+        onCancel={() => setDeleteOpen(false)}
+        onConfirm={() => deleteMut.mutate()}
       />
     </PageShell>
   );

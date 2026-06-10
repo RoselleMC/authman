@@ -1514,7 +1514,7 @@ func (p *Postgres) CreateKindForServer(ctx context.Context, name string, kind st
 	}
 	kind = node.NormalizeKind(kind)
 	serverID = strings.TrimSpace(serverID)
-	if serverID == "" {
+	if serverID == "" && kind == "downstream_velocity" {
 		serverID = "default"
 	}
 	if kind == "downstream_velocity" {
@@ -1622,7 +1622,8 @@ func (p *Postgres) Register(ctx context.Context, registration node.Registration,
 	} else {
 		registration.Mode = node.NormalizeKind(registration.Mode)
 	}
-	if registration.ServerID == "" {
+	registration.ServerID = strings.TrimSpace(registration.ServerID)
+	if registration.ServerID == "" && registration.Mode == "downstream_velocity" {
 		registration.ServerID = "default"
 	}
 	var disabled bool
@@ -2158,7 +2159,7 @@ func (p *Postgres) UpsertDownstreamServer(ctx context.Context, server Downstream
 }
 
 func (p *Postgres) DeleteDownstreamServer(ctx context.Context, id string) error {
-	tag, err := p.pool.Exec(ctx, `DELETE FROM downstream_servers WHERE id = $1 AND id <> 'default'`, id)
+	tag, err := p.pool.Exec(ctx, `DELETE FROM downstream_servers WHERE id = $1`, id)
 	if err != nil {
 		return err
 	}
@@ -3850,7 +3851,7 @@ CREATE INDEX IF NOT EXISTS limbo_blueprints_updated_at_idx ON limbo_blueprints (
 
 CREATE TABLE IF NOT EXISTS velocity_nodes (
 	id text PRIMARY KEY,
-	server_id text NOT NULL DEFAULT 'default',
+	server_id text NOT NULL DEFAULT '',
 	mode text NOT NULL DEFAULT 'downstream_velocity',
 	name text NOT NULL,
 	token_hash text NOT NULL,
@@ -3861,10 +3862,12 @@ CREATE TABLE IF NOT EXISTS velocity_nodes (
 	last_heartbeat_at timestamptz
 );
 
-ALTER TABLE velocity_nodes ADD COLUMN IF NOT EXISTS server_id text NOT NULL DEFAULT 'default';
+ALTER TABLE velocity_nodes ADD COLUMN IF NOT EXISTS server_id text NOT NULL DEFAULT '';
 ALTER TABLE velocity_nodes ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'downstream_velocity';
 UPDATE velocity_nodes SET mode = 'limbo_portal' WHERE mode = 'portal';
 UPDATE velocity_nodes SET mode = 'downstream_velocity' WHERE mode = 'gate';
+ALTER TABLE velocity_nodes ALTER COLUMN server_id SET DEFAULT '';
+UPDATE velocity_nodes SET server_id = '' WHERE mode = 'limbo_portal' AND server_id = 'default';
 ALTER TABLE velocity_nodes ADD COLUMN IF NOT EXISTS instance_fingerprint text NOT NULL DEFAULT '';
 ALTER TABLE velocity_nodes ADD COLUMN IF NOT EXISTS plugin_version text NOT NULL DEFAULT '';
 ALTER TABLE velocity_nodes ADD COLUMN IF NOT EXISTS velocity_version text NOT NULL DEFAULT '';
@@ -3960,28 +3963,6 @@ CREATE TABLE IF NOT EXISTS downstream_servers (
 	created_at timestamptz NOT NULL DEFAULT now(),
 	updated_at timestamptz NOT NULL DEFAULT now()
 );
-
-INSERT INTO downstream_servers (
-	id,
-	slug,
-	display_name,
-	status,
-	registration_open,
-	portal_theme,
-	portal_config,
-	extension_providers
-)
-VALUES (
-	'default',
-	'default',
-	'Default Server',
-	'active',
-	true,
-	'{}'::jsonb,
-	'{"registration_strategy":"open","show_in_global":true,"host":"127.0.0.1","port":25565,"transfer_host":"127.0.0.1","transfer_port":25565,"motd":"Default Server","grant_required":true,"gate_enabled":true,"grant_ttl_seconds":45,"allowed_portal_sources":[],"portal_hosts":[]}'::jsonb,
-	ARRAY['authman.identity']::text[]
-)
-ON CONFLICT (id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS transfer_grants (
 	id text PRIMARY KEY,

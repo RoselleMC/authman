@@ -40,6 +40,7 @@ import {
   createAdminRole,
   createAdminUser,
   createExternalAPIToken,
+  deleteExternalAPITokenRecord,
   deleteAdminPasskey,
   deleteAdminUserPasskey,
   deleteAdminRole,
@@ -1239,7 +1240,9 @@ function ExternalAPITokensPanel() {
   const [name, setName] = useState("");
   const [tokenOnce, setTokenOnce] = useState<string | null>(null);
   const [bulkRevokeRows, setBulkRevokeRows] = useState<ExternalAPIToken[]>([]);
+  const [bulkDeleteRows, setBulkDeleteRows] = useState<ExternalAPIToken[]>([]);
   const canWrite = hasPermission("external_api.write");
+  const canDelete = hasPermission("external_api.delete");
   const filters = useMemo<ListFilters>(() => {
     const next: ListFilters = { page: list.state.page, page_size: list.state.pageSize };
     const q = (list.state.filters.name ?? "").trim();
@@ -1278,6 +1281,16 @@ function ExternalAPITokensPanel() {
     onSuccess: () => {
       toast.push({ tone: "success", title: t("admin.settings.externalApi.revoked") });
       setBulkRevokeRows([]);
+      void qc.invalidateQueries({ queryKey: ["admin.externalTokens"] });
+    },
+  });
+  const bulkDeleteMut = useMutation({
+    mutationFn: async (rows: ExternalAPIToken[]) => {
+      await Promise.all(rows.filter((row) => row.status === "revoked").map((row) => deleteExternalAPITokenRecord(row.id)));
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.settings.externalApi.deleted") });
+      setBulkDeleteRows([]);
       void qc.invalidateQueries({ queryKey: ["admin.externalTokens"] });
     },
   });
@@ -1375,32 +1388,48 @@ function ExternalAPITokensPanel() {
             rowKey={(row) => row.id}
             state={list.state}
             onStateChange={list.setState}
-            selectable={(row) => row.status !== "revoked" && canWrite}
+            selectable={(row) => (row.status === "revoked" ? canDelete : canWrite)}
             onRowClick={(row) => navigate(`/settings/external-api/${encodeURIComponent(row.id)}`)}
             selectionActions={(selectedRows) => {
               const actionable = selectedRows.filter((row) => row.status !== "revoked");
-              if (!canWrite || actionable.length === 0) return null;
+              const deletable = selectedRows.filter((row) => row.status === "revoked");
+              if ((!canWrite || actionable.length === 0) && (!canDelete || deletable.length === 0)) return null;
               const nextStatus: ExternalAPIToken["status"] = actionable.every((row) => row.status === "active") ? "disabled" : "active";
               return (
                 <>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    icon={nextStatus === "active" ? "check" : "close"}
-                    loading={bulkStatusMut.isPending}
-                    onClick={() => bulkStatusMut.mutate({ rows: actionable, status: nextStatus })}
-                  >
-                    {nextStatus === "active" ? t("admin.settings.externalApi.bulk.enable") : t("admin.settings.externalApi.bulk.disable")}
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    icon="trash"
-                    disabled={bulkRevokeMut.isPending}
-                    onClick={() => setBulkRevokeRows(actionable)}
-                  >
-                    {t("admin.settings.externalApi.bulk.revoke")}
-                  </Button>
+                  {canWrite && actionable.length > 0 ? (
+                    <>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={nextStatus === "active" ? "check" : "close"}
+                        loading={bulkStatusMut.isPending}
+                        onClick={() => bulkStatusMut.mutate({ rows: actionable, status: nextStatus })}
+                      >
+                        {nextStatus === "active" ? t("common.enable") : t("common.disable")}
+                      </Button>
+                      <Button
+                        variant="danger-soft"
+                        size="sm"
+                        icon="close"
+                        disabled={bulkRevokeMut.isPending}
+                        onClick={() => setBulkRevokeRows(actionable)}
+                      >
+                        {t("common.revoke")}
+                      </Button>
+                    </>
+                  ) : null}
+                  {canDelete && deletable.length > 0 ? (
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      icon="trash"
+                      disabled={bulkDeleteMut.isPending}
+                      onClick={() => setBulkDeleteRows(deletable)}
+                    >
+                      {t("common.delete")}
+                    </Button>
+                  ) : null}
                 </>
               );
             }}
@@ -1453,12 +1482,22 @@ function ExternalAPITokensPanel() {
       <ConfirmDialog
         open={bulkRevokeRows.length > 0}
         destructive
-        title={t("admin.settings.externalApi.bulk.revoke")}
+        title={t("common.revoke")}
         body={t("admin.settings.externalApi.bulk.revoke.desc").replace("{count}", String(bulkRevokeRows.length))}
-        confirmLabel={t("admin.settings.externalApi.revoke")}
+        confirmLabel={t("common.revoke")}
         loading={bulkRevokeMut.isPending}
         onCancel={() => setBulkRevokeRows([])}
         onConfirm={() => bulkRevokeMut.mutate(bulkRevokeRows)}
+      />
+      <ConfirmDialog
+        open={bulkDeleteRows.length > 0}
+        destructive
+        title={t("common.delete")}
+        body={t("admin.settings.externalApi.bulk.delete.desc").replace("{count}", String(bulkDeleteRows.length))}
+        confirmLabel={t("common.delete")}
+        loading={bulkDeleteMut.isPending}
+        onCancel={() => setBulkDeleteRows([])}
+        onConfirm={() => bulkDeleteMut.mutate(bulkDeleteRows)}
       />
     </SettingsStack>
   );

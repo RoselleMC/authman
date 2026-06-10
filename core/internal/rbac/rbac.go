@@ -48,6 +48,7 @@ var Catalog = []Permission{
 	{Key: "security.write", Group: "security", Label: "Manage security settings", Description: "Modify email, SMTP, and multi-factor authentication settings."},
 	{Key: "external_api.read", Group: "settings", Label: "View external API tokens", Description: "Read player-panel API token metadata and usage statistics."},
 	{Key: "external_api.write", Group: "settings", Label: "Manage external API tokens", Description: "Create, disable, and revoke player-panel API tokens."},
+	{Key: "external_api.delete", Group: "settings", Label: "Delete external API tokens", Description: "Permanently delete revoked player-panel API token records."},
 }
 
 var catalogKeys = func() map[string]struct{} {
@@ -95,6 +96,7 @@ func DefaultRoles() []Role {
 				"security.read",
 				"external_api.read",
 				"external_api.write",
+				"external_api.delete",
 			},
 			CreatedAt: now,
 			UpdatedAt: now,

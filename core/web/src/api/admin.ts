@@ -468,6 +468,13 @@ export interface PortalSettings {
   transfer_cookie_key: string;
   dialog_enabled: boolean;
   dialog_fallback_chat_enabled: boolean;
+  fallback_server_id: string;
+  available_servers?: Array<{
+    id: string;
+    slug: string;
+    display_name: string;
+    status: DownstreamServer["status"];
+  }>;
 }
 
 export async function fetchPortalSettings(): Promise<PortalSettings> {
@@ -640,6 +647,11 @@ export async function updateExternalAPIToken(id: string, input: { name?: string;
 
 export async function revokeExternalAPIToken(id: string): Promise<ExternalAPIToken> {
   const res = await apiFetch<ExternalAPIToken>(`/admin/external-tokens/${encodeURIComponent(id)}`, { method: "DELETE" });
+  return res.data;
+}
+
+export async function deleteExternalAPITokenRecord(id: string): Promise<ExternalAPIToken> {
+  const res = await apiFetch<ExternalAPIToken>(`/admin/external-tokens/${encodeURIComponent(id)}/record`, { method: "DELETE" });
   return res.data;
 }
 

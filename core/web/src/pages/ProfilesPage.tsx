@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AdvancedList,
@@ -19,6 +19,7 @@ import {
   useI18n,
   useListState,
   useToast,
+  navigateWithBack,
   type ListColumn,
 } from "@authman/shared";
 import { createProfile, fetchProfiles, type IdentityListFilters, type ProfileRow } from "../api/admin";
@@ -32,6 +33,7 @@ export function ProfilesPage() {
   const { t } = useI18n();
   const { user } = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
   const toast = useToast();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -61,7 +63,7 @@ export function ProfilesPage() {
       setOpen(false);
       setProtocolName("");
       void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
-      navigate(`/profiles/${profile.id}`);
+      navigateWithBack(navigate, `/profiles/${profile.id}`, location);
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -156,7 +158,7 @@ export function ProfilesPage() {
           state={list.state}
           onStateChange={list.setState}
           pageSizeOptions={PAGE_SIZE_OPTIONS}
-          onRowClick={(r) => navigate(`/profiles/${r.id}`)}
+          onRowClick={(r) => navigateWithBack(navigate, `/profiles/${r.id}`, location)}
           selectionActions={(rows) => (
             <>
               {rows.every((row) => row.status === "active") ? <Button size="sm" variant="secondary" icon="lock" loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, status: "locked" })}>{t("common.lock")}</Button> : null}

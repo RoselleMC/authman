@@ -16,6 +16,23 @@ data class DownstreamConsumeResult(
     val allowed: Boolean,
     val resolved: ResolvedPlayer,
     val presenceId: String,
+    val target: DownstreamTarget,
+    val privilegedPassport: Boolean,
+)
+
+data class DownstreamTarget(
+    val serverId: String,
+    val resourcePackEnabled: Boolean,
+    val resourcePackRequired: Boolean,
+    val resourcePacks: List<DownstreamResourcePack>,
+)
+
+data class DownstreamResourcePack(
+    val id: String,
+    val name: String,
+    val url: String,
+    val hash: String,
+    val prompt: String,
 )
 
 data class NodeAction(

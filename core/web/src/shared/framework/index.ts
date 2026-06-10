@@ -20,6 +20,9 @@ export * from "./SecretReveal";
 export * from "./ConfigGrid";
 export * from "./PlaceholderCard";
 export * from "./State";
+export * from "./navigation";
+
+export * from "./SimpleTextList";
 
 export * from "./PContent";
 export * from "./PAuth";

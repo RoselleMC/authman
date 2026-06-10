@@ -7,6 +7,7 @@ import com.velocitypowered.api.event.connection.PostLoginEvent
 import com.velocitypowered.api.event.player.CookieReceiveEvent
 import com.velocitypowered.api.event.player.GameProfileRequestEvent
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent
+import com.velocitypowered.api.event.player.PlayerResourcePackStatusEvent
 import com.velocitypowered.api.event.player.ServerConnectedEvent
 import com.velocitypowered.api.event.player.ServerPreConnectEvent
 import com.velocitypowered.api.proxy.Player
@@ -15,9 +16,13 @@ import mc.roselle.authman.AuthmanPlugin
 import mc.roselle.authman.api.AuthmanClient
 import mc.roselle.authman.config.AuthmanConfig
 import mc.roselle.authman.message.AuthmanMessages
+import mc.roselle.authman.model.DownstreamResourcePack
+import mc.roselle.authman.model.DownstreamTarget
 import net.kyori.adventure.key.Key
+import net.kyori.adventure.text.Component
 import org.slf4j.Logger
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -34,6 +39,8 @@ class DownstreamAuthListener(
     private val allowed: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
     private val validating: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
     private val presences: MutableMap<UUID, String> = ConcurrentHashMap()
+    private val resourcePackTargets: MutableMap<UUID, DownstreamTarget> = ConcurrentHashMap()
+    private val privilegedPlayers: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
 
     @Subscribe
     fun onGameProfileRequest(event: GameProfileRequestEvent) {
@@ -122,9 +129,16 @@ class DownstreamAuthListener(
         if (result.presenceId.isNotBlank()) {
             presences[player.uniqueId] = result.presenceId
         }
+        resourcePackTargets[player.uniqueId] = result.target
+        if (result.privilegedPassport) {
+            privilegedPlayers.add(player.uniqueId)
+        } else {
+            privilegedPlayers.remove(player.uniqueId)
+        }
         validating.remove(player.uniqueId)
         pending.remove(player.uniqueId)
         logger.info("Accepted Authman downstream grant for {} / {}", result.resolved.protocolName, result.resolved.uuid)
+        scheduleResourcePacks(player, result.target, 500)
         scheduleInitialConnect(player, 250)
     }
 
@@ -171,6 +185,8 @@ class DownstreamAuthListener(
         pending.remove(event.player.uniqueId)
         allowed.remove(event.player.uniqueId)
         validating.remove(event.player.uniqueId)
+        resourcePackTargets.remove(event.player.uniqueId)
+        privilegedPlayers.remove(event.player.uniqueId)
         val presenceId = presences.remove(event.player.uniqueId)
         if (!presenceId.isNullOrBlank()) {
             server.scheduler.buildTask(plugin, Runnable {
@@ -189,6 +205,27 @@ class DownstreamAuthListener(
         val holding = config.downstreamHoldingServer
         if (holding.isNotBlank() && allowed.contains(event.player.uniqueId) && event.server.serverInfo.name == holding) {
             scheduleInitialConnect(event.player, 250)
+        }
+        val target = resourcePackTargets[event.player.uniqueId] ?: return
+        scheduleResourcePacks(event.player, target, 500)
+    }
+
+    @Subscribe
+    fun onResourcePackStatus(event: PlayerResourcePackStatusEvent) {
+        if (!privilegedPlayers.contains(event.player.uniqueId)) {
+            return
+        }
+        if (event.status == PlayerResourcePackStatusEvent.Status.DECLINED ||
+            event.status == PlayerResourcePackStatusEvent.Status.FAILED_DOWNLOAD ||
+            event.status == PlayerResourcePackStatusEvent.Status.INVALID_URL ||
+            event.status == PlayerResourcePackStatusEvent.Status.FAILED_RELOAD
+        ) {
+            logger.info(
+                "Authman privileged passport {} rejected or failed optional resource pack {} with {}",
+                event.player.username,
+                event.packId,
+                event.status,
+            )
         }
     }
 
@@ -219,6 +256,70 @@ class DownstreamAuthListener(
             if (!result.isSuccessful) {
                 logger.warn("Authman downstream player {} was not connected to {}: {}", player.username, targetName, result.status)
             }
+        }
+    }
+
+    private fun scheduleResourcePacks(player: Player, target: DownstreamTarget, delayMillis: Long) {
+        if (!target.resourcePackEnabled || target.resourcePacks.isEmpty()) {
+            return
+        }
+        server.scheduler.buildTask(plugin, Runnable {
+            sendResourcePacks(player, target)
+        }).delay(delayMillis.coerceAtLeast(0), TimeUnit.MILLISECONDS).schedule()
+    }
+
+    private fun sendResourcePacks(player: Player, target: DownstreamTarget) {
+        if (!player.isActive || !allowed.contains(player.uniqueId)) {
+            return
+        }
+        for (pack in target.resourcePacks) {
+            sendResourcePack(player, pack, target.resourcePackRequired)
+        }
+    }
+
+    private fun sendResourcePack(player: Player, pack: DownstreamResourcePack, required: Boolean) {
+        val url = pack.url.trim()
+        if (url.isBlank()) {
+            return
+        }
+        try {
+            val builder = server.createResourcePackBuilder(url)
+                .setId(stableResourcePackId(pack))
+                .setShouldForce(required && !privilegedPlayers.contains(player.uniqueId))
+            val hash = parseSha1(pack.hash)
+            if (hash != null) {
+                builder.setHash(hash)
+            }
+            val prompt = pack.prompt.trim()
+            if (prompt.isNotEmpty()) {
+                builder.setPrompt(Component.text(prompt))
+            }
+            player.sendResourcePackOffer(builder.build())
+            logger.info("Sent Authman resource pack {} to {}", pack.id, player.username)
+        } catch (ex: Exception) {
+            logger.warn("Failed to send Authman resource pack {} to {}", pack.id, player.username, ex)
+        }
+    }
+
+    private fun stableResourcePackId(pack: DownstreamResourcePack): UUID {
+        return try {
+            UUID.fromString(pack.id)
+        } catch (_: IllegalArgumentException) {
+            UUID.nameUUIDFromBytes("authman:resource-pack:${pack.id}:${pack.url}".toByteArray(StandardCharsets.UTF_8))
+        }
+    }
+
+    private fun parseSha1(value: String): ByteArray? {
+        val clean = value.trim().lowercase(Locale.ROOT)
+        if (clean.isEmpty()) {
+            return null
+        }
+        if (clean.length != 40 || clean.any { it !in '0'..'9' && it !in 'a'..'f' }) {
+            logger.warn("Ignoring invalid Authman resource pack SHA-1: {}", value)
+            return null
+        }
+        return ByteArray(20) { index ->
+            clean.substring(index * 2, index * 2 + 2).toInt(16).toByte()
         }
     }
 

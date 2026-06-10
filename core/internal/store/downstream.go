@@ -13,6 +13,7 @@ const (
 	DefaultTransferGrantTTLSeconds = 45
 	DefaultDownstreamPort          = 25565
 	DefaultMOTDMaxLines            = 2
+	DefaultMinDownstreamProtocol   = 771
 )
 
 var miniMessageLineBreakRE = regexp.MustCompile(`(?i)\r\n|\r|\n|<\s*(?:newline|br)\s*/?>`)
@@ -44,6 +45,11 @@ type DownstreamTarget struct {
 	AllowedPortalSources []string
 	RegistrationOpen     bool
 	ExtensionProviders   []string
+	MinProtocolVersion   int
+	MaxProtocolVersion   int
+	ResourcePackEnabled  bool
+	ResourcePackRequired bool
+	ResourcePacks        []map[string]any
 }
 
 func normalizeDownstreamServer(server DownstreamServer) DownstreamServer {
@@ -110,6 +116,21 @@ func normalizeDownstreamServer(server DownstreamServer) DownstreamServer {
 	if _, ok := server.PortalConfig["limbo_blueprint_id"]; !ok {
 		server.PortalConfig["limbo_blueprint_id"] = ""
 	}
+	if _, ok := server.PortalConfig["min_protocol_version"]; !ok {
+		server.PortalConfig["min_protocol_version"] = DefaultMinDownstreamProtocol
+	}
+	if _, ok := server.PortalConfig["max_protocol_version"]; !ok {
+		server.PortalConfig["max_protocol_version"] = 0
+	}
+	if _, ok := server.PortalConfig["resource_pack_enabled"]; !ok {
+		server.PortalConfig["resource_pack_enabled"] = false
+	}
+	if _, ok := server.PortalConfig["resource_pack_required"]; !ok {
+		server.PortalConfig["resource_pack_required"] = false
+	}
+	if _, ok := server.PortalConfig["resource_packs"]; !ok {
+		server.PortalConfig["resource_packs"] = []map[string]any{}
+	}
 	if server.ExtensionProviders == nil {
 		server.ExtensionProviders = []string{}
 	}
@@ -163,6 +184,11 @@ func DownstreamTargetFromServer(server DownstreamServer) DownstreamTarget {
 		AllowedPortalSources: stringSliceFromAny(server.PortalConfig["allowed_portal_sources"]),
 		RegistrationOpen:     server.RegistrationOpen,
 		ExtensionProviders:   append([]string(nil), server.ExtensionProviders...),
+		MinProtocolVersion:   intFromAny(server.PortalConfig["min_protocol_version"], DefaultMinDownstreamProtocol),
+		MaxProtocolVersion:   intFromAny(server.PortalConfig["max_protocol_version"], 0),
+		ResourcePackEnabled:  boolFromAny(server.PortalConfig["resource_pack_enabled"], false),
+		ResourcePackRequired: boolFromAny(server.PortalConfig["resource_pack_required"], false),
+		ResourcePacks:        mapSliceFromAny(server.PortalConfig["resource_packs"]),
 	}
 }
 
@@ -184,6 +210,11 @@ func DownstreamTargetData(target DownstreamTarget) map[string]any {
 		"allowed_portal_sources": target.AllowedPortalSources,
 		"registration_open":      target.RegistrationOpen,
 		"extension_providers":    target.ExtensionProviders,
+		"min_protocol_version":   target.MinProtocolVersion,
+		"max_protocol_version":   target.MaxProtocolVersion,
+		"resource_pack_enabled":  target.ResourcePackEnabled,
+		"resource_pack_required": target.ResourcePackRequired,
+		"resource_packs":         target.ResourcePacks,
 	}
 }
 
@@ -284,6 +315,27 @@ func stringSliceFromAny(value any) []string {
 		return out
 	default:
 		return []string{}
+	}
+}
+
+func mapSliceFromAny(value any) []map[string]any {
+	switch typed := value.(type) {
+	case []map[string]any:
+		out := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, cloneMap(item))
+		}
+		return out
+	case []any:
+		out := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			if m, ok := item.(map[string]any); ok {
+				out = append(out, cloneMap(m))
+			}
+		}
+		return out
+	default:
+		return []map[string]any{}
 	}
 }
 

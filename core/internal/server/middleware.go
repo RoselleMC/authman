@@ -11,6 +11,71 @@ import (
 )
 
 type requestIDKey struct{}
+type basePathKey struct{}
+
+func basePathFromContext(ctx context.Context) string {
+	basePath, _ := ctx.Value(basePathKey{}).(string)
+	return basePath
+}
+
+func basePathMiddleware(configuredBasePath string, next http.Handler) http.Handler {
+	configuredBasePath = normalizeRequestBasePath(configuredBasePath)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headerBasePath := forwardedPrefixBasePath(r)
+		activeBasePath := configuredBasePath
+		if headerBasePath != "" {
+			activeBasePath = headerBasePath
+		}
+		if activeBasePath == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == activeBasePath {
+			rr := r.Clone(context.WithValue(r.Context(), basePathKey{}, activeBasePath))
+			rr.URL.Path = "/"
+			rr.URL.RawPath = ""
+			next.ServeHTTP(w, rr)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, activeBasePath+"/") {
+			rr := r.Clone(context.WithValue(r.Context(), basePathKey{}, activeBasePath))
+			rr.URL.Path = strings.TrimPrefix(r.URL.Path, activeBasePath)
+			if rr.URL.Path == "" {
+				rr.URL.Path = "/"
+			}
+			rr.URL.RawPath = ""
+			next.ServeHTTP(w, rr)
+			return
+		}
+		rr := r.Clone(context.WithValue(r.Context(), basePathKey{}, activeBasePath))
+		next.ServeHTTP(w, rr)
+	})
+}
+
+func forwardedPrefixBasePath(r *http.Request) string {
+	if value := r.Header.Get("X-Forwarded-Prefix"); value != "" {
+		if comma := strings.IndexByte(value, ','); comma >= 0 {
+			value = value[:comma]
+		}
+		return normalizeRequestBasePath(value)
+	}
+	return ""
+}
+
+func normalizeRequestBasePath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "/" {
+		return ""
+	}
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
+	}
+	value = strings.TrimRight(value, "/")
+	if value == "/" {
+		return ""
+	}
+	return value
+}
 
 func requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

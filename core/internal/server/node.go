@@ -380,19 +380,21 @@ type limboLoginPolicyRequest struct {
 }
 
 type resolvePortalTargetRequest struct {
-	ServerID      string `json:"server_id"`
-	Slug          string `json:"slug"`
-	RequestedHost string `json:"requested_host"`
+	ServerID        string `json:"server_id"`
+	Slug            string `json:"slug"`
+	RequestedHost   string `json:"requested_host"`
+	ProtocolVersion int    `json:"protocol_version"`
 }
 
 type createTransferGrantRequest struct {
-	PlayerID      string `json:"player_id"`
-	Username      string `json:"username"`
-	ServerID      string `json:"server_id"`
-	Slug          string `json:"slug"`
-	RequestedHost string `json:"requested_host"`
-	Source        string `json:"source"`
-	TTLSeconds    int    `json:"ttl_seconds"`
+	PlayerID        string `json:"player_id"`
+	Username        string `json:"username"`
+	ServerID        string `json:"server_id"`
+	Slug            string `json:"slug"`
+	RequestedHost   string `json:"requested_host"`
+	Source          string `json:"source"`
+	TTLSeconds      int    `json:"ttl_seconds"`
+	ProtocolVersion int    `json:"protocol_version"`
 }
 
 type consumeTransferGrantRequest struct {
@@ -858,11 +860,22 @@ func (s *Server) handleNodeResolvePortalTarget(w http.ResponseWriter, r *http.Re
 		api.WriteError(w, apiErr)
 		return
 	}
+	if apiErr := validateDownstreamProtocol(target, req.ProtocolVersion); apiErr != nil {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "portal.target.resolve_failure", map[string]any{
+			"slug":             server.Slug,
+			"requested_host":   req.RequestedHost,
+			"protocol_version": req.ProtocolVersion,
+			"reason":           apiErr.Message,
+		})
+		api.WriteError(w, apiErr)
+		return
+	}
 	s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "portal.target.resolve", map[string]any{
 		"slug":           server.Slug,
 		"requested_host": req.RequestedHost,
 		"target_host":    target.TransferHost,
 		"target_port":    target.TransferPort,
+		"protocol":       req.ProtocolVersion,
 	})
 	data := map[string]any{
 		"server": downstreamServerData(server),
@@ -899,12 +912,21 @@ func (s *Server) handleNodeCreateTransferGrant(w http.ResponseWriter, r *http.Re
 		api.WriteError(w, apiErr)
 		return
 	}
-	if target.Status != "active" {
+	if target.Status != "active" && target.Status != "hidden" {
 		s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "transfer_grant.reject", map[string]any{
 			"reason": "server_unavailable",
 			"status": target.Status,
 		})
 		api.WriteError(w, api.NewError(http.StatusForbidden, "server.unavailable", "downstream server is not active"))
+		return
+	}
+	if apiErr := validateDownstreamProtocol(target, req.ProtocolVersion); apiErr != nil {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "transfer_grant.reject", map[string]any{
+			"reason":           apiErr.Message,
+			"server_id":        server.ID,
+			"protocol_version": req.ProtocolVersion,
+		})
+		api.WriteError(w, apiErr)
 		return
 	}
 	player, apiErr := s.playerFromTransferGrantRequest(r.Context(), req)
@@ -936,6 +958,22 @@ func (s *Server) handleNodeCreateTransferGrant(w http.ResponseWriter, r *http.Re
 		}))
 		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.banned", ban.Reason))
 		return
+	}
+	if target.Status == "hidden" {
+		passport, err := s.store.GetPassportForProfile(r.Context(), player.ID)
+		if err != nil || !s.store.DownstreamServerHasPrivilegedPassport(r.Context(), server.ID, passport.ID) {
+			passportID := ""
+			if err == nil {
+				passportID = passport.ID
+			}
+			s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
+				"reason":      "server_hidden",
+				"server_id":   server.ID,
+				"passport_id": passportID,
+			}))
+			api.WriteError(w, api.NewError(http.StatusForbidden, "server.privileged_required", "privileged passport is required for this server"))
+			return
+		}
 	}
 	ttlSeconds := target.GrantTTLSeconds
 	if req.TTLSeconds > 0 && req.TTLSeconds < ttlSeconds {
@@ -973,6 +1011,7 @@ func (s *Server) handleNodeCreateTransferGrant(w http.ResponseWriter, r *http.Re
 		"server_id":     server.ID,
 		"target_host":   target.TransferHost,
 		"target_port":   target.TransferPort,
+		"protocol":      req.ProtocolVersion,
 		"protocol_name": player.ProtocolName,
 		"expires_at":    grant.ExpiresAt,
 	})
@@ -982,6 +1021,23 @@ func (s *Server) handleNodeCreateTransferGrant(w http.ResponseWriter, r *http.Re
 		"target": store.DownstreamTargetData(target),
 		"player": playerData(player),
 	}, nil)
+}
+
+func validateDownstreamProtocol(target store.DownstreamTarget, protocolVersion int) *api.Error {
+	if protocolVersion <= 0 {
+		return nil
+	}
+	minProtocol := target.MinProtocolVersion
+	if minProtocol <= 0 {
+		minProtocol = store.DefaultMinDownstreamProtocol
+	}
+	if protocolVersion < minProtocol {
+		return api.NewError(http.StatusForbidden, "server.protocol_too_old", "client protocol is older than this downstream server allows")
+	}
+	if target.MaxProtocolVersion > 0 && protocolVersion > target.MaxProtocolVersion {
+		return api.NewError(http.StatusForbidden, "server.protocol_too_new", "client protocol is newer than this downstream server allows")
+	}
+	return nil
 }
 
 func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.Request) {
@@ -1011,6 +1067,10 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 	target := store.DownstreamTargetFromServer(server)
 	if !target.GateEnabled {
 		api.WriteError(w, api.NewError(http.StatusForbidden, "gate.disabled", "gate validation is disabled for this downstream server"))
+		return
+	}
+	if target.Status == "disabled" {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "server.unavailable", "downstream server is disabled"))
 		return
 	}
 	tokenHash := strings.TrimSpace(req.TokenHash)
@@ -1063,6 +1123,16 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 		api.WriteError(w, api.NewError(http.StatusForbidden, "passport.not_bound", "profile is not bound to a passport"))
 		return
 	}
+	privilegedPassport := s.store.DownstreamServerHasPrivilegedPassport(r.Context(), server.ID, passport.ID)
+	if target.Status == "hidden" && !privilegedPassport {
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
+			"reason":      "server_hidden",
+			"server_id":   server.ID,
+			"passport_id": passport.ID,
+		}))
+		api.WriteError(w, api.NewError(http.StatusForbidden, "server.privileged_required", "privileged passport is required for this server"))
+		return
+	}
 	now := time.Now()
 	presence, err := s.store.UpsertPresence(r.Context(), store.PlayerPresence{
 		PassportID:   passport.ID,
@@ -1099,6 +1169,10 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 		"player":   playerData(player),
 		"presence": presenceRows([]store.PlayerPresence{presence})[0],
 		"target":   store.DownstreamTargetData(target),
+		"passport": map[string]any{
+			"id":         passport.ID,
+			"privileged": privilegedPassport,
+		},
 	}, nil)
 }
 

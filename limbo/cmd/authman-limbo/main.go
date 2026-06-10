@@ -262,7 +262,7 @@ func (p *portal) verifySession(ctx context.Context, proof limbgo.SessionProof) (
 
 func (p *portal) resolveJoin(ctx context.Context, player limbgo.Player) (limbgo.JoinTarget, error) {
 	host := requestedHost(player.RequestedHost, p.cfg.DefaultHost)
-	resolved, err := p.client.resolveTarget(ctx, host)
+	resolved, err := p.client.resolveTarget(ctx, host, 0)
 	if err != nil {
 		p.logger.Warn("using fallback limbo world; target resolve failed", "host", host, "err", err)
 		return limbgo.JoinTarget{World: p.fallbackWorld, Spawn: p.fallbackSpawn}, nil
@@ -313,7 +313,7 @@ func (p *portal) worldForBlueprint(ctx context.Context, blueprint limboBlueprint
 
 func (p *portal) status(ctx context.Context, req limbgo.StatusRequest) (limbgo.Status, error) {
 	host := requestedHost(req.Address, p.cfg.DefaultHost)
-	resolved, err := p.client.resolveTarget(ctx, host)
+	resolved, err := p.client.resolveTarget(ctx, host, 0)
 	var description component.Component = &component.Text{Content: "Authman login portal"}
 	if err == nil && resolved.Target.MOTD != "" {
 		motd := limitMiniMessageLines(resolved.Target.MOTD, 2)
@@ -499,12 +499,12 @@ func (p *portal) registerAndTransfer(ctx context.Context, session limbgo.PlayerS
 func (p *portal) transferResolved(ctx context.Context, session limbgo.PlayerSession, resolved resolveResponse) error {
 	player := session.Player()
 	host := requestedHost(player.RequestedHost, p.cfg.DefaultHost)
-	resolvedTarget, err := p.client.resolveTarget(ctx, host)
+	resolvedTarget, err := p.client.resolveTarget(ctx, host, player.ProtocolVersion)
 	if err != nil {
 		return session.SendMessage(ctx, &component.Text{Content: "Authman could not resolve a downstream target."})
 	}
 	target := resolvedTarget.Target
-	grant, err := p.client.createGrant(ctx, resolved.Player.ProtocolName, target.ServerID, host, p.sourceID())
+	grant, err := p.client.createGrant(ctx, resolved.Player.ProtocolName, target.ServerID, host, p.sourceID(), player.ProtocolVersion)
 	if err != nil {
 		return session.SendMessage(ctx, &component.Text{Content: "Authman could not create a transfer grant."})
 	}
@@ -932,8 +932,11 @@ func (c *coreClient) registerOffline(ctx context.Context, username string, passw
 	})
 }
 
-func (c *coreClient) resolveTarget(ctx context.Context, requestedHost string) (targetResponse, error) {
-	res, err := postJSON[targetResponse](ctx, c, "/api/node/limbo/targets/resolve", map[string]any{"requested_host": requestedHost})
+func (c *coreClient) resolveTarget(ctx context.Context, requestedHost string, protocolVersion int) (targetResponse, error) {
+	res, err := postJSON[targetResponse](ctx, c, "/api/node/limbo/targets/resolve", map[string]any{
+		"requested_host":   requestedHost,
+		"protocol_version": protocolVersion,
+	})
 	return res, err
 }
 
@@ -941,12 +944,13 @@ func (c *coreClient) fetchBlueprint(ctx context.Context, id string) (limboBluepr
 	return getJSON[limboBlueprintData](ctx, c, "/api/node/limbo/blueprints/"+url.PathEscape(strings.TrimSpace(id)))
 }
 
-func (c *coreClient) createGrant(ctx context.Context, username, serverID, requestedHost, source string) (grantResponse, error) {
+func (c *coreClient) createGrant(ctx context.Context, username, serverID, requestedHost, source string, protocolVersion int) (grantResponse, error) {
 	return postJSON[grantResponse](ctx, c, "/api/node/limbo/transfer-grants", map[string]any{
-		"username":       username,
-		"server_id":      serverID,
-		"requested_host": requestedHost,
-		"source":         source,
+		"username":         username,
+		"server_id":        serverID,
+		"requested_host":   requestedHost,
+		"source":           source,
+		"protocol_version": protocolVersion,
 	})
 }
 
@@ -969,7 +973,7 @@ func postJSON[T any](ctx context.Context, c *coreClient, path string, body map[s
 	if err != nil {
 		return out, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.cfg.CoreURL, "/")+path, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, coreURL(c.cfg.CoreURL, path), bytes.NewReader(payload))
 	if err != nil {
 		return out, err
 	}
@@ -1002,7 +1006,7 @@ func postJSON[T any](ctx context.Context, c *coreClient, path string, body map[s
 
 func getJSON[T any](ctx context.Context, c *coreClient, path string) (T, error) {
 	var out T
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.cfg.CoreURL, "/")+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, coreURL(c.cfg.CoreURL, path), nil)
 	if err != nil {
 		return out, err
 	}
@@ -1030,6 +1034,10 @@ func getJSON[T any](ctx context.Context, c *coreClient, path string) (T, error) 
 		return out, coreAPIError{Status: resp.StatusCode}
 	}
 	return envelope.Data, nil
+}
+
+func coreURL(base string, path string) string {
+	return strings.TrimRight(strings.TrimSpace(base), "/") + "/" + strings.TrimLeft(path, "/")
 }
 
 func instanceFingerprint(cfg config) string {

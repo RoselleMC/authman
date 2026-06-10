@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Button,
@@ -21,6 +21,7 @@ import {
   formatAbsTime,
   useI18n,
   useToast,
+  useBackTarget,
 } from "@authman/shared";
 import { bindProfile, createProfileBan, deleteProfileSkin, extendBan, fetchPassports, fetchProfile, kickPresence, revokeBan, unbindProfile, updateProfileSkinSource, updateProfileStatus, uploadProfileSkin, type PlayerBan, type ProfileRow } from "../api/admin";
 import { AuditEventList } from "../components/AuditEventList";
@@ -38,6 +39,8 @@ export function ProfileDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const { t } = useI18n();
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = useBackTarget("/profiles");
   const toast = useToast();
   const qc = useQueryClient();
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -191,9 +194,9 @@ export function ProfileDetailPage() {
   return (
     <div className="page">
       <div className="detail-toolbar">
-        <button type="button" className="back-link" onClick={() => navigate("/profiles")}>
+        <button type="button" className="back-link" onClick={() => navigate(backTarget)}>
           <Icon name="arrowLeft" size={15} />
-          {t("admin.profiles.heading")}
+          {t("common.back")}
         </button>
         <Tabs
           value={tab}
@@ -253,7 +256,7 @@ export function ProfileDetailPage() {
               <Card title={t("admin.profiles.passport")}>
                 {p.passport ? (
                   <DefList>
-                    <DefRow k="UUID"><Link to={`/passports/${p.passport.id}`}>{p.passport.id}</Link></DefRow>
+                    <DefRow k="UUID"><Link to={`/passports/${p.passport.id}`} state={{ backTo: `${location.pathname}${location.search}${location.hash}` }}>{p.passport.id}</Link></DefRow>
                     <DefRow k={t("common.username")}>{p.passport.username}</DefRow>
                     <DefRow k={t("admin.players.col.type")}><TypeBadge kind={p.passport.kind} /></DefRow>
                     <DefRow k={t("admin.players.col.status")}><StatusBadge status={p.passport.status} /></DefRow>

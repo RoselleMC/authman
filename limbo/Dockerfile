@@ -1,4 +1,5 @@
 FROM golang:1.25-alpine AS build
+ENV GOPROXY=https://goproxy.cn,direct
 WORKDIR /src
 COPY limbgo ./limbgo
 COPY authman ./authman

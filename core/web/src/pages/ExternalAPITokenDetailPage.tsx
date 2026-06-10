@@ -18,6 +18,7 @@ import {
   ErrorState,
   PageShell,
   formatAbsTime,
+  useBackTarget,
   useI18n,
   useToast,
 } from "@authman/shared";
@@ -40,6 +41,7 @@ function formatMaybeTime(value: string | null | undefined) {
 export function ExternalAPITokenDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const backTarget = useBackTarget("/settings/external-api");
   const { t, tError } = useI18n();
   const toast = useToast();
   const qc = useQueryClient();
@@ -90,7 +92,7 @@ export function ExternalAPITokenDetailPage() {
   if (q.error) {
     return (
       <PageShell testId="external-api-token-detail-page">
-        <BackLink onClick={() => navigate("/settings/external-api")}>{t("admin.settings.externalApi")}</BackLink>
+        <BackLink onClick={() => navigate(backTarget)}>{t("admin.settings.externalApi")}</BackLink>
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
       </PageShell>
     );
@@ -98,7 +100,7 @@ export function ExternalAPITokenDetailPage() {
   if (!token) {
     return (
       <PageShell testId="external-api-token-detail-page">
-        <BackLink onClick={() => navigate("/settings/external-api")}>{t("admin.settings.externalApi")}</BackLink>
+        <BackLink onClick={() => navigate(backTarget)}>{t("admin.settings.externalApi")}</BackLink>
         <Card title={t("common.loading")}><span /></Card>
       </PageShell>
     );
@@ -112,7 +114,7 @@ export function ExternalAPITokenDetailPage() {
   return (
     <PageShell testId="external-api-token-detail-page">
       <div className="detail-toolbar">
-        <BackLink onClick={() => navigate("/settings/external-api")}>{t("admin.settings.externalApi")}</BackLink>
+        <BackLink onClick={() => navigate(backTarget)}>{t("admin.settings.externalApi")}</BackLink>
       </div>
       <DetailGrid>
         <DetailAside>

@@ -7,6 +7,8 @@ import com.velocitypowered.api.util.GameProfile
 import mc.roselle.authman.config.AuthmanConfig
 import mc.roselle.authman.config.RuntimeConfig
 import mc.roselle.authman.model.DownstreamConsumeResult
+import mc.roselle.authman.model.DownstreamResourcePack
+import mc.roselle.authman.model.DownstreamTarget
 import mc.roselle.authman.model.NodeAction
 import mc.roselle.authman.model.ResolvedPlayer
 import java.net.http.HttpClient
@@ -55,8 +57,11 @@ class AuthmanClient(
         if (!response.ok) {
             throw AuthmanHttpException("consume transfer grant", response)
         }
-        val player = response.jsonData().obj("player")
-        val presence = response.jsonData().obj("presence")
+        val data = response.jsonData()
+        val player = data.obj("player")
+        val presence = data.obj("presence")
+        val target = data.obj("target")
+        val passport = data.obj("passport")
         return DownstreamConsumeResult(
             allowed = true,
             resolved = ResolvedPlayer(
@@ -68,6 +73,8 @@ class AuthmanClient(
                 properties = parseProperties(player["properties"]),
             ),
             presenceId = presence.stringOr("id", ""),
+            target = parseDownstreamTarget(target),
+            privilegedPassport = passport.boolean("privileged"),
         )
     }
 
@@ -139,7 +146,7 @@ class AuthmanClient(
 
     private fun post(path: String, body: Map<String, Any?>, includeInstanceHeader: Boolean = true): AuthmanResponse {
         val builder = HttpRequest.newBuilder()
-            .uri(config.apiBase.resolve(path))
+            .uri(resolveCorePath(path))
             .timeout(config.requestTimeout)
             .header("Authorization", "Bearer ${config.nodeToken}")
             .header("Content-Type", "application/json")
@@ -150,6 +157,9 @@ class AuthmanClient(
         val response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString())
         return AuthmanResponse(response.statusCode(), response.body(), gson)
     }
+
+    private fun resolveCorePath(path: String) =
+        java.net.URI.create("${config.apiBase.toString().trimEnd('/')}/${path.trimStart('/')}")
 
     private fun createBan(path: String, username: String, durationSeconds: Long, reason: String) {
         val response = post(
@@ -207,6 +217,35 @@ private fun parseNodeActions(element: JsonElement?): List<NodeAction> {
             uuid = obj.stringOr("uuid", ""),
             protocolName = obj.stringOr("protocol_name", ""),
             reason = obj.stringOr("reason", ""),
+        )
+    }
+}
+
+private fun parseDownstreamTarget(obj: JsonObject): DownstreamTarget {
+    return DownstreamTarget(
+        serverId = obj.stringOr("server_id", ""),
+        resourcePackEnabled = obj.boolean("resource_pack_enabled"),
+        resourcePackRequired = obj.boolean("resource_pack_required"),
+        resourcePacks = parseResourcePacks(obj["resource_packs"]),
+    )
+}
+
+private fun parseResourcePacks(element: JsonElement?): List<DownstreamResourcePack> {
+    if (element == null || element.isJsonNull || !element.isJsonArray) {
+        return emptyList()
+    }
+    return element.asJsonArray.mapNotNull { item ->
+        val obj = item.asJsonObject ?: return@mapNotNull null
+        val url = obj.stringOr("url", "").trim()
+        if (url.isBlank()) {
+            return@mapNotNull null
+        }
+        DownstreamResourcePack(
+            id = obj.stringOr("id", url).trim().ifBlank { url },
+            name = obj.stringOr("name", "").trim(),
+            url = url,
+            hash = obj.stringOr("hash", "").trim(),
+            prompt = obj.stringOr("prompt", "").trim(),
         )
     }
 }

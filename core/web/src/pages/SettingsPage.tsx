@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as QRCode from "qrcode";
-import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   AdvancedList,
   Alert,
@@ -30,6 +30,7 @@ import {
   coerceSystemSummary,
   cx,
   formatAbsTime,
+  navigateWithBack,
   useI18n,
   useListState,
   useToast,
@@ -46,6 +47,7 @@ import {
   deleteAdminRole,
   disableAdminUserTOTP,
   disableAdminTOTP,
+  fetchBrandingSettings,
   fetchAdminAccount,
   fetchAdminPermissions,
   fetchAdminRoles,
@@ -62,12 +64,14 @@ import {
   updateAdminAccountPreferences,
   updateAdminUser,
   updateAdminRole,
+  updateBrandingSettings,
   updateExternalAPIToken,
   updateIPGeoSettings,
   updateMojangSettings,
   type AdminAccountSecurity,
   type AdminPermission,
   type AdminRole,
+  type BrandingSettings,
   type ExternalAPIToken,
   type IPGeoSettings,
   type ListFilters,
@@ -1234,6 +1238,7 @@ function ExternalAPITokensPanel() {
   const toast = useToast();
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const location = useLocation();
   const { hasPermission, user } = useSession();
   const list = useListState({ urlPrefix: "extApi", urlSync: false, defaults: { pageSize: 10 }, storageScope: user?.id });
   const [createOpen, setCreateOpen] = useState(false);
@@ -1389,7 +1394,7 @@ function ExternalAPITokensPanel() {
             state={list.state}
             onStateChange={list.setState}
             selectable={(row) => (row.status === "revoked" ? canDelete : canWrite)}
-            onRowClick={(row) => navigate(`/settings/external-api/${encodeURIComponent(row.id)}`)}
+            onRowClick={(row) => navigateWithBack(navigate, `/settings/external-api/${encodeURIComponent(row.id)}`, location)}
             selectionActions={(selectedRows) => {
               const actionable = selectedRows.filter((row) => row.status !== "revoked");
               const deletable = selectedRows.filter((row) => row.status === "revoked");
@@ -1648,17 +1653,60 @@ function RouteSelection({ routes, selected, onChange }: { routes: RouteChoice[];
 
 function SystemPanel() {
   const sysQ = useQuery({ queryKey: ["admin.system"], queryFn: fetchSystemSummary });
+  const brandQ = useQuery({ queryKey: ["settings.branding"], queryFn: fetchBrandingSettings });
   const { t } = useI18n();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [brand, setBrand] = useState<BrandingSettings | null>(null);
+
+  useEffect(() => {
+    if (brandQ.data) setBrand(brandQ.data);
+  }, [brandQ.data]);
+
+  const saveBrand = useMutation({
+    mutationFn: () => updateBrandingSettings(brand!),
+    onSuccess: (next) => {
+      setBrand(next);
+      toast.push({ tone: "success", title: t("common.saved") });
+      void qc.invalidateQueries({ queryKey: ["settings.branding"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+
   return (
-    <Card title={t("admin.settings.system")}>
-      {sysQ.error ? (
-        <ErrorState error={sysQ.error} onRetry={() => sysQ.refetch()} />
-      ) : sysQ.isLoading || !sysQ.data ? (
-        <LoadingState />
-      ) : (
-        <SystemSummaryGrid raw={sysQ.data} />
-      )}
-    </Card>
+    <SettingsStack>
+      <Card
+        title={t("admin.settings.branding")}
+        actions={<Button variant="primary" icon="check" loading={saveBrand.isPending} disabled={!brand} onClick={() => saveBrand.mutate()}>{t("common.save")}</Button>}
+      >
+        {brandQ.error ? (
+          <ErrorState error={brandQ.error} onRetry={() => brandQ.refetch()} />
+        ) : brandQ.isLoading || !brand ? (
+          <LoadingState />
+        ) : (
+          <div className="settings-form-grid">
+            <Field label={t("admin.settings.branding.productName")} hint={t("admin.settings.branding.productName.hint")}>
+              <Input value={brand.product_name} onChange={(e) => setBrand({ ...brand, product_name: e.target.value })} />
+            </Field>
+            <Field label={t("admin.settings.branding.coreLabel")} hint={t("admin.settings.branding.coreLabel.hint")}>
+              <Input value={brand.core_label} onChange={(e) => setBrand({ ...brand, core_label: e.target.value })} />
+            </Field>
+            <Field label={t("admin.settings.branding.titleSuffix")} hint={t("admin.settings.branding.titleSuffix.hint")}>
+              <Input value={brand.title_suffix} onChange={(e) => setBrand({ ...brand, title_suffix: e.target.value })} />
+            </Field>
+          </div>
+        )}
+      </Card>
+      <Card title={t("admin.settings.system")}>
+        {sysQ.error ? (
+          <ErrorState error={sysQ.error} onRetry={() => sysQ.refetch()} />
+        ) : sysQ.isLoading || !sysQ.data ? (
+          <LoadingState />
+        ) : (
+          <SystemSummaryGrid raw={sysQ.data} />
+        )}
+      </Card>
+    </SettingsStack>
   );
 }
 

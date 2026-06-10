@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"html"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -27,8 +28,10 @@ func (s *Server) handleCoreWeb(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCoreWebConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	basePath := requestBasePath(r, s.cfg.HTTPBasePath)
 	cfg := map[string]string{
-		"apiBase":       "/api",
+		"apiBase":       joinURLPath(basePath, "/api"),
+		"basePath":      basePath,
 		"appKind":       "admin",
 		"defaultLocale": s.cfg.DefaultLocale,
 	}
@@ -36,6 +39,33 @@ func (s *Server) handleCoreWebConfig(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("window.__AUTHMAN_RUNTIME_CONFIG__ = "))
 	_, _ = w.Write(raw)
 	_, _ = w.Write([]byte(";\n"))
+}
+
+func requestBasePath(r *http.Request, fallback string) string {
+	if basePath := basePathFromContext(r.Context()); basePath != "" {
+		return basePath
+	}
+	if basePath := forwardedPrefixBasePath(r); basePath != "" {
+		return basePath
+	}
+	return normalizeRequestBasePath(fallback)
+}
+
+func joinURLPath(basePath string, path string) string {
+	basePath = normalizeRequestBasePath(basePath)
+	if path == "" || path == "/" {
+		if basePath == "" {
+			return "/"
+		}
+		return basePath
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	if basePath == "" {
+		return path
+	}
+	return basePath + path
 }
 
 func (s *Server) hasCoreWeb() bool {
@@ -58,10 +88,34 @@ func (s *Server) serveCoreWeb(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if info, err := os.Stat(target); err == nil && !info.IsDir() {
+		if filepath.Base(target) == "index.html" {
+			s.serveCoreWebIndex(w, r, target)
+			return
+		}
 		http.ServeFile(w, r, target)
 		return
 	}
-	http.ServeFile(w, r, filepath.Join(root, "index.html"))
+	s.serveCoreWebIndex(w, r, filepath.Join(root, "index.html"))
+}
+
+func (s *Server) serveCoreWebIndex(w http.ResponseWriter, r *http.Request, indexPath string) {
+	body, err := os.ReadFile(indexPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	basePath := requestBasePath(r, s.cfg.HTTPBasePath)
+	baseHref := "/"
+	if basePath != "" {
+		baseHref = basePath + "/"
+	}
+	baseTag := []byte(`<base href="` + html.EscapeString(baseHref) + `" />`)
+	if !strings.Contains(string(body), "<base ") {
+		body = []byte(strings.Replace(string(body), "<head>", "<head>\n    "+string(baseTag), 1))
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(body)
 }
 
 func acceptsHTML(r *http.Request) bool {

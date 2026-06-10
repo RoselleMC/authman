@@ -82,7 +82,7 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, name string, value
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    value,
-		Path:     "/",
+		Path:     sessionCookiePath(r),
 		HttpOnly: true,
 		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
@@ -94,11 +94,19 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request, name string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    "",
-		Path:     "/",
+		Path:     sessionCookiePath(r),
 		HttpOnly: true,
 		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),
 	})
+}
+
+func sessionCookiePath(r *http.Request) string {
+	basePath := requestBasePath(r, "")
+	if basePath == "" {
+		return "/"
+	}
+	return basePath
 }

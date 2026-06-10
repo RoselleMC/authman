@@ -24,6 +24,7 @@ import {
   coerceVelocityNode,
   formatRelativeTime,
   useI18n,
+  useBackTarget,
   useToast,
   type SafeVelocityNode,
 } from "@authman/shared";
@@ -105,6 +106,8 @@ export function NodeDetailPage() {
   const node = useMemo(() => (q.data ? coerceVelocityNode(q.data) : null), [q.data]);
   const initial = useMemo(() => (node ? toForm(node) : null), [node]);
   const [form, setForm] = useState<FormState | null>(null);
+  const backPath = node?.kind === "limbo_portal" ? "/login-portals" : "/nodes";
+  const backTarget = useBackTarget(backPath);
 
   useEffect(() => {
     if (initial) setForm(initial);
@@ -139,7 +142,6 @@ export function NodeDetailPage() {
 
   const dirty = !formEquals(form, initial);
   const cfg = node.runtime_config ?? {};
-  const backPath = node.kind === "limbo_portal" ? "/login-portals" : "/nodes";
   const backLabel = node.kind === "limbo_portal" ? t("admin.loginPortals.heading") : t("admin.nodes.heading");
 
   function patch<K extends keyof FormState>(key: K, value: FormState[K]) {
@@ -149,7 +151,7 @@ export function NodeDetailPage() {
   return (
     <PageShell>
       <div className="detail-toolbar">
-        <BackLink onClick={() => navigate(backPath)} testId="back-to-nodes">
+        <BackLink onClick={() => navigate(backTarget)} testId="back-to-nodes">
           {backLabel}
         </BackLink>
       </div>

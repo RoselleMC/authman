@@ -33,7 +33,7 @@ ReactDOM.createRoot(rootEl).render(
       <I18nProvider defaultLocale={cfg.defaultLocale}>
         <ThemeProvider>
           <ToastProvider>
-            <BrowserRouter>
+            <BrowserRouter basename={cfg.basePath || undefined}>
               <SessionProvider>
                 <App />
               </SessionProvider>

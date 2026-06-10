@@ -40,6 +40,7 @@ const PATHS: Record<string, string> = {
   arrowRight: "M4 10h11 M11 6l4 4-4 4",
   arrowLeft: "M16 10H5 M9 6l-4 4 4 4",
   external: "M8 5H5v10h10v-3 M11.5 4.5H16v4.5 M16 4.5l-6 6",
+  download: "M10 3.5v8 M6.5 8.5L10 12l3.5-3.5 M5 16.5h10",
   dot: "M10 12a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z",
   fingerprint: "M6 9a4 4 0 0 1 8 0v1 M8 9a2 2 0 0 1 4 0v1.5a6 6 0 0 1-.5 2.5 M6 11a8 8 0 0 0 1 4 M10 9v2.5a4 4 0 0 0 1 2.8 M4.5 7a7 7 0 0 1 11 0",
   key: "M11.5 5.5a3 3 0 1 1-2.3 4.9L4.5 15v1.5H7l.5-1.5h1.5l.5-1.5h1.2",

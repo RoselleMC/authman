@@ -192,11 +192,11 @@ func (s *Server) reloadIPGeoSettings(ctx context.Context) {
 }
 
 func (s *Server) Handler() http.Handler {
-	return requestIDMiddleware(loggingMiddleware(s.logger, corsMiddleware(s.cfg.CORSAllowedOrigins, s.coreMux)))
+	return requestIDMiddleware(loggingMiddleware(s.logger, corsMiddleware(s.cfg.CORSAllowedOrigins, basePathMiddleware(s.cfg.HTTPBasePath, s.coreMux))))
 }
 
 func (s *Server) ExternalHandler() http.Handler {
-	return requestIDMiddleware(loggingMiddleware(s.logger, corsMiddleware(s.cfg.CORSAllowedOrigins, s.externalMux)))
+	return requestIDMiddleware(loggingMiddleware(s.logger, corsMiddleware(s.cfg.CORSAllowedOrigins, basePathMiddleware(s.cfg.HTTPBasePath, s.externalMux))))
 }
 
 func (s *Server) routes() {
@@ -318,6 +318,9 @@ func (s *Server) routes() {
 	s.coreMux.HandleFunc("PUT /api/admin/downstream-servers/{id}", s.handleAdminUpdateDownstreamServer)
 	s.coreMux.HandleFunc("POST /api/admin/downstream-servers/{id}/icon", s.handleAdminUploadDownstreamServerIcon)
 	s.coreMux.HandleFunc("DELETE /api/admin/downstream-servers/{id}/icon", s.handleAdminDeleteDownstreamServerIcon)
+	s.coreMux.HandleFunc("GET /api/admin/downstream-servers/{id}/privileged-passports", s.handleAdminListDownstreamServerPrivilegedPassports)
+	s.coreMux.HandleFunc("POST /api/admin/downstream-servers/{id}/privileged-passports", s.handleAdminAddDownstreamServerPrivilegedPassport)
+	s.coreMux.HandleFunc("DELETE /api/admin/downstream-servers/{id}/privileged-passports/{passportID}", s.handleAdminRemoveDownstreamServerPrivilegedPassport)
 	s.coreMux.HandleFunc("DELETE /api/admin/downstream-servers/{id}", s.handleAdminDeleteDownstreamServer)
 	s.coreMux.HandleFunc("GET /api/admin/limbo-blueprints", s.handleAdminLimboBlueprints)
 	s.coreMux.HandleFunc("POST /api/admin/limbo-blueprints/upload", s.handleAdminUploadLimboBlueprint)
@@ -337,6 +340,8 @@ func (s *Server) routes() {
 	s.coreMux.HandleFunc("PUT /api/admin/settings/mojang", s.handleAdminUpdateMojangSettings)
 	s.coreMux.HandleFunc("GET /api/admin/settings/ip-geo", s.handleAdminIPGeoSettings)
 	s.coreMux.HandleFunc("PUT /api/admin/settings/ip-geo", s.handleAdminUpdateIPGeoSettings)
+	s.coreMux.HandleFunc("GET /api/admin/settings/branding", s.handleAdminBrandingSettings)
+	s.coreMux.HandleFunc("PUT /api/admin/settings/branding", s.handleAdminUpdateBrandingSettings)
 	s.coreMux.HandleFunc("GET /api/admin/external-tokens", s.handleAdminExternalTokens)
 	s.coreMux.HandleFunc("POST /api/admin/external-tokens", s.handleAdminCreateExternalToken)
 	s.coreMux.HandleFunc("GET /api/admin/external-tokens/{id}", s.handleAdminExternalTokenDetail)

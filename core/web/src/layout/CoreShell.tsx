@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   AccountMenu,
@@ -10,6 +11,7 @@ import {
   useI18n,
   useToast,
 } from "@authman/shared";
+import { fetchBrandingSettings } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
 const NAV: Array<{ to: string; key: string; icon: string; permission?: string }> = [
@@ -43,8 +45,16 @@ export function CoreShell() {
   const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
+  const brandingQ = useQuery({ queryKey: ["settings.branding"], queryFn: fetchBrandingSettings });
+  const brandName = brandingQ.data?.product_name || t("app.admin.title").replace(/\s+Core$/, "") || "Authman";
+  const coreLabel = brandingQ.data?.core_label || t("brand.adminSub");
+  const titleSuffix = brandingQ.data?.title_suffix || t("app.admin.title");
   const items = NAV.filter((n) => !n.permission || hasPermission(n.permission));
   const title = titleFor(location.pathname, t);
+
+  useEffect(() => {
+    document.title = title === titleSuffix ? titleSuffix : `${title} · ${titleSuffix}`;
+  }, [title, titleSuffix]);
 
   async function handleLogout() {
     try {
@@ -59,7 +69,7 @@ export function CoreShell() {
     <div className={cx("admin-shell", collapsed && "is-collapsed")}>
       <aside className="sidebar" data-testid="admin-sidebar">
         <div className="sidebar-brand">
-          {collapsed ? <BrandMark markOnly /> : <BrandMark sub={t("brand.adminSub")} />}
+          {collapsed ? <BrandMark markOnly name={brandName} /> : <BrandMark name={brandName} sub={coreLabel} />}
         </div>
         <nav className="sidebar-nav">
           {items.map((item) => (

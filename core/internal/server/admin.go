@@ -79,9 +79,19 @@ type downstreamServerRequest struct {
 	ExtensionProviders []string       `json:"extension_providers"`
 }
 
+type downstreamServerPrivilegedPassportRequest struct {
+	PassportID string `json:"passport_id"`
+}
+
 type portalSettingsRequest struct {
 	TransferCookieKey string `json:"transfer_cookie_key"`
 	FallbackServerID  string `json:"fallback_server_id"`
+}
+
+type brandingSettingsRequest struct {
+	ProductName string `json:"product_name"`
+	CoreLabel   string `json:"core_label"`
+	TitleSuffix string `json:"title_suffix"`
 }
 
 type adminRoleUpdateRequest struct {
@@ -1230,6 +1240,34 @@ func (s *Server) handleAdminUpdateIPGeoSettings(w http.ResponseWriter, r *http.R
 	api.WriteJSON(w, http.StatusOK, ipGeoSettingsData(settings, s.allMojangRoutes(r.Context())), nil)
 }
 
+func (s *Server) handleAdminBrandingSettings(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireAdmin(r, false); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, brandingSettingsData(s.brandingSettings(r.Context())), nil)
+}
+
+func (s *Server) handleAdminUpdateBrandingSettings(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	var req brandingSettingsRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	settings := normalizeBrandingSettings(req)
+	if err := s.store.SetSystemSetting(r.Context(), "branding", brandingSettingsMap(settings)); err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "settings.save_failed", "failed to save branding settings"))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, "branding", "settings.branding.update", brandingSettingsMap(settings))
+	api.WriteJSON(w, http.StatusOK, brandingSettingsData(settings), nil)
+}
+
 func (s *Server) mojangCacheSnapshot() map[string]int {
 	if s.mojangVerifier == nil {
 		return map[string]int{"fresh": 0, "stale": 0, "expired": 0}
@@ -1366,6 +1404,12 @@ type ipGeoSettings struct {
 	Provider              string
 }
 
+type brandingSettings struct {
+	ProductName string
+	CoreLabel   string
+	TitleSuffix string
+}
+
 func (s *Server) mojangRuntimeSettings(ctx context.Context) mojangRuntimeSettings {
 	defaults := normalizeMojangSettings(mojangRuntimeSettingsRequest{
 		LoadBalanceStrategy:    "weighted_round_robin",
@@ -1409,6 +1453,26 @@ func (s *Server) ipGeoSettings(ctx context.Context) ipGeoSettings {
 		CacheTTLSeconds:       intValue(raw["cache_ttl_seconds"], defaults.CacheTTLSeconds),
 		RequestTimeoutSeconds: intValue(raw["request_timeout_seconds"], defaults.RequestTimeoutSeconds),
 		Provider:              stringValue(raw["provider"], defaults.Provider),
+	})
+}
+
+func (s *Server) brandingSettings(ctx context.Context) brandingSettings {
+	defaults := normalizeBrandingSettings(brandingSettingsRequest{
+		ProductName: "Authman",
+		CoreLabel:   "Core",
+		TitleSuffix: "Authman Core",
+	})
+	raw, err := s.store.GetSystemSetting(ctx, "branding")
+	if errors.Is(err, store.ErrNotFound) {
+		return defaults
+	}
+	if err != nil {
+		return defaults
+	}
+	return normalizeBrandingSettings(brandingSettingsRequest{
+		ProductName: stringValue(raw["product_name"], defaults.ProductName),
+		CoreLabel:   stringValue(raw["core_label"], defaults.CoreLabel),
+		TitleSuffix: stringValue(raw["title_suffix"], defaults.TitleSuffix),
 	})
 }
 
@@ -1464,6 +1528,24 @@ func normalizeIPGeoSettings(req ipGeoSettingsRequest) ipGeoSettings {
 	return settings
 }
 
+func normalizeBrandingSettings(req brandingSettingsRequest) brandingSettings {
+	settings := brandingSettings{
+		ProductName: strings.TrimSpace(req.ProductName),
+		CoreLabel:   strings.TrimSpace(req.CoreLabel),
+		TitleSuffix: strings.TrimSpace(req.TitleSuffix),
+	}
+	if settings.ProductName == "" {
+		settings.ProductName = "Authman"
+	}
+	if settings.CoreLabel == "" {
+		settings.CoreLabel = "Core"
+	}
+	if settings.TitleSuffix == "" {
+		settings.TitleSuffix = settings.ProductName + " " + settings.CoreLabel
+	}
+	return settings
+}
+
 func mojangSettingsData(settings mojangRuntimeSettings, routes []mojang.Route) map[string]any {
 	return map[string]any{
 		"enabled_route_ids":        settings.EnabledRouteIDs,
@@ -1503,6 +1585,18 @@ func ipGeoSettingsMap(settings ipGeoSettings) map[string]any {
 		"cache_ttl_seconds":       settings.CacheTTLSeconds,
 		"request_timeout_seconds": settings.RequestTimeoutSeconds,
 		"provider":                settings.Provider,
+	}
+}
+
+func brandingSettingsData(settings brandingSettings) map[string]any {
+	return brandingSettingsMap(settings)
+}
+
+func brandingSettingsMap(settings brandingSettings) map[string]any {
+	return map[string]any{
+		"product_name": strings.TrimSpace(settings.ProductName),
+		"core_label":   strings.TrimSpace(settings.CoreLabel),
+		"title_suffix": strings.TrimSpace(settings.TitleSuffix),
 	}
 }
 
@@ -1828,6 +1922,98 @@ func (s *Server) handleAdminDeleteDownstreamServerIcon(w http.ResponseWriter, r 
 		"slug": server.Slug,
 	})
 	api.WriteJSON(w, http.StatusOK, downstreamServerData(server), nil)
+}
+
+func (s *Server) handleAdminListDownstreamServerPrivilegedPassports(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireAdmin(r, false); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	serverID := strings.TrimSpace(r.PathValue("id"))
+	if _, err := s.store.GetDownstreamServer(r.Context(), serverID); err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "server.not_found", "server not found"))
+		return
+	}
+	params := parseListPageParams(r)
+	q := r.URL.Query()
+	rows, total, err := s.store.ListDownstreamServerPrivilegedPassports(r.Context(), serverID, store.IdentityListQuery{
+		Search:   q.Get("q"),
+		Kind:     strings.TrimSpace(q.Get("kind")),
+		Status:   strings.TrimSpace(q.Get("status")),
+		Sort:     strings.TrimSpace(q.Get("sort")),
+		Dir:      strings.TrimSpace(q.Get("dir")),
+		Page:     params.Page,
+		PageSize: params.PageSize,
+	})
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "server.privileged_query_failed", "failed to query privileged passports"))
+		return
+	}
+	data := make([]map[string]any, 0, len(rows))
+	now := time.Now()
+	for _, row := range rows {
+		item := downstreamServerPrivilegedPassportData(row, s.store.ListProfilesForPassport(r.Context(), row.Passport.ID), s.store.ListPassportPresences(r.Context(), row.Passport.ID))
+		s.enrichPassportRow(r.Context(), item, row.Passport, now)
+		data = append(data, item)
+	}
+	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), total, params))
+}
+
+func (s *Server) handleAdminAddDownstreamServerPrivilegedPassport(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	serverID := strings.TrimSpace(r.PathValue("id"))
+	var req downstreamServerPrivilegedPassportRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	passportID := strings.TrimSpace(req.PassportID)
+	if passportID == "" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "passport.required", "passport is required"))
+		return
+	}
+	allow, err := s.store.AddDownstreamServerPrivilegedPassport(r.Context(), serverID, passportID, session.SubjectID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			api.WriteError(w, api.NewError(http.StatusNotFound, "server_or_passport.not_found", "server or passport not found"))
+			return
+		}
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.privileged_add_failed", err.Error()))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, serverID, "server.privileged_passport.add", map[string]any{
+		"passport_id": allow.PassportID,
+		"username":    allow.Passport.Username,
+	})
+	item := downstreamServerPrivilegedPassportData(allow, s.store.ListProfilesForPassport(r.Context(), allow.Passport.ID), s.store.ListPassportPresences(r.Context(), allow.Passport.ID))
+	s.enrichPassportRow(r.Context(), item, allow.Passport, time.Now())
+	api.WriteJSON(w, http.StatusCreated, item, nil)
+}
+
+func (s *Server) handleAdminRemoveDownstreamServerPrivilegedPassport(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	serverID := strings.TrimSpace(r.PathValue("id"))
+	passportID := strings.TrimSpace(r.PathValue("passportID"))
+	if err := s.store.RemoveDownstreamServerPrivilegedPassport(r.Context(), serverID, passportID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			api.WriteError(w, api.NewError(http.StatusNotFound, "server.privileged_passport.not_found", "privileged passport entry not found"))
+			return
+		}
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.privileged_remove_failed", err.Error()))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, serverID, "server.privileged_passport.remove", map[string]any{
+		"passport_id": passportID,
+	})
+	api.WriteJSON(w, http.StatusOK, map[string]any{"ok": true}, nil)
 }
 
 func (s *Server) handleAdminDeleteDownstreamServer(w http.ResponseWriter, r *http.Request) {

@@ -1,19 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
+  AdvancedList,
   BackLink,
   Badge,
   Button,
   Card,
   ConfirmDialog,
+  Copyable,
   DetailActions,
   DetailAside,
   DetailBody,
   DetailGrid,
   DetailSummary,
   Dialog,
+  EmptyState,
   Field,
   Icon,
   Input,
@@ -22,25 +25,40 @@ import {
   PageShell,
   SecretReveal,
   Select,
+  SimpleTextList,
   StatusBadge,
+  SettingsStack,
+  Tabs,
+  TypeBadge,
   coerceVelocityNode,
   formatRelativeTime,
+  navigateWithBack,
+  useBackTarget,
   useI18n,
+  useListState,
   useToast,
+  type ListColumn,
   type SafeVelocityNode,
 } from "@authman/shared";
 import {
+  addDownstreamServerPrivilegedPassport,
   createNode,
   deleteDownstreamServerIcon,
   deleteDownstreamServer,
   deleteNode,
   fetchDownstreamServer,
+  fetchDownstreamServerPrivilegedPassports,
   fetchLimboBlueprints,
   fetchNodes,
+  fetchPassports,
+  removeDownstreamServerPrivilegedPassport,
   updateDownstreamServer,
   uploadDownstreamServerIcon,
   type DownstreamServer,
   type DownstreamServerInput,
+  type DownstreamServerPrivilegedPassport,
+  type DownstreamResourcePack,
+  type IdentityListFilters,
 } from "../api/admin";
 
 interface IssuedToken {
@@ -48,6 +66,8 @@ interface IssuedToken {
   token_fingerprint: string;
   name: string;
 }
+
+type DetailTab = "overview" | "privileged" | "resources";
 
 function toInput(server: DownstreamServer): DownstreamServerInput {
   return {
@@ -60,12 +80,16 @@ function toInput(server: DownstreamServer): DownstreamServerInput {
   };
 }
 
-function csv(value: string[] | undefined): string {
-  return (value ?? []).join(", ");
-}
-
-function splitCSV(value: string): string[] {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
+function normalizeDomains(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of values) {
+    const trimmed = raw.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
 }
 
 function addressFromConfig(cfg: DownstreamServer["routing_config"]): string {
@@ -89,28 +113,92 @@ function nodeBelongsToServer(n: SafeVelocityNode, server: DownstreamServer): boo
   return n.status !== "disabled" && (n.server_id === server.id || n.server_id === server.slug);
 }
 
+function localID(prefix = "item"): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function NodeStatusBadge({ node }: { node: SafeVelocityNode }) {
   const { t } = useI18n();
   const tone: "success" | "warning" | "neutral" = node.status === "active" ? "success" : node.status === "stale" ? "warning" : "neutral";
   return <Badge tone={tone} dot>{t(`admin.nodes.status.${node.status}`, node.status)}</Badge>;
 }
 
+function normalizeResourcePacks(value: DownstreamResourcePack[] | undefined): DownstreamResourcePack[] {
+  return (value ?? [])
+    .map((pack, index) => cleanResourcePack({ ...pack, id: pack.id || `pack-${index}` }))
+    .filter((pack) => pack.url);
+}
+
+function cleanResourcePack(pack: DownstreamResourcePack): DownstreamResourcePack {
+  return {
+    id: String(pack.id || pack.url || localID("pack")).trim(),
+    name: String(pack.name || "").trim(),
+    url: String(pack.url || "").trim(),
+    hash: String(pack.hash || "").trim(),
+    prompt: String(pack.prompt || "").trim(),
+  };
+}
+
+function emptyResourcePack(): DownstreamResourcePack {
+  return { id: localID("pack"), name: "", url: "", hash: "", prompt: "" };
+}
+
 export function DownstreamServerDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const { t } = useI18n();
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = useBackTarget("/nodes");
+  const [searchParams, setSearchParams] = useSearchParams();
   const toast = useToast();
   const qc = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteNodeOpen, setDeleteNodeOpen] = useState(false);
   const [issueOpen, setIssueOpen] = useState(false);
   const [motdOpen, setMotdOpen] = useState(false);
+  const [tab, setTab] = useState<DetailTab>(() => {
+    const raw = searchParams.get("tab");
+    return raw === "privileged" || raw === "resources" ? raw : "overview";
+  });
+  const [allowOpen, setAllowOpen] = useState(false);
+  const [passportSearch, setPassportSearch] = useState("");
+  const [selectedPassportID, setSelectedPassportID] = useState("");
+  const [resourceDialog, setResourceDialog] = useState<{ index: number | null; pack: DownstreamResourcePack } | null>(null);
   const [issuedToken, setIssuedToken] = useState<IssuedToken | null>(null);
   const [input, setInput] = useState<DownstreamServerInput | null>(null);
-  const [matchDomains, setMatchDomains] = useState("");
+  const [matchDomains, setMatchDomains] = useState<string[]>([]);
   const [downstreamAddress, setDownstreamAddress] = useState("");
   const [iconError, setIconError] = useState("");
+  const allowList = useListState({ urlPrefix: "serverPrivileged", urlSync: false, defaults: { pageSize: 10, hidden: ["uuid"] } });
+  const resourceList = useListState({ urlPrefix: "serverPacks", urlSync: false, defaults: { pageSize: 10, hidden: ["hash", "prompt"] } });
+  const allowFilters = useMemo<IdentityListFilters>(() => {
+    const next: IdentityListFilters = { page: allowList.state.page, page_size: allowList.state.pageSize };
+    const q = (allowList.state.filters.username ?? "").trim();
+    if (q) next.q = q;
+    const kind = allowList.state.filters.kind;
+    if (kind === "premium" || kind === "offline") next.kind = kind;
+    const status = allowList.state.filters.status;
+    if (status) next.status = status;
+    if (allowList.state.sortKey) {
+      next.sort = allowList.state.sortKey;
+      next.dir = allowList.state.sortDir;
+    }
+    return next;
+  }, [allowList.state]);
   const q = useQuery({ queryKey: ["admin.downstreamServer", id], queryFn: () => fetchDownstreamServer(id), enabled: !!id });
+  const allowedQ = useQuery({
+    queryKey: ["admin.downstreamServer.privilegedPassports", id, allowFilters],
+    queryFn: () => fetchDownstreamServerPrivilegedPassports(id, allowFilters),
+    enabled: !!id && tab === "privileged",
+  });
+  const passportOptionsQ = useQuery({
+    queryKey: ["admin.passports", "privileged-picker", passportSearch],
+    queryFn: ({ signal }) => fetchPassports({ q: passportSearch.trim() || undefined, page: 1, page_size: 25 }, signal),
+    enabled: allowOpen,
+  });
   const blueprints = useQuery({ queryKey: ["admin.limboBlueprints", "select"], queryFn: () => fetchLimboBlueprints({ page: 1, page_size: 100 }) });
   const nodesQ = useQuery({
     queryKey: ["admin.nodes", "downstream_velocity", "server-detail"],
@@ -131,7 +219,7 @@ export function DownstreamServerDetailPage() {
   useEffect(() => {
     if (!server) return;
     setInput(toInput(server));
-    setMatchDomains(csv(server.routing_config.portal_hosts));
+    setMatchDomains([...(server.routing_config.portal_hosts ?? [])]);
     setDownstreamAddress(addressFromConfig(server.routing_config));
   }, [server]);
 
@@ -148,7 +236,7 @@ export function DownstreamServerDetailPage() {
           port: target.port,
           transfer_host: target.host,
           transfer_port: target.port,
-          portal_hosts: splitCSV(matchDomains),
+          portal_hosts: normalizeDomains(matchDomains),
           allowed_portal_sources: [],
           gate_enabled: true,
           grant_required: true,
@@ -195,6 +283,27 @@ export function DownstreamServerDetailPage() {
     },
     onError: (err) => toast.danger(err instanceof ApiError ? err.message : t("common.unknown")),
   });
+  const addAllowMut = useMutation({
+    mutationFn: () => addDownstreamServerPrivilegedPassport(id, selectedPassportID),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.servers.privileged.added") });
+      setAllowOpen(false);
+      setSelectedPassportID("");
+      setPassportSearch("");
+      void qc.invalidateQueries({ queryKey: ["admin.downstreamServer.privilegedPassports", id] });
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? err.message : t("common.unknown")),
+  });
+  const removeAllowMut = useMutation({
+    mutationFn: async (rows: DownstreamServerPrivilegedPassport[]) => {
+      await Promise.all(rows.map((row) => removeDownstreamServerPrivilegedPassport(id, row.passport_id || row.id)));
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.servers.privileged.removed") });
+      void qc.invalidateQueries({ queryKey: ["admin.downstreamServer.privilegedPassports", id] });
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? err.message : t("common.unknown")),
+  });
   const uploadIconMut = useMutation({
     mutationFn: (file: File) => uploadDownstreamServerIcon(id, file),
     onSuccess: (next) => {
@@ -223,18 +332,119 @@ export function DownstreamServerDetailPage() {
   });
 
   if (!server || !input) {
-    return <PageShell><BackLink onClick={() => navigate("/nodes")}>{t("admin.servers.heading")}</BackLink><Card title={q.isLoading ? t("common.loading") : t("common.unknown")}><span /></Card></PageShell>;
+    return <PageShell><BackLink onClick={() => navigate(backTarget)}>{t("admin.servers.heading")}</BackLink><Card title={q.isLoading ? t("common.loading") : t("common.unknown")}><span /></Card></PageShell>;
   }
   const cfg = input.routing_config;
   const serverIcon = String(cfg.server_icon || server.target.server_icon || "").trim();
+  const resourcePacks = normalizeResourcePacks(cfg.resource_packs);
+  const allowedIDs = new Set((allowedQ.data?.rows ?? []).map((row) => row.passport_id || row.id));
+  const passportOptions = [
+    { value: "", label: t("admin.servers.privileged.selectPlaceholder") },
+    ...(passportOptionsQ.data?.rows ?? [])
+      .filter((passport) => passport.status !== "deleted" && !allowedIDs.has(passport.id))
+      .map((passport) => ({ value: passport.id, label: `${passport.username} · ${t(`admin.players.filter.${passport.kind}`, passport.kind)}` })),
+  ];
+  const privilegedColumns: ListColumn<DownstreamServerPrivilegedPassport>[] = [
+    {
+      key: "username",
+      header: t("admin.passports.col.username"),
+      mandatory: true,
+      sortable: true,
+      filter: { type: "text", placeholder: t("admin.passports.searchPlaceholder") },
+      render: (row) => (
+        <div className="player-cell">
+          <span className={row.avatar_url ? "pa-avatar has-image" : "pa-avatar"}>
+            {row.avatar_url ? <img src={row.avatar_url} alt="" aria-hidden="true" /> : (row.username || "?")[0]}
+          </span>
+          <span className="player-name">{row.username}</span>
+        </div>
+      ),
+    },
+    {
+      key: "kind",
+      header: t("admin.players.col.type"),
+      sortable: true,
+      filter: {
+        type: "select",
+        options: [
+          { value: "", label: t("common.all") },
+          { value: "premium", label: t("admin.players.filter.premium") },
+          { value: "offline", label: t("admin.players.filter.offline") },
+        ],
+      },
+      render: (row) => <TypeBadge kind={row.kind} />,
+    },
+    {
+      key: "status",
+      header: t("admin.players.col.status"),
+      sortable: true,
+      filter: {
+        type: "select",
+        options: [
+          { value: "", label: t("common.all") },
+          { value: "active", label: t("status.active") },
+          { value: "locked", label: t("status.locked") },
+          { value: "pending_verification", label: t("status.pending") },
+          { value: "deleted", label: t("status.deleted") },
+        ],
+      },
+      render: (row) => <StatusBadge status={row.status} />,
+    },
+    { key: "online", header: t("admin.presences.onlineState"), minWidth: "120px", sortable: true, render: (row) => <StatusBadge status={row.online ? "online" : "offline_status"} /> },
+    { key: "profiles", header: t("admin.passports.col.profiles"), minWidth: "110px", sortable: true, render: (row) => <span>{row.profile_count}</span> },
+    { key: "uuid", header: "UUID", minWidth: "300px", defaultVisible: false, sortable: true, render: (row) => <Copyable value={row.uuid} /> },
+    { key: "allowedAt", header: t("admin.servers.privileged.allowedAt"), minWidth: "150px", sortable: true, sortValue: (row) => row.allowed_at, render: (row) => <span className="muted-cell">{formatRelativeTime(row.allowed_at)}</span> },
+    {
+      key: "actions",
+      header: "",
+      mandatory: true,
+      width: "44px",
+      minWidth: "44px",
+      align: "right",
+      sticky: "right",
+      render: () => <Icon name="chevronRight" size={16} />,
+    },
+  ];
+  const resourcePackColumns: ListColumn<DownstreamResourcePack>[] = [
+    { key: "name", header: t("admin.servers.resources.col.name"), mandatory: true, sortable: true, sortValue: (pack) => pack.name || pack.url, render: (pack) => <strong>{pack.name || pack.url}</strong> },
+    { key: "url", header: "URL", mandatory: true, minWidth: "300px", render: (pack) => <span className="mono muted-cell">{pack.url}</span> },
+    { key: "hash", header: "SHA-1", minWidth: "260px", defaultVisible: false, render: (pack) => <span className="mono">{pack.hash || "—"}</span> },
+    { key: "prompt", header: t("admin.servers.resources.col.prompt"), minWidth: "220px", defaultVisible: false, render: (pack) => <span>{pack.prompt || "—"}</span> },
+    { key: "actions", header: "", mandatory: true, width: "44px", minWidth: "44px", align: "right", sticky: "right", render: () => <Icon name="chevronRight" size={16} /> },
+  ];
   function setConfig(next: Partial<DownstreamServerInput["routing_config"]>) {
     setInput((current) => current ? { ...current, routing_config: { ...current.routing_config, ...next } } : current);
+  }
+  function upsertResourcePack(index: number | null, pack: DownstreamResourcePack) {
+    const cleaned = cleanResourcePack(pack);
+    if (!cleaned.url) return;
+    const next = [...resourcePacks];
+    if (index === null) next.push(cleaned);
+    else next[index] = cleaned;
+    setConfig({ resource_packs: next });
+    setResourceDialog(null);
+  }
+  function removeResourcePacks(rows: DownstreamResourcePack[]) {
+    const removeIDs = new Set(rows.map((row) => row.id));
+    setConfig({ resource_packs: resourcePacks.filter((pack) => !removeIDs.has(pack.id)) });
   }
 
   return (
     <PageShell testId="downstream-server-detail-page">
       <div className="detail-toolbar">
-        <BackLink onClick={() => navigate("/nodes")}>{t("admin.servers.heading")}</BackLink>
+        <BackLink onClick={() => navigate(backTarget)}>{t("admin.servers.heading")}</BackLink>
+        <Tabs
+          value={tab}
+          onChange={(next) => {
+            setTab(next);
+            setSearchParams(next === "overview" ? {} : { tab: next }, { replace: true });
+          }}
+          tabs={[
+            { value: "overview", label: t("common.overview"), icon: "gauge" },
+            { value: "privileged", label: t("admin.servers.privileged.heading"), icon: "key" },
+            { value: "resources", label: t("admin.servers.resources.heading"), icon: "download" },
+          ]}
+        />
       </div>
       <DetailGrid>
         <DetailAside>
@@ -274,26 +484,40 @@ export function DownstreamServerDetailPage() {
           </DetailActions>
         </DetailAside>
         <DetailBody>
-          <Card title={t("admin.servers.identity")}>
-            <div className="form-grid">
-              <Field label={t("admin.servers.col.name")} style={{ gridColumn: "1 / -1" }}>
-                <Input value={input.display_name} onChange={(e) => setInput({ ...input, display_name: e.target.value })} />
-              </Field>
-            </div>
-          </Card>
+          {tab === "overview" ? (
+            <>
+              <Card title={t("admin.servers.identity")}>
+                <div className="form-grid">
+                  <Field label={t("admin.servers.col.name")} style={{ gridColumn: "1 / -1" }}>
+                    <Input value={input.display_name} onChange={(e) => setInput({ ...input, display_name: e.target.value })} />
+                  </Field>
+                </div>
+              </Card>
 
-          <Card title={t("admin.servers.routing")}>
-            <div className="form-grid two">
-              <Field label={t("admin.servers.matchDomains")} hint={t("admin.servers.matchDomains.hint")} style={{ gridColumn: "1 / -1" }}>
-                <Input value={matchDomains} onChange={(e) => setMatchDomains(e.target.value)} placeholder="play.example.com, survival.example.com" />
-              </Field>
-              <Field label={t("admin.servers.connectionAddress")} hint={t("admin.servers.connectionAddress.hint")} style={{ gridColumn: "1 / -1" }}>
-                <Input value={downstreamAddress} onChange={(e) => setDownstreamAddress(e.target.value)} placeholder="127.0.0.1:25565" />
-              </Field>
-            </div>
-          </Card>
+              <Card title={t("admin.servers.routing")}>
+                <div className="form-grid two">
+                  <Field label={t("admin.servers.matchDomains")} hint={t("admin.servers.matchDomains.hint")} style={{ gridColumn: "1 / -1" }}>
+                    <SimpleTextList
+                      values={matchDomains}
+                      onChange={setMatchDomains}
+                      placeholder="play.example.com"
+                      addLabel={t("admin.servers.matchDomains.add")}
+                      testId="server-match-domains"
+                    />
+                  </Field>
+                  <Field label={t("admin.servers.connectionAddress")} hint={t("admin.servers.connectionAddress.hint")} style={{ gridColumn: "1 / -1" }}>
+                    <Input value={downstreamAddress} onChange={(e) => setDownstreamAddress(e.target.value)} placeholder="127.0.0.1:25565" />
+                  </Field>
+                  <Field label={t("admin.servers.protocolMin")} hint={t("admin.servers.protocolMin.hint")}>
+                    <Input type="number" min={0} value={Number(cfg.min_protocol_version ?? 771)} onChange={(e) => setConfig({ min_protocol_version: Number(e.target.value) || 0 })} />
+                  </Field>
+                  <Field label={t("admin.servers.protocolMax")} hint={t("admin.servers.protocolMax.hint")}>
+                    <Input type="number" min={0} value={Number(cfg.max_protocol_version ?? 0)} onChange={(e) => setConfig({ max_protocol_version: Number(e.target.value) || 0 })} />
+                  </Field>
+                </div>
+              </Card>
 
-          <Card title={t("admin.servers.loginPresentation")}>
+              <Card title={t("admin.servers.loginPresentation")}>
             <div className="form-grid two">
               <Field label={t("admin.servers.field.motd")} hint={t("admin.servers.field.motd.hint")} style={{ gridColumn: "1 / -1" }}>
                 <MinecraftMotdPreview
@@ -343,9 +567,9 @@ export function DownstreamServerDetailPage() {
                 <Select value={String(cfg.limbo_blueprint_id ?? "")} onChange={(value) => setConfig({ limbo_blueprint_id: value })} options={blueprintOptions} />
               </Field>
             </div>
-          </Card>
+              </Card>
 
-          <Card title={t("admin.servers.instance")}>
+              <Card title={t("admin.servers.instance")}>
             {node ? (
               <div className="server-instance-card">
                 <div>
@@ -369,7 +593,88 @@ export function DownstreamServerDetailPage() {
                 <Button variant="primary" icon="plus" onClick={() => setIssueOpen(true)} data-testid="server-node-issue-open">{t("admin.servers.instance.issue")}</Button>
               </div>
             )}
-          </Card>
+              </Card>
+            </>
+          ) : tab === "privileged" ? (
+            <Card noBody className="table-card">
+              <AdvancedList
+                title={t("admin.servers.privileged.heading")}
+                description={t("admin.servers.privileged.desc")}
+                columns={privilegedColumns}
+                rowKey={(row) => row.passport_id || row.id}
+                mode="server"
+                rows={allowedQ.data?.rows ?? []}
+                total={allowedQ.data?.meta.total ?? 0}
+                loading={allowedQ.isLoading}
+                state={allowList.state}
+                onStateChange={allowList.setState}
+                pageSizeOptions={[5, 10, 25]}
+                onRowClick={(row) => navigateWithBack(navigate, `/passports/${row.passport_id || row.id}`, location)}
+                selectable
+                primaryActions={<Button size="sm" variant="primary" icon="plus" onClick={() => setAllowOpen(true)}>{t("admin.servers.privileged.add")}</Button>}
+                selectionActions={(rows) => (
+                  <Button size="sm" variant="danger-soft" icon="close" loading={removeAllowMut.isPending} onClick={() => removeAllowMut.mutate(rows)}>
+                    {t("admin.servers.privileged.remove")}
+                  </Button>
+                )}
+                empty={<EmptyState icon="key" title={t("admin.servers.privileged.empty")} />}
+                testId="server-privileged-passports"
+              />
+            </Card>
+          ) : (
+            <SettingsStack>
+              <Card title={t("admin.servers.resources.policy")}>
+                <div className="route-selection-list">
+                  <label className="toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(cfg.resource_pack_enabled)}
+                      onChange={(event) => setConfig({ resource_pack_enabled: event.currentTarget.checked })}
+                    />
+                    <span>
+                      <strong>{t("admin.servers.resources.enabled")}</strong>
+                      <small>{t("admin.servers.resources.enabled.hint")}</small>
+                    </span>
+                  </label>
+                  <label className="toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(cfg.resource_pack_required)}
+                      onChange={(event) => setConfig({ resource_pack_required: event.currentTarget.checked })}
+                    />
+                    <span>
+                      <strong>{t("admin.servers.resources.required")}</strong>
+                      <small>{t("admin.servers.resources.required.hint")}</small>
+                    </span>
+                  </label>
+                </div>
+                <p className="card-foot-note" style={{ marginTop: 12 }}>{t("admin.servers.resources.transferNote")}</p>
+              </Card>
+              <Card noBody className="table-card">
+                <AdvancedList
+                  title={t("admin.servers.resources.heading")}
+                  description={t("admin.servers.resources.desc")}
+                  columns={resourcePackColumns}
+                  rowKey={(pack) => pack.id || pack.url}
+                  mode="client"
+                  rows={resourcePacks}
+                  state={resourceList.state}
+                  onStateChange={resourceList.setState}
+                  pageSizeOptions={[5, 10, 25]}
+                  onRowClick={(pack) => setResourceDialog({ index: resourcePacks.findIndex((item) => item.id === pack.id), pack })}
+                  selectable
+                  primaryActions={<Button size="sm" variant="primary" icon="plus" onClick={() => setResourceDialog({ index: null, pack: emptyResourcePack() })}>{t("admin.servers.resources.add")}</Button>}
+                  selectionActions={(rows) => (
+                    <Button size="sm" variant="danger-soft" icon="trash" onClick={() => removeResourcePacks(rows)}>
+                      {t("common.delete")}
+                    </Button>
+                  )}
+                  empty={<EmptyState icon="download" title={t("admin.servers.resources.empty")} />}
+                  testId="server-resource-packs"
+                />
+              </Card>
+            </SettingsStack>
+          )}
         </DetailBody>
       </DetailGrid>
 
@@ -383,6 +688,37 @@ export function DownstreamServerDetailPage() {
         loading={issueNodeMut.isPending}
         testId="dialog-server-node-issue"
       />
+      <Dialog
+        open={allowOpen}
+        onClose={() => !addAllowMut.isPending && setAllowOpen(false)}
+        icon="key"
+        iconTone="primary"
+        title={t("admin.servers.privileged.add")}
+        desc={t("admin.servers.privileged.add.desc")}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setAllowOpen(false)} disabled={addAllowMut.isPending}>{t("common.cancel")}</Button>
+            <Button variant="primary" loading={addAllowMut.isPending} disabled={!selectedPassportID} onClick={() => addAllowMut.mutate()}>{t("common.add")}</Button>
+          </>
+        }
+        testId="dialog-add-privileged-passport"
+      >
+        <div className="form-grid">
+          <Field label={t("common.search")}>
+            <Input value={passportSearch} onChange={(event) => setPassportSearch(event.target.value)} placeholder={t("admin.passports.searchPlaceholder")} />
+          </Field>
+          <Field label={t("admin.servers.privileged.passport")}>
+            <Select
+              value={selectedPassportID}
+              onChange={setSelectedPassportID}
+              options={passportOptions}
+              disabled={passportOptionsQ.isLoading}
+              placeholder={passportOptionsQ.isLoading ? t("common.loading") : t("admin.servers.privileged.selectPlaceholder")}
+              testId="server-privileged-passport-select"
+            />
+          </Field>
+        </div>
+      </Dialog>
       <MiniMessageEditorDialog
         open={motdOpen}
         title={t("admin.servers.motd.editor")}
@@ -398,6 +734,43 @@ export function DownstreamServerDetailPage() {
         }}
         testId="dialog-server-motd"
       />
+      <Dialog
+        open={!!resourceDialog}
+        onClose={() => setResourceDialog(null)}
+        icon="download"
+        iconTone="primary"
+        title={resourceDialog?.index === null ? t("admin.servers.resources.add") : t("admin.servers.resources.edit")}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setResourceDialog(null)}>{t("common.cancel")}</Button>
+            <Button
+              variant="primary"
+              disabled={!resourceDialog?.pack.url.trim()}
+              onClick={() => resourceDialog && upsertResourcePack(resourceDialog.index, resourceDialog.pack)}
+            >
+              {t("common.save")}
+            </Button>
+          </>
+        }
+        testId="dialog-server-resource-pack"
+      >
+        {resourceDialog ? (
+          <div className="form-grid">
+            <Field label={t("admin.servers.resources.col.name")}>
+              <Input value={resourceDialog.pack.name || ""} onChange={(e) => setResourceDialog({ ...resourceDialog, pack: { ...resourceDialog.pack, name: e.target.value } })} />
+            </Field>
+            <Field label="URL">
+              <Input value={resourceDialog.pack.url} onChange={(e) => setResourceDialog({ ...resourceDialog, pack: { ...resourceDialog.pack, url: e.target.value } })} placeholder="https://example.com/pack.zip" />
+            </Field>
+            <Field label="SHA-1">
+              <Input value={resourceDialog.pack.hash || ""} onChange={(e) => setResourceDialog({ ...resourceDialog, pack: { ...resourceDialog.pack, hash: e.target.value } })} mono />
+            </Field>
+            <Field label={t("admin.servers.resources.col.prompt")}>
+              <Input value={resourceDialog.pack.prompt || ""} onChange={(e) => setResourceDialog({ ...resourceDialog, pack: { ...resourceDialog.pack, prompt: e.target.value } })} />
+            </Field>
+          </div>
+        ) : null}
+      </Dialog>
       <Dialog
         open={!!issuedToken}
         onClose={() => setIssuedToken(null)}

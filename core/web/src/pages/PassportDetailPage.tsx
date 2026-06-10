@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AdvancedList,
@@ -23,6 +23,8 @@ import {
   useI18n,
   useListState,
   useToast,
+  navigateWithBack,
+  useBackTarget,
   type ListColumn,
 } from "@authman/shared";
 import { AuditEventList } from "../components/AuditEventList";
@@ -58,6 +60,8 @@ export function PassportDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const { t } = useI18n();
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = useBackTarget("/passports");
   const toast = useToast();
   const qc = useQueryClient();
   const [nextStatus, setNextStatus] = useState<PassportRow["status"] | null>(null);
@@ -230,7 +234,7 @@ export function PassportDetailPage() {
       mandatory: true,
       sortable: true,
       sortValue: (profile) => profile.protocol_name,
-      render: (profile) => <Link className="passport-profile-name" to={`/profiles/${profile.id}`}>{profile.protocol_name}</Link>,
+      render: (profile) => <Link className="passport-profile-name" to={`/profiles/${profile.id}`} state={{ backTo: `${location.pathname}${location.search}${location.hash}` }}>{profile.protocol_name}</Link>,
     },
     { key: "uuid", header: "UUID", minWidth: "300px", defaultVisible: false, sortable: true, sortValue: (profile) => profile.uuid, render: (profile) => <Copyable value={profile.uuid} /> },
     { key: "online", header: t("admin.presences.onlineState"), minWidth: "120px", sortable: true, sortValue: (profile) => profile.online, render: (profile) => <StatusBadge status={profile.online ? "online" : "offline_status"} /> },
@@ -264,9 +268,9 @@ export function PassportDetailPage() {
   return (
     <div className="page">
       <div className="detail-toolbar">
-        <button type="button" className="back-link" onClick={() => navigate("/passports")}>
+        <button type="button" className="back-link" onClick={() => navigate(backTarget)}>
           <Icon name="arrowLeft" size={15} />
-          {t("admin.passports.heading")}
+          {t("common.back")}
         </button>
         <Tabs
           value={tab}
@@ -335,7 +339,7 @@ export function PassportDetailPage() {
                         <Button size="sm" variant="primary" icon="plus" onClick={() => { setProtocolName(""); setDialog("create"); }}>{t("admin.profiles.create")}</Button>
                       </>
                     }
-                    onRowClick={(profile) => navigate(`/profiles/${profile.id}`)}
+                    onRowClick={(profile) => navigateWithBack(navigate, `/profiles/${profile.id}`, location)}
                     testId="passport-bound-profiles"
                   />
                 ) : (

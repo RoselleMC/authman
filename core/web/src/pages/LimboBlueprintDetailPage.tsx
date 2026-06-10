@@ -20,6 +20,7 @@ import {
   Tabs,
   formatRelativeTime,
   useI18n,
+  useBackTarget,
   useToast,
 } from "@authman/shared";
 import { deleteLimboBlueprint, fetchLimboBlueprint, updateLimboBlueprint, type LimboBlueprintConfig } from "../api/admin";
@@ -43,6 +44,7 @@ export function LimboBlueprintDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const { t } = useI18n();
   const navigate = useNavigate();
+  const backTarget = useBackTarget(BLUEPRINTS_BASE_PATH);
   const toast = useToast();
   const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>("overview");
@@ -87,13 +89,13 @@ export function LimboBlueprintDetailPage() {
     onError: () => toast.danger(t("common.unknown")),
   });
 
-  if (!blueprint && q.isLoading) return <PageShell><BackLink onClick={() => navigate(BLUEPRINTS_BASE_PATH)}>{t("admin.limboBlueprints.heading")}</BackLink><Card title={t("common.loading")}><span /></Card></PageShell>;
-  if (!blueprint) return <PageShell><BackLink onClick={() => navigate(BLUEPRINTS_BASE_PATH)}>{t("admin.limboBlueprints.heading")}</BackLink><Card title={t("common.unknown")}><span /></Card></PageShell>;
+  if (!blueprint && q.isLoading) return <PageShell><BackLink onClick={() => navigate(backTarget)}>{t("admin.limboBlueprints.heading")}</BackLink><Card title={t("common.loading")}><span /></Card></PageShell>;
+  if (!blueprint) return <PageShell><BackLink onClick={() => navigate(backTarget)}>{t("admin.limboBlueprints.heading")}</BackLink><Card title={t("common.unknown")}><span /></Card></PageShell>;
 
   return (
     <PageShell testId="limbo-blueprint-detail-page">
       <div className="detail-toolbar">
-        <BackLink onClick={() => navigate(BLUEPRINTS_BASE_PATH)}>{t("admin.limboBlueprints.heading")}</BackLink>
+        <BackLink onClick={() => navigate(backTarget)}>{t("admin.limboBlueprints.heading")}</BackLink>
         <Tabs<Tab> value={tab} onChange={setTab} tabs={[{ value: "overview", label: t("common.overview"), icon: "info" }, { value: "preview", label: t("admin.limboBlueprints.preview"), icon: "box" }]} />
       </div>
       <DetailGrid>

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AdvancedList,
@@ -16,6 +16,7 @@ import {
   useI18n,
   useListState,
   useToast,
+  navigateWithBack,
   type ListColumn,
 } from "@authman/shared";
 import { fetchLimboBlueprints, uploadLimboBlueprint, type LimboBlueprint, type ListFilters } from "../api/admin";
@@ -37,6 +38,7 @@ export function LimboBlueprintsPage({ embedded = false, basePath = "/limbo-bluep
   const { t } = useI18n();
   const { user } = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
   const toast = useToast();
   const qc = useQueryClient();
   const list = useListState({ urlPrefix: "lb", defaults: { pageSize: 25, hidden: ["sha256"] }, storageScope: user?.id });
@@ -67,7 +69,7 @@ export function LimboBlueprintsPage({ embedded = false, basePath = "/limbo-bluep
       setName("");
       setDescription("");
       void qc.invalidateQueries({ queryKey: ["admin.limboBlueprints"] });
-      navigate(`${basePath}/${encodeURIComponent(bp.id)}`);
+      navigateWithBack(navigate, `${basePath}/${encodeURIComponent(bp.id)}`, location);
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -102,7 +104,7 @@ export function LimboBlueprintsPage({ embedded = false, basePath = "/limbo-bluep
           onStateChange={list.setState}
           loading={q.isLoading}
           primaryActions={embedded ? uploadButton : undefined}
-          onRowClick={(r) => navigate(`${basePath}/${encodeURIComponent(r.id)}`)}
+          onRowClick={(r) => navigateWithBack(navigate, `${basePath}/${encodeURIComponent(r.id)}`, location)}
           empty={<EmptyState icon="box" title={t("admin.limboBlueprints.empty")} />}
           testId="limbo-blueprints"
         />

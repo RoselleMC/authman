@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ type Config struct {
 	ExternalHTTPAddr   string
 	DatabaseURL        string
 	PublicBaseURL      string
+	HTTPBasePath       string
 	WebRoot            string
 	DefaultLocale      string
 	AdminUsername      string
@@ -41,6 +43,7 @@ func Load() (Config, error) {
 		ExternalHTTPAddr:   envString("AUTHMAN_EXTERNAL_HTTP_ADDR", ""),
 		DatabaseURL:        envString("AUTHMAN_DATABASE_URL", ""),
 		PublicBaseURL:      envString("AUTHMAN_PUBLIC_BASE_URL", "http://localhost:8080"),
+		HTTPBasePath:       httpBasePath(),
 		WebRoot:            envString("AUTHMAN_CORE_WEB_ROOT", ""),
 		DefaultLocale:      envString("AUTHMAN_DEFAULT_LOCALE", "zh"),
 		AdminUsername:      envString("AUTHMAN_ADMIN_USERNAME", "admin"),
@@ -66,6 +69,36 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("AUTHMAN_PUBLIC_BASE_URL must not be empty")
 	}
 	return cfg, nil
+}
+
+func httpBasePath() string {
+	if value, ok := os.LookupEnv("AUTHMAN_HTTP_BASE_PATH"); ok {
+		return normalizeBasePath(value)
+	}
+	publicURL := envString("AUTHMAN_PUBLIC_BASE_URL", "")
+	if publicURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(publicURL)
+	if err != nil {
+		return ""
+	}
+	return normalizeBasePath(parsed.EscapedPath())
+}
+
+func normalizeBasePath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "/" {
+		return ""
+	}
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
+	}
+	value = strings.TrimRight(value, "/")
+	if value == "/" {
+		return ""
+	}
+	return value
 }
 
 func mojangRoutes() []mojang.Route {

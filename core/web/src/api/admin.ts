@@ -603,6 +603,22 @@ export async function updateIPGeoSettings(input: IPGeoSettings): Promise<IPGeoSe
   return res.data;
 }
 
+export interface BrandingSettings {
+  product_name: string;
+  core_label: string;
+  title_suffix: string;
+}
+
+export async function fetchBrandingSettings(): Promise<BrandingSettings> {
+  const res = await apiFetch<BrandingSettings>("/admin/settings/branding");
+  return res.data;
+}
+
+export async function updateBrandingSettings(input: BrandingSettings): Promise<BrandingSettings> {
+  const res = await apiFetch<BrandingSettings>("/admin/settings/branding", { method: "PUT", body: input });
+  return res.data;
+}
+
 export interface ExternalAPIToken {
   id: string;
   name: string;
@@ -674,6 +690,11 @@ export interface DownstreamServer {
     allowed_portal_sources?: string[];
     portal_hosts?: string[];
     limbo_blueprint_id?: string;
+    min_protocol_version?: number;
+    max_protocol_version?: number;
+    resource_pack_enabled?: boolean;
+    resource_pack_required?: boolean;
+    resource_packs?: DownstreamResourcePack[];
   };
   target: {
     server_id: string;
@@ -692,10 +713,31 @@ export interface DownstreamServer {
     allowed_portal_sources: string[];
     registration_open: boolean;
     extension_providers: string[];
+    min_protocol_version?: number;
+    max_protocol_version?: number;
+    resource_pack_enabled?: boolean;
+    resource_pack_required?: boolean;
+    resource_packs?: DownstreamResourcePack[];
   };
   extension_providers: string[];
   created_at?: string;
   updated_at?: string;
+}
+
+export interface DownstreamResourcePack {
+  id?: string;
+  name?: string;
+  url: string;
+  hash?: string;
+  prompt?: string;
+}
+
+export interface DownstreamServerPrivilegedPassport extends PassportRow {
+  server_id: string;
+  passport_id: string;
+  privileges: string[];
+  allowed_at: string;
+  created_by: string;
 }
 
 export interface DownstreamServerInput {
@@ -733,6 +775,20 @@ export async function deleteDownstreamServerIcon(id: string): Promise<Downstream
 }
 export async function deleteDownstreamServer(id: string): Promise<void> {
   await apiFetch<null>(`/admin/downstream-servers/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function fetchDownstreamServerPrivilegedPassports(id: string, filters: IdentityListFilters = {}): Promise<ListResult<DownstreamServerPrivilegedPassport>> {
+  const res = await apiFetch<DownstreamServerPrivilegedPassport[]>(`/admin/downstream-servers/${encodeURIComponent(id)}/privileged-passports`, { query: filters });
+  return listResult(res.data, res.meta);
+}
+
+export async function addDownstreamServerPrivilegedPassport(id: string, passportID: string): Promise<DownstreamServerPrivilegedPassport> {
+  const res = await apiFetch<DownstreamServerPrivilegedPassport>(`/admin/downstream-servers/${encodeURIComponent(id)}/privileged-passports`, { method: "POST", body: { passport_id: passportID } });
+  return res.data;
+}
+
+export async function removeDownstreamServerPrivilegedPassport(id: string, passportID: string): Promise<void> {
+  await apiFetch<null>(`/admin/downstream-servers/${encodeURIComponent(id)}/privileged-passports/${encodeURIComponent(passportID)}`, { method: "DELETE" });
 }
 
 export interface LimboBlueprintPreviewBlock {

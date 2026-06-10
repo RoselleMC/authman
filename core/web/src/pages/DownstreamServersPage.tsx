@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AdvancedList,
@@ -18,6 +18,7 @@ import {
   useI18n,
   useListState,
   useToast,
+  navigateWithBack,
   type ListColumn,
 } from "@authman/shared";
 import { createDownstreamServer, deleteDownstreamServer, fetchDownstreamServers, updateDownstreamServer, type DownstreamServer, type DownstreamServerInput, type ListFilters } from "../api/admin";
@@ -92,6 +93,7 @@ export function DownstreamServersPage() {
   const { t } = useI18n();
   const { user } = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
   const toast = useToast();
   const qc = useQueryClient();
   const list = useListState({ urlPrefix: "ds", defaults: { pageSize: 25, hidden: ["host"] }, storageScope: user?.id });
@@ -120,7 +122,7 @@ export function DownstreamServersPage() {
       setMatchDomains("");
       setConnectionAddress("127.0.0.1:25565");
       void qc.invalidateQueries({ queryKey: ["admin.downstreamServers"] });
-      navigate(`/nodes/${encodeURIComponent(server.id)}`);
+      navigateWithBack(navigate, `/nodes/${encodeURIComponent(server.id)}`, location);
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -170,7 +172,7 @@ export function DownstreamServersPage() {
           state={list.state}
           onStateChange={list.setState}
           loading={q.isLoading}
-          onRowClick={(r) => navigate(`/nodes/${encodeURIComponent(r.id)}`)}
+          onRowClick={(r) => navigateWithBack(navigate, `/nodes/${encodeURIComponent(r.id)}`, location)}
           selectable
           selectionActions={(rows) => (
             <>

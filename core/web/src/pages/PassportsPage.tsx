@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AdvancedList,
@@ -19,6 +19,7 @@ import {
   useI18n,
   useListState,
   useToast,
+  navigateWithBack,
   type ListColumn,
 } from "@authman/shared";
 import { createPassportBan, fetchPassports, revokeBan, updatePassportStatus, type IdentityListFilters, type PassportRow } from "../api/admin";
@@ -31,6 +32,7 @@ export function PassportsPage() {
   const { t } = useI18n();
   const { user } = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
   const toast = useToast();
   const qc = useQueryClient();
   const [bulkBanRows, setBulkBanRows] = useState<PassportRow[]>([]);
@@ -172,7 +174,7 @@ export function PassportsPage() {
           state={list.state}
           onStateChange={list.setState}
           pageSizeOptions={PAGE_SIZE_OPTIONS}
-          onRowClick={(r) => navigate(`/passports/${r.id}`)}
+          onRowClick={(r) => navigateWithBack(navigate, `/passports/${r.id}`, location)}
           selectionActions={(rows) => (
             <>
               {rows.every((row) => row.status !== "locked") ? <Button size="sm" variant="secondary" icon="lock" loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, status: "locked" })}>{t("common.lock")}</Button> : null}

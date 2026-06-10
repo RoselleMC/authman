@@ -11,6 +11,7 @@ import {
   PageShell,
   coerceAuditEvent,
   formatAbsTime,
+  useBackTarget,
   useI18n,
 } from "@authman/shared";
 import { fetchAuditEvent } from "../api/admin";
@@ -18,6 +19,7 @@ import { fetchAuditEvent } from "../api/admin";
 export function AuditDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const backTarget = useBackTarget("/audit");
   const { t } = useI18n();
   const q = useQuery({ queryKey: ["admin.audit.detail", id], queryFn: () => fetchAuditEvent(id), enabled: !!id });
 
@@ -40,7 +42,7 @@ export function AuditDetailPage() {
 
   return (
     <PageShell>
-      <button type="button" className="back-link" onClick={() => navigate("/audit")}>
+      <button type="button" className="back-link" onClick={() => navigate(backTarget)}>
         <Icon name="arrowLeft" size={15} />
         {t("admin.audit.heading")}
       </button>

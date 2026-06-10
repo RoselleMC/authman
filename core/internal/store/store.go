@@ -29,6 +29,15 @@ type DownstreamServer struct {
 	UpdatedAt          time.Time
 }
 
+type DownstreamServerPrivilegedPassport struct {
+	ServerID   string
+	PassportID string
+	Privileges []string
+	CreatedBy  string
+	CreatedAt  time.Time
+	Passport   identity.Passport
+}
+
 type LimboBlueprint struct {
 	ID          string
 	Name        string
@@ -343,6 +352,10 @@ type PlayerStore interface {
 	GetDownstreamServer(ctx context.Context, idOrSlug string) (DownstreamServer, error)
 	UpsertDownstreamServer(ctx context.Context, server DownstreamServer) (DownstreamServer, error)
 	DeleteDownstreamServer(ctx context.Context, id string) error
+	ListDownstreamServerPrivilegedPassports(ctx context.Context, serverID string, query IdentityListQuery) ([]DownstreamServerPrivilegedPassport, int, error)
+	AddDownstreamServerPrivilegedPassport(ctx context.Context, serverID string, passportID string, createdBy string) (DownstreamServerPrivilegedPassport, error)
+	RemoveDownstreamServerPrivilegedPassport(ctx context.Context, serverID string, passportID string) error
+	DownstreamServerHasPrivilegedPassport(ctx context.Context, serverID string, passportID string) bool
 	ListLimboBlueprints(ctx context.Context) []LimboBlueprint
 	GetLimboBlueprint(ctx context.Context, id string) (LimboBlueprint, error)
 	UpsertLimboBlueprint(ctx context.Context, blueprint LimboBlueprint) (LimboBlueprint, error)

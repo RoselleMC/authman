@@ -97,6 +97,16 @@ func passportDetailData(passport identity.Passport, profiles []identity.Profile,
 	return data
 }
 
+func downstreamServerPrivilegedPassportData(allow store.DownstreamServerPrivilegedPassport, profiles []identity.Profile, presences []store.PlayerPresence) map[string]any {
+	data := passportRowData(allow.Passport, profiles, presences)
+	data["server_id"] = allow.ServerID
+	data["passport_id"] = allow.PassportID
+	data["privileges"] = allow.Privileges
+	data["allowed_at"] = allow.CreatedAt
+	data["created_by"] = allow.CreatedBy
+	return data
+}
+
 func profileRowData(profile identity.Profile, passport *identity.Passport, presences []store.PlayerPresence) map[string]any {
 	data := profileSummaryData(profile, presences)
 	avatarVersionTimes := []time.Time{profile.UpdatedAt}

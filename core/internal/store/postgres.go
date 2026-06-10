@@ -781,6 +781,27 @@ func passportOrderBy(sortKey string, dir string) string {
 	return expr + " " + direction + " NULLS LAST, uuid ASC"
 }
 
+func downstreamPrivilegeOrderBy(sortKey string, dir string) string {
+	direction := "ASC"
+	if dir == "desc" {
+		direction = "DESC"
+	}
+	expr := "lower(p.username)"
+	switch sortKey {
+	case "username":
+		expr = "lower(p.username)"
+	case "kind":
+		expr = "p.kind"
+	case "status":
+		expr = "p.status"
+	case "uuid":
+		expr = "p.uuid"
+	case "created":
+		expr = "a.created_at"
+	}
+	return expr + " " + direction + " NULLS LAST, p.uuid ASC"
+}
+
 func profileOrderBy(sortKey string, dir string) string {
 	direction := "ASC"
 	if dir == "desc" {
@@ -890,7 +911,12 @@ func (p *Postgres) UnbindProfile(ctx context.Context, profileID string) error {
 }
 
 func (p *Postgres) SetPassportStatus(ctx context.Context, id string, status identity.PassportStatus) (identity.Passport, error) {
-	passport, err := scanPassportRow(p.pool.QueryRow(ctx, `
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return identity.Passport{}, err
+	}
+	defer tx.Rollback(ctx)
+	passport, err := scanPassportRow(tx.QueryRow(ctx, `
 		UPDATE passports
 		SET status = $2, updated_at = now()
 		WHERE uuid = $1
@@ -899,7 +925,27 @@ func (p *Postgres) SetPassportStatus(ctx context.Context, id string, status iden
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
 	}
-	return passport, err
+	if err != nil {
+		return identity.Passport{}, err
+	}
+	if status == identity.PassportStatusDeleted {
+		if err := p.cleanupDeletedPassportReferencesTx(ctx, tx, passport.ID); err != nil {
+			return identity.Passport{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return identity.Passport{}, err
+	}
+	return passport, nil
+}
+
+func (p *Postgres) cleanupDeletedPassportReferencesTx(ctx context.Context, tx pgx.Tx, passportID string) error {
+	passportID = strings.TrimSpace(passportID)
+	if passportID == "" {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `DELETE FROM downstream_server_privileged_passports WHERE passport_id = $1`, passportID)
+	return err
 }
 
 func (p *Postgres) SetProfileStatus(ctx context.Context, id string, status identity.ProfileStatus) (identity.Profile, error) {
@@ -2169,6 +2215,98 @@ func (p *Postgres) DeleteDownstreamServer(ctx context.Context, id string) error 
 	return nil
 }
 
+func (p *Postgres) ListDownstreamServerPrivilegedPassports(ctx context.Context, serverID string, query IdentityListQuery) ([]DownstreamServerPrivilegedPassport, int, error) {
+	query = normalizeIdentityListQuery(query)
+	where := []string{"a.server_id = $1"}
+	args := []any{strings.TrimSpace(serverID)}
+	next := func(value any) string {
+		args = append(args, value)
+		return "$" + strconv.Itoa(len(args))
+	}
+	if query.Kind != "" {
+		where = append(where, "p.kind = "+next(query.Kind))
+	}
+	if query.Status != "" {
+		where = append(where, "p.status = "+next(query.Status))
+	}
+	if query.Search != "" {
+		needle := "%" + query.Search + "%"
+		where = append(where, "(p.uuid ILIKE "+next(needle)+" OR replace(p.uuid, '-', '') ILIKE "+next(needle)+" OR p.username ILIKE "+next(needle)+" OR p.username_normalized ILIKE "+next(needle)+" OR coalesce(p.raw_offline_name, '') ILIKE "+next(needle)+")")
+	}
+	whereSQL := " WHERE " + strings.Join(where, " AND ")
+	var total int
+	if err := p.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM downstream_server_privileged_passports a
+		JOIN passports p ON p.uuid = a.passport_id
+	`+whereSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	args = append(args, query.PageSize, (query.Page-1)*query.PageSize)
+	rows, err := p.pool.Query(ctx, `
+		SELECT a.server_id, a.passport_id, a.privileges, a.created_by, a.created_at,
+			p.uuid, p.kind, p.uuid, p.username, p.username_normalized, p.raw_offline_name, p.status, p.skin_source,
+			p.registration_server_id, p.last_seen_server_id, p.last_seen_at, p.last_seen_ip, p.last_seen_geo, p.created_at, p.updated_at
+		FROM downstream_server_privileged_passports a
+		JOIN passports p ON p.uuid = a.passport_id
+	`+whereSQL+`
+		ORDER BY `+downstreamPrivilegeOrderBy(query.Sort, query.Dir)+`
+		LIMIT $`+strconv.Itoa(len(args)-1)+` OFFSET $`+strconv.Itoa(len(args)), args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []DownstreamServerPrivilegedPassport{}
+	for rows.Next() {
+		allow, err := scanDownstreamServerPrivilegedPassportRow(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, allow)
+	}
+	return out, total, rows.Err()
+}
+
+func (p *Postgres) AddDownstreamServerPrivilegedPassport(ctx context.Context, serverID string, passportID string, createdBy string) (DownstreamServerPrivilegedPassport, error) {
+	passport, err := p.GetPassportByID(ctx, passportID)
+	if err != nil {
+		return DownstreamServerPrivilegedPassport{}, err
+	}
+	if passport.Status == identity.PassportStatusDeleted {
+		return DownstreamServerPrivilegedPassport{}, fmt.Errorf("passport is deleted")
+	}
+	var allow DownstreamServerPrivilegedPassport
+	err = p.pool.QueryRow(ctx, `
+		INSERT INTO downstream_server_privileged_passports (server_id, passport_id, privileges, created_by)
+		VALUES ($1, $2, ARRAY['maintenance_join']::text[], $3)
+		ON CONFLICT (server_id, passport_id) DO UPDATE
+		SET created_by = downstream_server_privileged_passports.created_by
+		RETURNING server_id, passport_id, privileges, created_by, created_at
+	`, strings.TrimSpace(serverID), strings.TrimSpace(passportID), strings.TrimSpace(createdBy)).Scan(&allow.ServerID, &allow.PassportID, &allow.Privileges, &allow.CreatedBy, &allow.CreatedAt)
+	if err != nil {
+		return DownstreamServerPrivilegedPassport{}, err
+	}
+	allow.Passport = passport
+	return allow, nil
+}
+
+func (p *Postgres) RemoveDownstreamServerPrivilegedPassport(ctx context.Context, serverID string, passportID string) error {
+	tag, err := p.pool.Exec(ctx, `DELETE FROM downstream_server_privileged_passports WHERE server_id = $1 AND passport_id = $2`, strings.TrimSpace(serverID), strings.TrimSpace(passportID))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("downstream server passport allow not found: %w", ErrNotFound)
+	}
+	return nil
+}
+
+func (p *Postgres) DownstreamServerHasPrivilegedPassport(ctx context.Context, serverID string, passportID string) bool {
+	var exists bool
+	err := p.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM downstream_server_privileged_passports WHERE server_id = $1 AND passport_id = $2)`, strings.TrimSpace(serverID), strings.TrimSpace(passportID)).Scan(&exists)
+	return err == nil && exists
+}
+
 func (p *Postgres) ListLimboBlueprints(ctx context.Context) []LimboBlueprint {
 	rows, err := p.pool.Query(ctx, fmt.Sprintf("SELECT %s FROM limbo_blueprints ORDER BY updated_at DESC, name ASC", limboBlueprintSelectColumns))
 	if err != nil {
@@ -3378,6 +3516,75 @@ func scanDownstreamServerRow(row playerScanner) (DownstreamServer, error) {
 	return normalizeDownstreamServer(server), nil
 }
 
+func scanDownstreamServerPrivilegedPassportRow(row playerScanner) (DownstreamServerPrivilegedPassport, error) {
+	var allow DownstreamServerPrivilegedPassport
+	var uuidText string
+	var kind string
+	var rawOfflineName *string
+	var status string
+	var skinSource string
+	var registrationServer *string
+	var lastSeenServer *string
+	var lastSeenAt *time.Time
+	var lastSeenIP *string
+	var lastSeenGeoRaw []byte
+	err := row.Scan(
+		&allow.ServerID,
+		&allow.PassportID,
+		&allow.Privileges,
+		&allow.CreatedBy,
+		&allow.CreatedAt,
+		&uuidText,
+		&kind,
+		&uuidText,
+		&allow.Passport.Username,
+		&allow.Passport.UsernameNormalized,
+		&rawOfflineName,
+		&status,
+		&skinSource,
+		&registrationServer,
+		&lastSeenServer,
+		&lastSeenAt,
+		&lastSeenIP,
+		&lastSeenGeoRaw,
+		&allow.Passport.CreatedAt,
+		&allow.Passport.UpdatedAt,
+	)
+	if err != nil {
+		return DownstreamServerPrivilegedPassport{}, err
+	}
+	uuid, err := identity.ParseUUID(uuidText)
+	if err != nil {
+		return DownstreamServerPrivilegedPassport{}, err
+	}
+	allow.Passport.UUID = uuid
+	allow.Passport.ID = uuid.String()
+	allow.Passport.Kind = identity.PassportKind(kind)
+	allow.Passport.Status = identity.PassportStatus(status)
+	allow.Passport.SkinSource = NormalizePassportSkinSource(allow.Passport.Kind, skinSource)
+	if allow.Passport.Kind == identity.PassportKindPremium {
+		premiumUUID := uuid
+		allow.Passport.PremiumUUID = &premiumUUID
+	}
+	if rawOfflineName != nil {
+		allow.Passport.RawOfflineName = *rawOfflineName
+	}
+	if registrationServer != nil {
+		allow.Passport.RegistrationServer = *registrationServer
+	}
+	if lastSeenServer != nil {
+		allow.Passport.LastSeenServer = *lastSeenServer
+	}
+	allow.Passport.LastSeenAt = lastSeenAt
+	if lastSeenIP != nil {
+		allow.Passport.LastSeenIP = *lastSeenIP
+	}
+	if len(lastSeenGeoRaw) > 0 {
+		_ = json.Unmarshal(lastSeenGeoRaw, &allow.Passport.LastSeenGeo)
+	}
+	return allow, nil
+}
+
 func scanLimboBlueprintRow(row playerScanner) (LimboBlueprint, error) {
 	var blueprint LimboBlueprint
 	var previewRaw []byte
@@ -3963,6 +4170,20 @@ CREATE TABLE IF NOT EXISTS downstream_servers (
 	created_at timestamptz NOT NULL DEFAULT now(),
 	updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS downstream_server_privileged_passports (
+	server_id text NOT NULL REFERENCES downstream_servers(id) ON DELETE CASCADE,
+	passport_id text NOT NULL REFERENCES passports(uuid) ON DELETE CASCADE,
+	privileges text[] NOT NULL DEFAULT ARRAY['maintenance_join']::text[],
+	created_by text NOT NULL DEFAULT '',
+	created_at timestamptz NOT NULL DEFAULT now(),
+	PRIMARY KEY (server_id, passport_id)
+);
+
+ALTER TABLE downstream_server_privileged_passports ADD COLUMN IF NOT EXISTS privileges text[] NOT NULL DEFAULT ARRAY['maintenance_join']::text[];
+
+CREATE INDEX IF NOT EXISTS downstream_server_privileged_passports_passport_idx
+	ON downstream_server_privileged_passports (passport_id);
 
 CREATE TABLE IF NOT EXISTS transfer_grants (
 	id text PRIMARY KEY,

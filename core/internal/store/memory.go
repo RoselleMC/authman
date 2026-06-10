@@ -18,74 +18,76 @@ import (
 )
 
 type Memory struct {
-	mu                  sync.RWMutex
-	nextID              int
-	nextAuditID         int
-	passportsByID       map[string]identity.Passport
-	profilesByID        map[string]identity.Profile
-	passportByUsername  map[string]string
-	profileLinks        map[string]identity.ProfilePassportLink
-	profilesByPassport  map[string]map[string]struct{}
-	playersByID         map[string]identity.Player
-	offlineByNormalized map[string]string
-	protocolNameIndex   map[string]string
-	credentialsByPlayer map[string]OfflineCredential
-	sessionsByID        map[string]auth.Session
-	portalLinksByToken  map[string]auth.PortalLink
-	auditEvents         []audit.Event
-	mojangRoutes        map[string]mojang.Route
-	systemSettings      map[string]map[string]any
-	presencesByID       map[string]PlayerPresence
-	bansByID            map[string]PlayerBan
-	nodeActionsByID     map[string]NodeAction
-	downstreamServers   map[string]DownstreamServer
-	limboBlueprints     map[string]LimboBlueprint
-	profileSkins        map[string]ProfileSkin
-	passportSkins       map[string]PassportSkin
-	transferGrants      map[string]auth.TransferGrant
-	extensionData       map[string]ExtensionPlayerData
-	adminRoles          map[string]rbac.Role
-	adminUsers          map[string]AdminUser
-	adminProfiles       map[string]AdminProfile
-	adminSecurity       map[string]AdminSecurity
-	adminPasskeys       map[string]AdminPasskey
-	pendingAdminMFAs    map[string]PendingAdminMFA
-	adminTrustedDevices map[string]AdminTrustedDevice
-	externalAPITokens   map[string]ExternalAPIToken
+	mu                   sync.RWMutex
+	nextID               int
+	nextAuditID          int
+	passportsByID        map[string]identity.Passport
+	profilesByID         map[string]identity.Profile
+	passportByUsername   map[string]string
+	profileLinks         map[string]identity.ProfilePassportLink
+	profilesByPassport   map[string]map[string]struct{}
+	playersByID          map[string]identity.Player
+	offlineByNormalized  map[string]string
+	protocolNameIndex    map[string]string
+	credentialsByPlayer  map[string]OfflineCredential
+	sessionsByID         map[string]auth.Session
+	portalLinksByToken   map[string]auth.PortalLink
+	auditEvents          []audit.Event
+	mojangRoutes         map[string]mojang.Route
+	systemSettings       map[string]map[string]any
+	presencesByID        map[string]PlayerPresence
+	bansByID             map[string]PlayerBan
+	nodeActionsByID      map[string]NodeAction
+	downstreamServers    map[string]DownstreamServer
+	downstreamPrivileges map[string]map[string]DownstreamServerPrivilegedPassport
+	limboBlueprints      map[string]LimboBlueprint
+	profileSkins         map[string]ProfileSkin
+	passportSkins        map[string]PassportSkin
+	transferGrants       map[string]auth.TransferGrant
+	extensionData        map[string]ExtensionPlayerData
+	adminRoles           map[string]rbac.Role
+	adminUsers           map[string]AdminUser
+	adminProfiles        map[string]AdminProfile
+	adminSecurity        map[string]AdminSecurity
+	adminPasskeys        map[string]AdminPasskey
+	pendingAdminMFAs     map[string]PendingAdminMFA
+	adminTrustedDevices  map[string]AdminTrustedDevice
+	externalAPITokens    map[string]ExternalAPIToken
 }
 
 func NewMemory() *Memory {
 	m := &Memory{
-		passportsByID:       make(map[string]identity.Passport),
-		profilesByID:        make(map[string]identity.Profile),
-		passportByUsername:  make(map[string]string),
-		profileLinks:        make(map[string]identity.ProfilePassportLink),
-		profilesByPassport:  make(map[string]map[string]struct{}),
-		playersByID:         make(map[string]identity.Player),
-		offlineByNormalized: make(map[string]string),
-		protocolNameIndex:   make(map[string]string),
-		credentialsByPlayer: make(map[string]OfflineCredential),
-		sessionsByID:        make(map[string]auth.Session),
-		portalLinksByToken:  make(map[string]auth.PortalLink),
-		mojangRoutes:        make(map[string]mojang.Route),
-		systemSettings:      make(map[string]map[string]any),
-		presencesByID:       make(map[string]PlayerPresence),
-		bansByID:            make(map[string]PlayerBan),
-		nodeActionsByID:     make(map[string]NodeAction),
-		downstreamServers:   make(map[string]DownstreamServer),
-		limboBlueprints:     make(map[string]LimboBlueprint),
-		profileSkins:        make(map[string]ProfileSkin),
-		passportSkins:       make(map[string]PassportSkin),
-		transferGrants:      make(map[string]auth.TransferGrant),
-		extensionData:       make(map[string]ExtensionPlayerData),
-		adminRoles:          make(map[string]rbac.Role),
-		adminUsers:          make(map[string]AdminUser),
-		adminProfiles:       make(map[string]AdminProfile),
-		adminSecurity:       make(map[string]AdminSecurity),
-		adminPasskeys:       make(map[string]AdminPasskey),
-		pendingAdminMFAs:    make(map[string]PendingAdminMFA),
-		adminTrustedDevices: make(map[string]AdminTrustedDevice),
-		externalAPITokens:   make(map[string]ExternalAPIToken),
+		passportsByID:        make(map[string]identity.Passport),
+		profilesByID:         make(map[string]identity.Profile),
+		passportByUsername:   make(map[string]string),
+		profileLinks:         make(map[string]identity.ProfilePassportLink),
+		profilesByPassport:   make(map[string]map[string]struct{}),
+		playersByID:          make(map[string]identity.Player),
+		offlineByNormalized:  make(map[string]string),
+		protocolNameIndex:    make(map[string]string),
+		credentialsByPlayer:  make(map[string]OfflineCredential),
+		sessionsByID:         make(map[string]auth.Session),
+		portalLinksByToken:   make(map[string]auth.PortalLink),
+		mojangRoutes:         make(map[string]mojang.Route),
+		systemSettings:       make(map[string]map[string]any),
+		presencesByID:        make(map[string]PlayerPresence),
+		bansByID:             make(map[string]PlayerBan),
+		nodeActionsByID:      make(map[string]NodeAction),
+		downstreamServers:    make(map[string]DownstreamServer),
+		downstreamPrivileges: make(map[string]map[string]DownstreamServerPrivilegedPassport),
+		limboBlueprints:      make(map[string]LimboBlueprint),
+		profileSkins:         make(map[string]ProfileSkin),
+		passportSkins:        make(map[string]PassportSkin),
+		transferGrants:       make(map[string]auth.TransferGrant),
+		extensionData:        make(map[string]ExtensionPlayerData),
+		adminRoles:           make(map[string]rbac.Role),
+		adminUsers:           make(map[string]AdminUser),
+		adminProfiles:        make(map[string]AdminProfile),
+		adminSecurity:        make(map[string]AdminSecurity),
+		adminPasskeys:        make(map[string]AdminPasskey),
+		pendingAdminMFAs:     make(map[string]PendingAdminMFA),
+		adminTrustedDevices:  make(map[string]AdminTrustedDevice),
+		externalAPITokens:    make(map[string]ExternalAPIToken),
 	}
 	return m
 }
@@ -644,8 +646,24 @@ func (m *Memory) SetPassportStatus(ctx context.Context, id string, status identi
 	passport.Status = status
 	passport.UpdatedAt = time.Now().UTC()
 	m.passportsByID[id] = passport
+	if status == identity.PassportStatusDeleted {
+		m.cleanupDeletedPassportReferencesLocked(id)
+	}
 	m.refreshPassportPlayersLocked(passport.ID)
 	return passport, nil
+}
+
+func (m *Memory) cleanupDeletedPassportReferencesLocked(passportID string) {
+	passportID = strings.TrimSpace(passportID)
+	if passportID == "" {
+		return
+	}
+	for serverID, rows := range m.downstreamPrivileges {
+		delete(rows, passportID)
+		if len(rows) == 0 {
+			delete(m.downstreamPrivileges, serverID)
+		}
+	}
 }
 
 func (m *Memory) SetProfileStatus(ctx context.Context, id string, status identity.ProfileStatus) (identity.Profile, error) {
@@ -1626,7 +1644,102 @@ func (m *Memory) DeleteDownstreamServer(ctx context.Context, id string) error {
 		return fmt.Errorf("downstream server not found: %w", ErrNotFound)
 	}
 	delete(m.downstreamServers, id)
+	delete(m.downstreamPrivileges, id)
 	return nil
+}
+
+func (m *Memory) ListDownstreamServerPrivilegedPassports(ctx context.Context, serverID string, query IdentityListQuery) ([]DownstreamServerPrivilegedPassport, int, error) {
+	search := strings.ToLower(strings.TrimSpace(query.Search))
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.downstreamServers[serverID]; !ok {
+		return nil, 0, fmt.Errorf("downstream server not found: %w", ErrNotFound)
+	}
+	rows := make([]DownstreamServerPrivilegedPassport, 0, len(m.downstreamPrivileges[serverID]))
+	for passportID, allow := range m.downstreamPrivileges[serverID] {
+		passport, ok := m.passportsByID[passportID]
+		if !ok {
+			continue
+		}
+		if query.Kind != "" && string(passport.Kind) != query.Kind {
+			continue
+		}
+		if query.Status != "" && string(passport.Status) != query.Status {
+			continue
+		}
+		if search != "" &&
+			!strings.Contains(strings.ToLower(passport.ID), search) &&
+			!strings.Contains(strings.ToLower(passport.Username), search) &&
+			!strings.Contains(strings.ToLower(passport.UsernameNormalized), search) &&
+			!strings.Contains(strings.ToLower(passport.UUID.String()), search) &&
+			!strings.Contains(strings.ToLower(passport.UUID.Compact()), search) {
+			continue
+		}
+		allow.Passport = passport
+		rows = append(rows, allow)
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		return strings.ToLower(rows[i].Passport.Username) < strings.ToLower(rows[j].Passport.Username)
+	})
+	total := len(rows)
+	start, end := listQueryBounds(total, query.Page, query.PageSize)
+	return append([]DownstreamServerPrivilegedPassport(nil), rows[start:end]...), total, nil
+}
+
+func (m *Memory) AddDownstreamServerPrivilegedPassport(ctx context.Context, serverID string, passportID string, createdBy string) (DownstreamServerPrivilegedPassport, error) {
+	serverID = strings.TrimSpace(serverID)
+	passportID = strings.TrimSpace(passportID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.downstreamServers[serverID]; !ok {
+		return DownstreamServerPrivilegedPassport{}, fmt.Errorf("downstream server not found: %w", ErrNotFound)
+	}
+	passport, ok := m.passportsByID[passportID]
+	if !ok {
+		return DownstreamServerPrivilegedPassport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	if passport.Status == identity.PassportStatusDeleted {
+		return DownstreamServerPrivilegedPassport{}, fmt.Errorf("passport is deleted")
+	}
+	if m.downstreamPrivileges[serverID] == nil {
+		m.downstreamPrivileges[serverID] = make(map[string]DownstreamServerPrivilegedPassport)
+	}
+	if existing, ok := m.downstreamPrivileges[serverID][passportID]; ok {
+		existing.Passport = passport
+		return existing, nil
+	}
+	allow := DownstreamServerPrivilegedPassport{
+		ServerID:   serverID,
+		PassportID: passportID,
+		Privileges: []string{"maintenance_join"},
+		CreatedBy:  strings.TrimSpace(createdBy),
+		CreatedAt:  time.Now().UTC(),
+		Passport:   passport,
+	}
+	m.downstreamPrivileges[serverID][passportID] = allow
+	return allow, nil
+}
+
+func (m *Memory) RemoveDownstreamServerPrivilegedPassport(ctx context.Context, serverID string, passportID string) error {
+	serverID = strings.TrimSpace(serverID)
+	passportID = strings.TrimSpace(passportID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.downstreamServers[serverID]; !ok {
+		return fmt.Errorf("downstream server not found: %w", ErrNotFound)
+	}
+	if _, ok := m.downstreamPrivileges[serverID][passportID]; !ok {
+		return fmt.Errorf("downstream server passport allow not found: %w", ErrNotFound)
+	}
+	delete(m.downstreamPrivileges[serverID], passportID)
+	return nil
+}
+
+func (m *Memory) DownstreamServerHasPrivilegedPassport(ctx context.Context, serverID string, passportID string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.downstreamPrivileges[strings.TrimSpace(serverID)][strings.TrimSpace(passportID)]
+	return ok
 }
 
 func (m *Memory) ListLimboBlueprints(ctx context.Context) []LimboBlueprint {

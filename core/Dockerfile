@@ -6,6 +6,7 @@ COPY authman/core/web ./
 RUN npm run build
 
 FROM golang:1.25-alpine AS build
+ENV GOPROXY=https://goproxy.cn,direct
 WORKDIR /src/authman
 COPY limbgo /src/limbgo
 COPY authman/go.mod ./

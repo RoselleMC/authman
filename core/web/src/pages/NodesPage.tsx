@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   AdvancedList,
   ApiError,
@@ -20,6 +20,7 @@ import {
   SecretReveal,
   coerceVelocityNode,
   formatRelativeTime,
+  navigateWithBack,
   useI18n,
   useListState,
   useToast,
@@ -71,6 +72,7 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
   const { t, tError } = useI18n();
   const { user } = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
   const toast = useToast();
   const qc = useQueryClient();
   const [deleteTarget, setDeleteTarget] = useState<SafeVelocityNode | null>(null);
@@ -343,7 +345,7 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
           state={list.state}
           onStateChange={list.setState}
           primaryActions={embedded ? issueButton : undefined}
-          onRowClick={(r) => navigate(`${kind === "limbo_portal" ? "/login-portals" : "/nodes"}/${encodeURIComponent(r.id)}`)}
+          onRowClick={(r) => navigateWithBack(navigate, `${kind === "limbo_portal" ? "/login-portals" : "/nodes"}/${encodeURIComponent(r.id)}`, location)}
           selectable
           selectionActions={(selectedRows) => (
             <Button size="sm" variant="danger-soft" icon="close" onClick={() => setBulkDeleteRows(selectedRows)}>

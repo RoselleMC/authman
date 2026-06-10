@@ -5,6 +5,7 @@
 
 export interface RuntimeConfig {
   apiBase: string;
+  basePath: string;
   appKind: "admin" | "player";
   defaultLocale: string;
 }
@@ -36,6 +37,11 @@ export function getRuntimeConfig(): RuntimeConfig {
     readViteEnv("VITE_AUTHMAN_API_BASE") ??
     "/api";
 
+  const basePath =
+    injected?.basePath ??
+    readViteEnv("VITE_AUTHMAN_BASE_PATH") ??
+    "";
+
   const appKindRaw =
     injected?.appKind ??
     readViteEnv("VITE_AUTHMAN_APP_KIND") ??
@@ -47,12 +53,23 @@ export function getRuntimeConfig(): RuntimeConfig {
     readViteEnv("VITE_AUTHMAN_DEFAULT_LOCALE") ??
     "zh";
 
-  cached = { apiBase: stripTrailingSlash(apiBase), appKind, defaultLocale };
+  cached = {
+    apiBase: stripTrailingSlash(apiBase),
+    basePath: normalizeBasePath(basePath),
+    appKind,
+    defaultLocale,
+  };
   return cached;
 }
 
 function stripTrailingSlash(s: string): string {
   return s.endsWith("/") ? s.slice(0, -1) : s;
+}
+
+function normalizeBasePath(s: string): string {
+  s = stripTrailingSlash(s.trim());
+  if (!s || s === "/") return "";
+  return s.startsWith("/") ? s : `/${s}`;
 }
 
 // Test/dev only.

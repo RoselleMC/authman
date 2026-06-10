@@ -1690,6 +1690,21 @@ func intValue(value any, fallback int) int {
 	return fallback
 }
 
+func boolValue(value any, fallback bool) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes", "on":
+			return true
+		case "false", "0", "no", "off":
+			return false
+		}
+	}
+	return fallback
+}
+
 func clampInt(value int, min int, max int) int {
 	if value < min {
 		return min
@@ -2710,6 +2725,10 @@ func (s *Server) adminConfigured() bool {
 func (s *Server) verifyAdminPassword(ctx context.Context, identifier string, password string) bool {
 	if !s.adminConfigured() || !s.adminIdentifierMatches(ctx, identifier) {
 		return false
+	}
+	if override := s.bootstrapAdminPasswordHash(ctx); override != "" {
+		ok, err := auth.VerifyPassword(password, override)
+		return err == nil && ok
 	}
 	if s.cfg.AdminPasswordHash != "" {
 		ok, err := auth.VerifyPassword(password, s.cfg.AdminPasswordHash)

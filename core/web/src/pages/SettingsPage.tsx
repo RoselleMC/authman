@@ -55,12 +55,15 @@ import {
   fetchExternalAPITokens,
   fetchIPGeoSettings,
   fetchMojangSettings,
+  fetchSMTPSettings,
   fetchSystemSummary,
   registerAdminPasskey,
   revokeExternalAPIToken,
+  sendSMTPTest,
   startAdminTOTP,
   confirmAdminTOTP,
   updateAdminAccountProfile,
+  updateAdminAccountPassword,
   updateAdminAccountPreferences,
   updateAdminUser,
   updateAdminRole,
@@ -68,6 +71,7 @@ import {
   updateExternalAPIToken,
   updateIPGeoSettings,
   updateMojangSettings,
+  updateSMTPSettings,
   type AdminAccountSecurity,
   type AdminPermission,
   type AdminRole,
@@ -77,12 +81,13 @@ import {
   type ListFilters,
   type MojangRuntimeSettings,
   type RouteChoice,
+  type SMTPSettings,
 } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
-type SettingsSection = "account" | "admins" | "roles" | "external-api" | "mojang" | "geo" | "system" | "security";
+type SettingsSection = "account" | "admins" | "roles" | "external-api" | "mojang" | "geo" | "smtp" | "system" | "security";
 
-const SECTIONS: SettingsSection[] = ["account", "admins", "roles", "external-api", "mojang", "geo", "system", "security"];
+const SECTIONS: SettingsSection[] = ["account", "admins", "roles", "external-api", "mojang", "geo", "smtp", "system", "security"];
 
 function roleTone(role: string): "info" | "success" | "neutral" {
   if (role === "owner") return "info";
@@ -117,6 +122,7 @@ export function SettingsPage() {
           { value: "external-api", label: t("admin.settings.externalApi"), icon: "key" },
           { value: "mojang", label: t("admin.settings.mojang"), icon: "activity" },
           { value: "geo", label: t("admin.settings.geo"), icon: "globe" },
+          { value: "smtp", label: t("admin.settings.smtp"), icon: "mail" },
           { value: "system", label: t("admin.settings.system"), icon: "database" },
           { value: "security", label: t("admin.settings.security"), icon: "key" },
         ]}
@@ -128,6 +134,7 @@ export function SettingsPage() {
         {current === "external-api" ? <ExternalAPITokensPanel /> : null}
         {current === "mojang" ? <MojangSettingsPanel /> : null}
         {current === "geo" ? <IPGeoSettingsPanel /> : null}
+        {current === "smtp" ? <SMTPSettingsPanel /> : null}
         {current === "system" ? <SystemPanel /> : null}
         {current === "security" ? <SecurityPanel /> : null}
       </div>
@@ -147,6 +154,9 @@ function AccountPanel() {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [avatarURL, setAvatarURL] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [nextPassword, setNextPassword] = useState("");
+  const [nextPasswordConfirm, setNextPasswordConfirm] = useState("");
   const [securityDialog, setSecurityDialog] = useState<"totp" | "passkeys" | null>(null);
   const [totpSetup, setTOTPSetup] = useState<{ secret: string; otpauth_url: string } | null>(null);
   const [totpCode, setTOTPCode] = useState("");
@@ -174,6 +184,15 @@ function AccountPanel() {
     onSuccess: () => {
       toast.push({ tone: "success", title: t("admin.account.saved") });
       void qc.invalidateQueries({ queryKey: ["admin.account"] });
+    },
+  });
+  const changePassword = useMutation({
+    mutationFn: () => updateAdminAccountPassword({ current_password: currentPassword, new_password: nextPassword }),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.account.password.saved") });
+      setCurrentPassword("");
+      setNextPassword("");
+      setNextPasswordConfirm("");
     },
   });
   const startTOTP = useMutation({
@@ -237,6 +256,7 @@ function AccountPanel() {
     email.trim() !== (account.user.email ?? "") ||
     avatarURL.trim() !== (account.user.avatar_url ?? "");
   const roleDisplay = account.user.role_alias ? `${account.user.role_alias} (${account.user.role})` : account.user.role;
+  const passwordReady = currentPassword.trim() !== "" && nextPassword.trim() !== "" && nextPassword === nextPasswordConfirm;
 
   function handleAvatarFile(file: File | undefined) {
     if (!file) return;
@@ -315,6 +335,35 @@ function AccountPanel() {
             </div>
           </div>
         </div>
+      </Card>
+
+      <Card
+        title={t("admin.account.password")}
+        actions={
+          <Button
+            variant="primary"
+            icon="check"
+            loading={changePassword.isPending}
+            disabled={!passwordReady}
+            onClick={() => changePassword.mutate()}
+            data-testid="account-password-save"
+          >
+            {t("admin.account.password.save")}
+          </Button>
+        }
+      >
+        <div className="settings-form-grid">
+          <Field label={t("admin.account.password.current")}>
+            <PasswordInput value={currentPassword} autoComplete="current-password" onChange={(e) => setCurrentPassword(e.target.value)} data-testid="account-current-password" />
+          </Field>
+          <Field label={t("admin.account.password.next")} hint={t("admin.account.password.hint")}>
+            <PasswordInput value={nextPassword} autoComplete="new-password" onChange={(e) => setNextPassword(e.target.value)} data-testid="account-new-password" />
+          </Field>
+          <Field label={t("admin.account.password.confirm")}>
+            <PasswordInput value={nextPasswordConfirm} autoComplete="new-password" onChange={(e) => setNextPasswordConfirm(e.target.value)} data-testid="account-confirm-password" />
+          </Field>
+        </div>
+        {nextPasswordConfirm && nextPassword !== nextPasswordConfirm ? <Alert tone="warning">{t("login.reset.passwordMismatch")}</Alert> : null}
       </Card>
 
       <Card title={t("admin.account.securityMethods")}>
@@ -1626,6 +1675,134 @@ function IPGeoSettingsPanel() {
   );
 }
 
+function SMTPSettingsPanel() {
+  const { t } = useI18n();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["settings.smtp"], queryFn: fetchSMTPSettings });
+  const [form, setForm] = useState<SMTPSettings | null>(null);
+  const [passwordDraft, setPasswordDraft] = useState("");
+  const [testTo, setTestTo] = useState("");
+
+  useEffect(() => {
+    if (q.data) {
+      setForm(q.data);
+      setPasswordDraft("");
+    }
+  }, [q.data]);
+
+  const save = useMutation({
+    mutationFn: () => updateSMTPSettings({ ...form!, password: passwordDraft || undefined }),
+    onSuccess: (next) => {
+      setForm(next);
+      setPasswordDraft("");
+      toast.push({ tone: "success", title: t("admin.settings.smtp.saved") });
+      void qc.invalidateQueries({ queryKey: ["settings.smtp"] });
+    },
+  });
+
+  const test = useMutation({
+    mutationFn: () => sendSMTPTest(testTo.trim()),
+    onSuccess: (result) => {
+      toast.push({ tone: "success", title: t(result.delivery === "log" ? "admin.settings.smtp.test.logged" : "admin.settings.smtp.test.sent") });
+      void qc.invalidateQueries({ queryKey: ["settings.smtp"] });
+    },
+  });
+
+  if (q.error) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
+  if (q.isLoading || !form) return <LoadingState />;
+
+  return (
+    <SettingsStack>
+      <Card
+        title={t("admin.settings.smtp")}
+        actions={<Button variant="primary" icon="check" loading={save.isPending} onClick={() => save.mutate()}>{t("common.save")}</Button>}
+      >
+        <p className="section-copy">{t("admin.settings.smtp.desc")}</p>
+        <div className="settings-form-grid">
+          <Field label={t("admin.settings.smtp.enabled")}>
+            <label className="toggle-row">
+              <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} data-testid="smtp-enabled" />
+              <span>{form.enabled ? t("status.enabled") : t("status.disabled")}</span>
+            </label>
+          </Field>
+          <Field label={t("admin.settings.smtp.deliveryMode")} hint={t("admin.settings.smtp.deliveryMode.hint")}>
+            <Select
+              value={form.delivery_mode}
+              onChange={(value) => setForm({ ...form, delivery_mode: value as SMTPSettings["delivery_mode"] })}
+              options={[
+                { value: "smtp", label: t("admin.settings.smtp.delivery.smtp") },
+                { value: "log", label: t("admin.settings.smtp.delivery.log") },
+              ]}
+              testId="smtp-delivery-mode"
+            />
+          </Field>
+          <Field label={t("admin.settings.smtp.security")}>
+            <Select
+              value={form.security}
+              onChange={(value) => setForm({ ...form, security: value as SMTPSettings["security"] })}
+              options={[
+                { value: "starttls", label: "STARTTLS" },
+                { value: "tls", label: "TLS" },
+                { value: "none", label: t("common.none") },
+              ]}
+              testId="smtp-security"
+            />
+          </Field>
+          <Field label={t("admin.settings.smtp.host")}>
+            <Input value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder="smtp.example.com" data-testid="smtp-host" />
+          </Field>
+          <Field label={t("admin.settings.smtp.port")}>
+            <Input type="number" min={1} max={65535} value={form.port} onChange={(e) => setForm({ ...form, port: Number(e.target.value) || 587 })} data-testid="smtp-port" />
+          </Field>
+          <Field label={t("admin.settings.smtp.username")}>
+            <Input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} autoComplete="username" data-testid="smtp-username" />
+          </Field>
+          <Field label={t("admin.settings.smtp.password")} hint={form.password_set ? t("admin.settings.smtp.password.saved") : t("admin.settings.smtp.password.empty")}>
+            <PasswordInput value={passwordDraft} onChange={(e) => setPasswordDraft(e.target.value)} autoComplete="new-password" data-testid="smtp-password" />
+          </Field>
+          <Field label={t("admin.settings.smtp.fromName")}>
+            <Input value={form.from_name} onChange={(e) => setForm({ ...form, from_name: e.target.value })} data-testid="smtp-from-name" />
+          </Field>
+          <Field label={t("admin.settings.smtp.fromEmail")}>
+            <Input type="email" value={form.from_email} onChange={(e) => setForm({ ...form, from_email: e.target.value })} data-testid="smtp-from-email" />
+          </Field>
+          <Field label={t("admin.settings.smtp.replyTo")}>
+            <Input type="email" value={form.reply_to} onChange={(e) => setForm({ ...form, reply_to: e.target.value })} data-testid="smtp-reply-to" />
+          </Field>
+          <Field label={t("admin.settings.smtp.timeout")}>
+            <Input type="number" min={1} max={60} value={form.timeout_seconds} onChange={(e) => setForm({ ...form, timeout_seconds: Number(e.target.value) || 10 })} data-testid="smtp-timeout" />
+          </Field>
+          <Field label={t("admin.settings.smtp.resetTTL")}>
+            <Input type="number" min={5} max={1440} value={form.reset_token_ttl_minutes} onChange={(e) => setForm({ ...form, reset_token_ttl_minutes: Number(e.target.value) || 30 })} data-testid="smtp-reset-ttl" />
+          </Field>
+        </div>
+        {form.delivery_mode === "log" ? <Alert tone="info">{t("admin.settings.smtp.logModeHint")}</Alert> : null}
+      </Card>
+      <Card
+        title={t("admin.settings.smtp.test")}
+        actions={<Button variant="secondary" icon="mail" loading={test.isPending} disabled={!form.enabled || !testTo.trim()} onClick={() => test.mutate()}>{t("admin.settings.smtp.test.send")}</Button>}
+      >
+        <div className="settings-form-grid settings-form-grid--single">
+          <Field label={t("admin.settings.smtp.test.to")}>
+            <Input type="email" value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="admin@example.com" data-testid="smtp-test-to" />
+          </Field>
+        </div>
+        {form.last_message ? (
+          <div className="settings-token-once" data-testid="smtp-last-message">
+            <ConfigGrid>
+              <ConfigRow k={t("admin.settings.smtp.last.to")} v={form.last_message.to ?? "—"} />
+              <ConfigRow k={t("admin.settings.smtp.last.subject")} v={form.last_message.subject ?? "—"} />
+              <ConfigRow k={t("admin.settings.smtp.last.createdAt")} v={form.last_message.created_at ? formatAbsTime(form.last_message.created_at) : "—"} />
+            </ConfigGrid>
+            <code>{form.last_message.body ?? ""}</code>
+          </div>
+        ) : null}
+      </Card>
+    </SettingsStack>
+  );
+}
+
 function RouteSelection({ routes, selected, onChange }: { routes: RouteChoice[]; selected: string[]; onChange: (next: string[]) => void }) {
   const { t } = useI18n();
   const effective = selected.length ? new Set(selected) : new Set(routes.filter((r) => !r.disabled).map((r) => r.id));
@@ -1715,15 +1892,9 @@ function SecurityPanel() {
   return (
     <PlaceholderGrid>
       <PlaceholderCard
-        icon="external"
-        title={t("admin.settings.smtp")}
-        desc={t("admin.settings.smtp.placeholder")}
-        testId="placeholder-smtp"
-      />
-      <PlaceholderCard
         icon="key"
         title={t("admin.settings.2fa")}
-        desc={t("admin.settings.2fa.placeholder")}
+        desc={t("admin.settings.2fa.accountHint")}
         testId="placeholder-2fa"
       />
     </PlaceholderGrid>

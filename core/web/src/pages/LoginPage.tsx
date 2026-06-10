@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Alert,
   ApiError,
@@ -12,17 +12,23 @@ import {
   ThemeToggle,
   useI18n,
 } from "@authman/shared";
-import { adminBootstrapStatus, adminMFAPasskey, adminMFATOTP } from "../api/admin";
+import { adminBootstrapStatus, adminMFAPasskey, adminMFATOTP, confirmAdminPasswordReset, requestAdminPasswordReset } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
 export function LoginPage() {
   const { t, tError } = useI18n();
   const { user, login, refresh } = useSession();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const resetToken = searchParams.get("reset_token") ?? "";
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [forgotMode, setForgotMode] = useState(false);
   const [mfaMethods, setMfaMethods] = useState<Array<"totp" | "passkey">>([]);
   const [totpCode, setTotpCode] = useState("");
   const [trustDevice, setTrustDevice] = useState(true);
@@ -52,6 +58,44 @@ export function LoginPage() {
         return;
       }
       navigate("/", { replace: true });
+    } catch (err) {
+      setError(err instanceof ApiError ? tError(err.code) : t("common.unknown"));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handlePasswordResetRequest(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setNotice(null);
+    setSubmitting(true);
+    try {
+      await requestAdminPasswordReset(identifier);
+      setNotice(t("login.reset.requested"));
+      setForgotMode(false);
+    } catch (err) {
+      setError(err instanceof ApiError ? tError(err.code) : t("common.unknown"));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handlePasswordResetConfirm(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setNotice(null);
+    if (newPassword !== newPasswordConfirm) {
+      setError(t("login.reset.passwordMismatch"));
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await confirmAdminPasswordReset(resetToken, newPassword);
+      setNotice(t("login.reset.complete"));
+      setNewPassword("");
+      setNewPasswordConfirm("");
+      navigate("/login", { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? tError(err.code) : t("common.unknown"));
     } finally {
@@ -89,6 +133,7 @@ export function LoginPage() {
   }
 
   const isBootstrap = bootstrap === "needed";
+  const isReset = resetToken.trim() !== "";
 
   return (
     <div className="auth-screen">
@@ -103,7 +148,7 @@ export function LoginPage() {
       </div>
       <div className="auth-body">
         <div className="auth-card">
-          {isBootstrap ? (
+          {isBootstrap && !isReset ? (
             <>
               <div className="auth-head">
                 <h1>{t("login.bootstrap.required")}</h1>
@@ -116,6 +161,54 @@ export function LoginPage() {
     --username admin</pre>
               <p className="auth-foot-note">{t("login.bootstrap.refresh")}</p>
             </>
+          ) : isReset ? (
+            <>
+              <div className="auth-head">
+                <h1>{t("login.reset.heading")}</h1>
+                <p>{t("login.reset.subheading")}</p>
+              </div>
+              {error ? (
+                <Alert tone="danger" testId="login-error">
+                  {error}
+                </Alert>
+              ) : null}
+              {notice ? <Alert tone="success">{notice}</Alert> : null}
+              <form onSubmit={handlePasswordResetConfirm} className="auth-form" data-testid="admin-reset-confirm-form">
+                <Field label={t("login.reset.newPassword")} htmlFor="adm-new-pw">
+                  <PasswordInput
+                    id="adm-new-pw"
+                    icon="lock"
+                    autoComplete="new-password"
+                    required
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    data-testid="admin-reset-new-password"
+                  />
+                </Field>
+                <Field label={t("login.reset.confirmPassword")} htmlFor="adm-new-pw-confirm">
+                  <PasswordInput
+                    id="adm-new-pw-confirm"
+                    icon="lock"
+                    autoComplete="new-password"
+                    required
+                    value={newPasswordConfirm}
+                    onChange={(e) => setNewPasswordConfirm(e.target.value)}
+                    data-testid="admin-reset-confirm-password"
+                  />
+                </Field>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="lg"
+                  block
+                  loading={submitting}
+                  disabled={!newPassword || !newPasswordConfirm}
+                  data-testid="admin-reset-submit"
+                >
+                  {t("login.reset.submit")}
+                </Button>
+              </form>
+            </>
           ) : (
             <>
               <div className="auth-head">
@@ -127,6 +220,7 @@ export function LoginPage() {
                   {error}
                 </Alert>
               ) : null}
+              {notice ? <Alert tone="success">{notice}</Alert> : null}
               {mfaMethods.length > 0 ? (
                 <form onSubmit={handleTOTP} className="auth-form" data-testid="admin-mfa-form">
                   <Alert tone="info">{t("login.mfa.required")}</Alert>
@@ -159,7 +253,7 @@ export function LoginPage() {
                   ) : null}
                 </form>
               ) : (
-              <form onSubmit={handleSubmit} className="auth-form">
+              <form onSubmit={forgotMode ? handlePasswordResetRequest : handleSubmit} className="auth-form">
                 <Field label={t("common.usernameOrEmail")} htmlFor="adm-username">
                   <Input
                     id="adm-username"
@@ -172,17 +266,19 @@ export function LoginPage() {
                     data-testid="admin-username"
                   />
                 </Field>
-                <Field label={t("common.password")} htmlFor="adm-pw">
-                  <PasswordInput
-                    id="adm-pw"
-                    icon="lock"
-                    autoComplete="current-password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    data-testid="admin-password"
-                  />
-                </Field>
+                {forgotMode ? null : (
+                  <Field label={t("common.password")} htmlFor="adm-pw">
+                    <PasswordInput
+                      id="adm-pw"
+                      icon="lock"
+                      autoComplete="current-password"
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      data-testid="admin-password"
+                    />
+                  </Field>
+                )}
                 <Button
                   type="submit"
                   variant="primary"
@@ -192,7 +288,20 @@ export function LoginPage() {
                   iconRight={submitting ? undefined : "arrowRight"}
                   data-testid="admin-submit"
                 >
-                  {submitting ? t("login.admin.submitting") : t("common.signIn")}
+                  {forgotMode ? t("login.reset.requestSubmit") : submitting ? t("login.admin.submitting") : t("common.signIn")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  block
+                  onClick={() => {
+                    setForgotMode(!forgotMode);
+                    setError(null);
+                    setNotice(null);
+                  }}
+                  data-testid="admin-forgot-password"
+                >
+                  {forgotMode ? t("login.reset.backToLogin") : t("login.reset.forgot")}
                 </Button>
               </form>
               )}

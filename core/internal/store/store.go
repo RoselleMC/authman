@@ -249,6 +249,15 @@ type AdminTrustedDevice struct {
 	ExpiresAt time.Time
 }
 
+type AdminPasswordReset struct {
+	ID        string
+	AdminID   string
+	TokenHash string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	UsedAt    *time.Time
+}
+
 type ExternalAPITokenStatus string
 
 const (
@@ -370,6 +379,7 @@ type PlayerStore interface {
 	CreateAdminUser(ctx context.Context, user AdminUser) (AdminUser, error)
 	UpdateAdminUserProfile(ctx context.Context, id string, username string, email string) (AdminUser, error)
 	UpdateAdminUser(ctx context.Context, user AdminUser) (AdminUser, error)
+	UpdateAdminUserPassword(ctx context.Context, id string, passwordHash string) error
 	GetAdminProfile(ctx context.Context, adminID string) (AdminProfile, error)
 	UpsertAdminProfile(ctx context.Context, profile AdminProfile) (AdminProfile, error)
 	ListAdminRoles(ctx context.Context) []rbac.Role
@@ -386,6 +396,9 @@ type PlayerStore interface {
 	DeletePendingAdminMFA(ctx context.Context, id string) error
 	CreateAdminTrustedDevice(ctx context.Context, device AdminTrustedDevice) (AdminTrustedDevice, error)
 	GetAdminTrustedDevice(ctx context.Context, tokenHash string, now time.Time) (AdminTrustedDevice, error)
+	SaveAdminPasswordReset(ctx context.Context, reset AdminPasswordReset) (AdminPasswordReset, error)
+	GetAdminPasswordReset(ctx context.Context, tokenHash string, now time.Time) (AdminPasswordReset, error)
+	MarkAdminPasswordResetUsed(ctx context.Context, id string, now time.Time) error
 	ListExternalAPITokens(ctx context.Context) []ExternalAPIToken
 	GetExternalAPIToken(ctx context.Context, id string) (ExternalAPIToken, error)
 	CreateExternalAPIToken(ctx context.Context, token ExternalAPIToken) (ExternalAPIToken, error)

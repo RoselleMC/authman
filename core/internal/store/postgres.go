@@ -2681,6 +2681,21 @@ func (p *Postgres) UpdateAdminUser(ctx context.Context, user AdminUser) (AdminUs
 	return updated, nil
 }
 
+func (p *Postgres) UpdateAdminUserPassword(ctx context.Context, id string, passwordHash string) error {
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE admin_users
+		SET password_hash = $2, updated_at = now()
+		WHERE id = $1
+	`, id, passwordHash)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("admin user not found: %w", ErrNotFound)
+	}
+	return nil
+}
+
 func (p *Postgres) GetAdminProfile(ctx context.Context, adminID string) (AdminProfile, error) {
 	var profile AdminProfile
 	err := p.pool.QueryRow(ctx, `
@@ -2989,6 +3004,62 @@ func (p *Postgres) GetAdminTrustedDevice(ctx context.Context, tokenHash string, 
 		return AdminTrustedDevice{}, fmt.Errorf("trusted device not found: %w", ErrNotFound)
 	}
 	return device, err
+}
+
+func (p *Postgres) SaveAdminPasswordReset(ctx context.Context, reset AdminPasswordReset) (AdminPasswordReset, error) {
+	id, err := randomID("admin-reset")
+	if err != nil {
+		return AdminPasswordReset{}, err
+	}
+	reset.ID = id
+	err = p.pool.QueryRow(ctx, `
+		INSERT INTO admin_password_resets (id, admin_id, token_hash, expires_at)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, admin_id, token_hash, created_at, expires_at, used_at
+	`, reset.ID, reset.AdminID, reset.TokenHash, reset.ExpiresAt).Scan(
+		&reset.ID,
+		&reset.AdminID,
+		&reset.TokenHash,
+		&reset.CreatedAt,
+		&reset.ExpiresAt,
+		&reset.UsedAt,
+	)
+	return reset, err
+}
+
+func (p *Postgres) GetAdminPasswordReset(ctx context.Context, tokenHash string, now time.Time) (AdminPasswordReset, error) {
+	var reset AdminPasswordReset
+	err := p.pool.QueryRow(ctx, `
+		SELECT id, admin_id, token_hash, created_at, expires_at, used_at
+		FROM admin_password_resets
+		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2
+	`, tokenHash, now.UTC()).Scan(
+		&reset.ID,
+		&reset.AdminID,
+		&reset.TokenHash,
+		&reset.CreatedAt,
+		&reset.ExpiresAt,
+		&reset.UsedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AdminPasswordReset{}, fmt.Errorf("password reset not found: %w", ErrNotFound)
+	}
+	return reset, err
+}
+
+func (p *Postgres) MarkAdminPasswordResetUsed(ctx context.Context, id string, now time.Time) error {
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE admin_password_resets
+		SET used_at = $2
+		WHERE id = $1 AND used_at IS NULL
+	`, id, now.UTC())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("password reset not found: %w", ErrNotFound)
+	}
+	return nil
 }
 
 func (p *Postgres) ListExternalAPITokens(ctx context.Context) []ExternalAPIToken {
@@ -4019,6 +4090,20 @@ CREATE TABLE IF NOT EXISTS admin_trusted_devices (
 
 CREATE INDEX IF NOT EXISTS admin_trusted_devices_admin_id_idx ON admin_trusted_devices (admin_id);
 CREATE INDEX IF NOT EXISTS admin_trusted_devices_expires_at_idx ON admin_trusted_devices (expires_at);
+
+CREATE TABLE IF NOT EXISTS admin_password_resets (
+	id text PRIMARY KEY,
+	admin_id text NOT NULL,
+	token_hash text NOT NULL UNIQUE,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	expires_at timestamptz NOT NULL,
+	used_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS admin_password_resets_admin_id_idx ON admin_password_resets (admin_id);
+CREATE INDEX IF NOT EXISTS admin_password_resets_expires_at_idx ON admin_password_resets (expires_at);
+CREATE INDEX IF NOT EXISTS admin_password_resets_unused_idx ON admin_password_resets (token_hash)
+	WHERE used_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS external_api_tokens (
 	id text PRIMARY KEY,

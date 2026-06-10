@@ -52,6 +52,7 @@ type Memory struct {
 	adminPasskeys        map[string]AdminPasskey
 	pendingAdminMFAs     map[string]PendingAdminMFA
 	adminTrustedDevices  map[string]AdminTrustedDevice
+	adminPasswordResets  map[string]AdminPasswordReset
 	externalAPITokens    map[string]ExternalAPIToken
 }
 
@@ -87,6 +88,7 @@ func NewMemory() *Memory {
 		adminPasskeys:        make(map[string]AdminPasskey),
 		pendingAdminMFAs:     make(map[string]PendingAdminMFA),
 		adminTrustedDevices:  make(map[string]AdminTrustedDevice),
+		adminPasswordResets:  make(map[string]AdminPasswordReset),
 		externalAPITokens:    make(map[string]ExternalAPIToken),
 	}
 	return m
@@ -2007,6 +2009,19 @@ func (m *Memory) UpdateAdminUser(ctx context.Context, user AdminUser) (AdminUser
 	return existing, nil
 }
 
+func (m *Memory) UpdateAdminUserPassword(ctx context.Context, id string, passwordHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	user, ok := m.adminUsers[id]
+	if !ok {
+		return fmt.Errorf("admin user not found: %w", ErrNotFound)
+	}
+	user.PasswordHash = passwordHash
+	user.UpdatedAt = time.Now().UTC()
+	m.adminUsers[id] = user
+	return nil
+}
+
 func (m *Memory) GetAdminProfile(ctx context.Context, adminID string) (AdminProfile, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -2205,6 +2220,42 @@ func (m *Memory) GetAdminTrustedDevice(ctx context.Context, tokenHash string, no
 		}
 	}
 	return AdminTrustedDevice{}, fmt.Errorf("trusted device not found: %w", ErrNotFound)
+}
+
+func (m *Memory) SaveAdminPasswordReset(ctx context.Context, reset AdminPasswordReset) (AdminPasswordReset, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	reset.ID = "admin-reset-" + strconv.Itoa(m.nextID)
+	if reset.CreatedAt.IsZero() {
+		reset.CreatedAt = time.Now().UTC()
+	}
+	m.adminPasswordResets[reset.ID] = reset
+	return reset, nil
+}
+
+func (m *Memory) GetAdminPasswordReset(ctx context.Context, tokenHash string, now time.Time) (AdminPasswordReset, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, reset := range m.adminPasswordResets {
+		if reset.TokenHash == tokenHash && reset.UsedAt == nil && now.UTC().Before(reset.ExpiresAt) {
+			return reset, nil
+		}
+	}
+	return AdminPasswordReset{}, fmt.Errorf("password reset not found: %w", ErrNotFound)
+}
+
+func (m *Memory) MarkAdminPasswordResetUsed(ctx context.Context, id string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	reset, ok := m.adminPasswordResets[id]
+	if !ok {
+		return fmt.Errorf("password reset not found: %w", ErrNotFound)
+	}
+	usedAt := now.UTC()
+	reset.UsedAt = &usedAt
+	m.adminPasswordResets[id] = reset
+	return nil
 }
 
 func (m *Memory) ListExternalAPITokens(ctx context.Context) []ExternalAPIToken {

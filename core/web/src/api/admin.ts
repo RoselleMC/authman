@@ -41,6 +41,22 @@ export async function adminLogin(identifier: string, password: string): Promise<
   return { kind: "ok", user: res.data.user };
 }
 
+export async function requestAdminPasswordReset(identifier: string): Promise<void> {
+  await apiFetch<null>("/admin/session/password-reset/request", {
+    method: "POST",
+    body: { identifier },
+    skipCsrf: true,
+  });
+}
+
+export async function confirmAdminPasswordReset(token: string, newPassword: string): Promise<void> {
+  await apiFetch<null>("/admin/session/password-reset/confirm", {
+    method: "POST",
+    body: { token, new_password: newPassword },
+    skipCsrf: true,
+  });
+}
+
 export async function adminMFATOTP(code: string, trustDevice: boolean): Promise<AdminMe> {
   const res = await apiFetch<LoginResponse>("/admin/session/mfa/totp", {
     method: "POST",
@@ -619,6 +635,46 @@ export async function updateBrandingSettings(input: BrandingSettings): Promise<B
   return res.data;
 }
 
+export interface SMTPSettings {
+  enabled: boolean;
+  delivery_mode: "smtp" | "log";
+  host: string;
+  port: number;
+  security: "none" | "starttls" | "tls";
+  username: string;
+  password?: string;
+  password_set: boolean;
+  clear_password?: boolean;
+  from_name: string;
+  from_email: string;
+  reply_to: string;
+  timeout_seconds: number;
+  reset_token_ttl_minutes: number;
+  last_message?: {
+    to?: string;
+    subject?: string;
+    body?: string;
+    created_at?: string;
+  };
+}
+
+export async function fetchSMTPSettings(): Promise<SMTPSettings> {
+  const res = await apiFetch<SMTPSettings>("/admin/settings/smtp");
+  return res.data;
+}
+
+export async function updateSMTPSettings(input: SMTPSettings): Promise<SMTPSettings> {
+  const body = { ...input };
+  delete body.last_message;
+  const res = await apiFetch<SMTPSettings>("/admin/settings/smtp", { method: "PUT", body });
+  return res.data;
+}
+
+export async function sendSMTPTest(to: string): Promise<{ ok: boolean; delivery: "smtp" | "log" }> {
+  const res = await apiFetch<{ ok: boolean; delivery: "smtp" | "log" }>("/admin/settings/smtp/test", { method: "POST", body: { to } });
+  return res.data;
+}
+
 export interface ExternalAPIToken {
   id: string;
   name: string;
@@ -1090,6 +1146,13 @@ export async function updateAdminAccountPreferences(input: {
 }): Promise<AdminAccountSecurity> {
   const res = await apiFetch<AdminAccountSecurity>("/admin/account/preferences", { method: "PUT", body: input });
   return res.data;
+}
+
+export async function updateAdminAccountPassword(input: {
+  current_password: string;
+  new_password: string;
+}): Promise<void> {
+  await apiFetch<null>("/admin/account/password", { method: "POST", body: input });
 }
 
 export async function startAdminTOTP(): Promise<{ secret: string; otpauth_url: string }> {

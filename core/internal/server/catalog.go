@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/RoselleMC/authman/core/internal/extensions"
@@ -33,7 +35,7 @@ func passportRowData(passport identity.Passport, profiles []identity.Profile, pr
 		"uuid":                passport.UUID.String(),
 		"uuid_compact":        passport.UUID.Compact(),
 		"username":            passport.Username,
-		"avatar_url":          "/api/assets/passports/" + passport.ID + "/avatar.png",
+		"avatar_url":          cacheBustedAssetURL("/api/assets/passports/"+passport.ID+"/avatar.png", passport.UpdatedAt),
 		"username_normalized": passport.UsernameNormalized,
 		"raw_offline_name":    passport.RawOfflineName,
 		"status":              passport.Status,
@@ -97,6 +99,11 @@ func passportDetailData(passport identity.Passport, profiles []identity.Profile,
 
 func profileRowData(profile identity.Profile, passport *identity.Passport, presences []store.PlayerPresence) map[string]any {
 	data := profileSummaryData(profile, presences)
+	avatarVersionTimes := []time.Time{profile.UpdatedAt}
+	if passport != nil {
+		avatarVersionTimes = append(avatarVersionTimes, passport.UpdatedAt)
+	}
+	data["avatar_url"] = cacheBustedAssetURL("/api/assets/profiles/"+profile.ID+"/avatar.png", avatarVersionTimes...)
 	data["uuid_compact"] = profile.UUID.Compact()
 	data["display_name"] = profile.DisplayName
 	data["status"] = profile.Status
@@ -143,7 +150,7 @@ func profileSummaryData(profile identity.Profile, presences []store.PlayerPresen
 	return map[string]any{
 		"id":              profile.ID,
 		"uuid":            profile.UUID.String(),
-		"avatar_url":      "/api/assets/profiles/" + profile.ID + "/avatar.png",
+		"avatar_url":      cacheBustedAssetURL("/api/assets/profiles/"+profile.ID+"/avatar.png", profile.UpdatedAt),
 		"protocol_name":   profile.ProtocolName,
 		"normalized_name": profile.NormalizedName,
 		"display_name":    profile.DisplayName,
@@ -156,6 +163,30 @@ func profileSummaryData(profile identity.Profile, presences []store.PlayerPresen
 		"ban_expires_at":  nil,
 		"locked_until":    nil,
 	}
+}
+
+func cacheBustedAssetURL(raw string, times ...time.Time) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return raw
+	}
+	var version int64
+	for _, t := range times {
+		if t.IsZero() {
+			continue
+		}
+		if ts := t.UTC().UnixNano(); ts > version {
+			version = ts
+		}
+	}
+	if version == 0 {
+		return raw
+	}
+	separator := "?"
+	if strings.Contains(raw, "?") {
+		separator = "&"
+	}
+	return raw + separator + "v=" + strconv.FormatInt(version, 10)
 }
 
 func presencesForProfile(presences []store.PlayerPresence, profileID string) []store.PlayerPresence {

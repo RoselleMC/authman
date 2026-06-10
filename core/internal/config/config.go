@@ -13,6 +13,7 @@ import (
 
 type Config struct {
 	HTTPAddr           string
+	ExternalHTTPAddr   string
 	DatabaseURL        string
 	PublicBaseURL      string
 	WebRoot            string
@@ -36,6 +37,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		HTTPAddr:           envString("AUTHMAN_HTTP_ADDR", ":8080"),
+		ExternalHTTPAddr:   envString("AUTHMAN_EXTERNAL_HTTP_ADDR", ""),
 		DatabaseURL:        envString("AUTHMAN_DATABASE_URL", ""),
 		PublicBaseURL:      envString("AUTHMAN_PUBLIC_BASE_URL", "http://localhost:8080"),
 		WebRoot:            envString("AUTHMAN_CORE_WEB_ROOT", ""),

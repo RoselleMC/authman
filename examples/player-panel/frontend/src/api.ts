@@ -95,9 +95,10 @@ export interface PortalSession {
   expires_at?: string;
 }
 
-export interface PortalProfileSkin {
+export interface PortalTextureSkin {
   source: string;
   effective_source: string;
+  use_upstream_skin?: boolean;
   model: "wide" | "slim" | string;
   default_variant: string;
   default_model: string;
@@ -111,6 +112,13 @@ export interface PortalProfileSkin {
   updated_at?: string | null;
 }
 
+export interface PortalPassportSkin extends PortalTextureSkin {}
+
+export interface PortalProfileSkin extends PortalTextureSkin {
+  use_passport_skin?: boolean;
+  passport_skin?: PortalPassportSkin | null;
+}
+
 export interface CheckNameResult {
   available: boolean;
   reason?: string;
@@ -118,6 +126,7 @@ export interface CheckNameResult {
 
 export interface ExampleStatus {
   core_url_configured: boolean;
+  external_token_configured?: boolean;
   core_health_status: number | null;
   core_reachable: boolean;
 }
@@ -272,6 +281,10 @@ export async function getProfileSkin() {
   return apiFetch<PortalProfileSkin>("/api/portal/profile/skin");
 }
 
+export async function getPassportSkin() {
+  return apiFetch<PortalPassportSkin>("/api/portal/passport/skin");
+}
+
 export async function uploadProfileSkin(input: {
   skin?: File | null;
   cape?: File | null;
@@ -289,6 +302,41 @@ export async function uploadProfileSkin(input: {
   });
 }
 
+export async function setProfileSkinSource(usePassportSkin: boolean) {
+  return apiFetch<PortalProfileSkin>("/api/portal/profile/skin/source", {
+    method: "POST",
+    bodyJSON: { use_passport_skin: usePassportSkin }
+  });
+}
+
+export async function setPassportSkinSource(useUpstreamSkin: boolean) {
+  return apiFetch<PortalPassportSkin>("/api/portal/passport/skin/source", {
+    method: "POST",
+    bodyJSON: { use_upstream_skin: useUpstreamSkin }
+  });
+}
+
 export async function deleteProfileSkin() {
   return apiFetch<PortalProfileSkin>("/api/portal/profile/skin", { method: "DELETE" });
+}
+
+export async function uploadPassportSkin(input: {
+  skin?: File | null;
+  cape?: File | null;
+  elytra?: File | null;
+  model: "wide" | "slim";
+}) {
+  const form = new FormData();
+  form.set("model", input.model);
+  if (input.skin) form.set("skin", input.skin);
+  if (input.cape) form.set("cape", input.cape);
+  if (input.elytra) form.set("elytra", input.elytra);
+  return apiFetch<PortalPassportSkin>("/api/portal/passport/skin", {
+    method: "POST",
+    body: form
+  });
+}
+
+export async function deletePassportSkin() {
+  return apiFetch<PortalPassportSkin>("/api/portal/passport/skin", { method: "DELETE" });
 }

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +51,7 @@ type Memory struct {
 	adminPasskeys       map[string]AdminPasskey
 	pendingAdminMFAs    map[string]PendingAdminMFA
 	adminTrustedDevices map[string]AdminTrustedDevice
+	externalAPITokens   map[string]ExternalAPIToken
 }
 
 func NewMemory() *Memory {
@@ -83,6 +85,7 @@ func NewMemory() *Memory {
 		adminPasskeys:       make(map[string]AdminPasskey),
 		pendingAdminMFAs:    make(map[string]PendingAdminMFA),
 		adminTrustedDevices: make(map[string]AdminTrustedDevice),
+		externalAPITokens:   make(map[string]ExternalAPIToken),
 	}
 	server := defaultDownstreamServer(time.Now().UTC())
 	m.downstreamServers[server.ID] = server
@@ -140,7 +143,6 @@ func (m *Memory) UpsertPremiumPassportProfile(ctx context.Context, name string, 
 			if err != nil {
 				return identity.PassportProfile{}, err
 			}
-			profile.SkinSource = "mojang"
 			profile.ProfileProperties = append([]identity.ProfileProperty(nil), properties...)
 			profile.UpdatedAt = time.Now().UTC()
 			m.profilesByID[profile.ID] = profile
@@ -301,7 +303,7 @@ func (m *Memory) SetProfileSkinSource(ctx context.Context, profileID string, ski
 	case "passport", "mojang", "custom", "none":
 		profile.SkinSource = strings.TrimSpace(skinSource)
 	default:
-		profile.SkinSource = "none"
+		profile.SkinSource = "passport"
 	}
 	profile.ProfileProperties = append([]identity.ProfileProperty(nil), properties...)
 	profile.UpdatedAt = time.Now().UTC()
@@ -341,7 +343,22 @@ func (m *Memory) SetPassportSkin(ctx context.Context, passportID string, skin Pa
 	}
 	skin.UpdatedAt = now
 	m.passportSkins[passportID] = clonePassportSkin(skin)
+	passport.SkinSource = PassportSkinSourceCustom
 	passport.UpdatedAt = now
+	m.passportsByID[passportID] = passport
+	return passport, nil
+}
+
+func (m *Memory) SetPassportSkinSource(ctx context.Context, passportID string, skinSource string) (identity.Passport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	passportID = strings.TrimSpace(passportID)
+	passport, ok := m.passportsByID[passportID]
+	if !ok {
+		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	passport.SkinSource = NormalizePassportSkinSource(passport.Kind, skinSource)
+	passport.UpdatedAt = time.Now().UTC()
 	m.passportsByID[passportID] = passport
 	return passport, nil
 }
@@ -355,6 +372,7 @@ func (m *Memory) DeletePassportSkin(ctx context.Context, passportID string) (ide
 		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
 	}
 	delete(m.passportSkins, passportID)
+	passport.SkinSource = PassportSkinSourceUpstream
 	passport.UpdatedAt = time.Now().UTC()
 	m.passportsByID[passportID] = passport
 	return passport, nil
@@ -383,6 +401,33 @@ func (m *Memory) ListPassports(ctx context.Context) []identity.Passport {
 	return out
 }
 
+func (m *Memory) ListPassportsPage(ctx context.Context, query IdentityListQuery) ([]identity.Passport, int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	search := strings.ToLower(strings.TrimSpace(query.Search))
+	filtered := make([]identity.Passport, 0, len(m.passportsByID))
+	for _, passport := range m.passportsByID {
+		if query.Kind != "" && string(passport.Kind) != query.Kind {
+			continue
+		}
+		if query.Status != "" && string(passport.Status) != query.Status {
+			continue
+		}
+		if search != "" &&
+			!strings.Contains(strings.ToLower(passport.ID), search) &&
+			!strings.Contains(strings.ToLower(passport.Username), search) &&
+			!strings.Contains(strings.ToLower(passport.UsernameNormalized), search) &&
+			!strings.Contains(strings.ToLower(passport.UUID.String()), search) &&
+			!strings.Contains(strings.ToLower(passport.UUID.Compact()), search) {
+			continue
+		}
+		filtered = append(filtered, passport)
+	}
+	sortPassportsPage(filtered, query.Sort, query.Dir)
+	start, end := listQueryBounds(len(filtered), query.Page, query.PageSize)
+	return append([]identity.Passport(nil), filtered[start:end]...), len(filtered), nil
+}
+
 func (m *Memory) ListProfiles(ctx context.Context) []identity.Profile {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -391,6 +436,142 @@ func (m *Memory) ListProfiles(ctx context.Context) []identity.Profile {
 		out = append(out, profile)
 	}
 	return out
+}
+
+func (m *Memory) ListProfilesPage(ctx context.Context, query IdentityListQuery) ([]identity.Profile, int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	search := strings.ToLower(strings.TrimSpace(query.Search))
+	filtered := make([]identity.Profile, 0, len(m.profilesByID))
+	for _, profile := range m.profilesByID {
+		if query.Status != "" && string(profile.Status) != query.Status {
+			continue
+		}
+		_, bound := m.profileLinks[profile.ID]
+		if query.Binding == "bound" && !bound {
+			continue
+		}
+		if query.Binding == "unbound" && bound {
+			continue
+		}
+		if search != "" &&
+			!strings.Contains(strings.ToLower(profile.ID), search) &&
+			!strings.Contains(strings.ToLower(profile.ProtocolName), search) &&
+			!strings.Contains(strings.ToLower(profile.NormalizedName), search) &&
+			!strings.Contains(strings.ToLower(profile.UUID.String()), search) &&
+			!strings.Contains(strings.ToLower(profile.UUID.Compact()), search) {
+			continue
+		}
+		filtered = append(filtered, profile)
+	}
+	sortProfilesPage(filtered, query.Sort, query.Dir)
+	start, end := listQueryBounds(len(filtered), query.Page, query.PageSize)
+	return append([]identity.Profile(nil), filtered[start:end]...), len(filtered), nil
+}
+
+func listQueryBounds(total int, page int, pageSize int) (int, int) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 25
+	} else if pageSize > 100 {
+		pageSize = 100
+	}
+	start := (page - 1) * pageSize
+	if start >= total {
+		return total, total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	return start, end
+}
+
+func sortPassportsPage(passports []identity.Passport, key string, dir string) {
+	desc := dir == "desc"
+	sort.SliceStable(passports, func(i, j int) bool {
+		a := passports[i]
+		b := passports[j]
+		cmp := 0
+		switch key {
+		case "username":
+			cmp = strings.Compare(strings.ToLower(a.Username), strings.ToLower(b.Username))
+		case "kind":
+			cmp = strings.Compare(string(a.Kind), string(b.Kind))
+		case "status":
+			cmp = strings.Compare(string(a.Status), string(b.Status))
+		case "uuid":
+			cmp = strings.Compare(a.UUID.String(), b.UUID.String())
+		case "lastSeen":
+			cmp = compareOptionalTime(a.LastSeenAt, b.LastSeenAt)
+		default:
+			cmp = compareTimeDesc(a.CreatedAt, b.CreatedAt)
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func sortProfilesPage(profiles []identity.Profile, key string, dir string) {
+	desc := dir == "desc"
+	sort.SliceStable(profiles, func(i, j int) bool {
+		a := profiles[i]
+		b := profiles[j]
+		cmp := 0
+		switch key {
+		case "protocol":
+			cmp = strings.Compare(strings.ToLower(a.ProtocolName), strings.ToLower(b.ProtocolName))
+		case "uuid":
+			cmp = strings.Compare(a.UUID.String(), b.UUID.String())
+		case "status":
+			cmp = strings.Compare(string(a.Status), string(b.Status))
+		case "lastSeen":
+			cmp = compareOptionalTime(a.LastSeenAt, b.LastSeenAt)
+		default:
+			cmp = strings.Compare(strings.ToLower(a.ProtocolName), strings.ToLower(b.ProtocolName))
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func compareOptionalTime(a *time.Time, b *time.Time) int {
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	return compareTimeAsc(*a, *b)
+}
+
+func compareTimeDesc(a time.Time, b time.Time) int {
+	if a.Equal(b) {
+		return 0
+	}
+	if a.After(b) {
+		return -1
+	}
+	return 1
+}
+
+func compareTimeAsc(a time.Time, b time.Time) int {
+	if a.Equal(b) {
+		return 0
+	}
+	if a.Before(b) {
+		return -1
+	}
+	return 1
 }
 
 func (m *Memory) CreateProfile(ctx context.Context, profile identity.Profile) (identity.Profile, error) {
@@ -407,6 +588,12 @@ func (m *Memory) CreateProfile(ctx context.Context, profile identity.Profile) (i
 		profile.UUID = uuid
 	}
 	profile.ID = profile.UUID.String()
+	if profile.Status == "" {
+		profile.Status = identity.ProfileStatusActive
+	}
+	if profile.SkinSource == "" {
+		profile.SkinSource = "passport"
+	}
 	now := time.Now().UTC()
 	if profile.CreatedAt.IsZero() {
 		profile.CreatedAt = now
@@ -795,6 +982,7 @@ func (m *Memory) uniqueProtocolNameLocked(raw string) (identity.OfflineName, err
 }
 
 func (m *Memory) storePassportProfileLocked(passport identity.Passport, profile identity.Profile, primary bool) identity.PassportProfile {
+	passport.SkinSource = NormalizePassportSkinSource(passport.Kind, passport.SkinSource)
 	m.passportsByID[passport.ID] = passport
 	if passport.Kind == identity.PassportKindOffline {
 		m.passportByUsername[passport.UsernameNormalized] = passport.ID
@@ -1908,9 +2096,100 @@ func (m *Memory) GetAdminTrustedDevice(ctx context.Context, tokenHash string, no
 	return AdminTrustedDevice{}, fmt.Errorf("trusted device not found: %w", ErrNotFound)
 }
 
+func (m *Memory) ListExternalAPITokens(ctx context.Context) []ExternalAPIToken {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	tokens := make([]ExternalAPIToken, 0, len(m.externalAPITokens))
+	for _, token := range m.externalAPITokens {
+		tokens = append(tokens, cloneExternalAPIToken(token))
+	}
+	sort.Slice(tokens, func(i, j int) bool {
+		return tokens[i].CreatedAt.After(tokens[j].CreatedAt)
+	})
+	return tokens
+}
+
+func (m *Memory) GetExternalAPIToken(ctx context.Context, id string) (ExternalAPIToken, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	token, ok := m.externalAPITokens[id]
+	if !ok {
+		return ExternalAPIToken{}, fmt.Errorf("external api token not found: %w", ErrNotFound)
+	}
+	return cloneExternalAPIToken(token), nil
+}
+
+func (m *Memory) CreateExternalAPIToken(ctx context.Context, token ExternalAPIToken) (ExternalAPIToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	token.ID = "extapi-" + strconv.Itoa(m.nextID)
+	now := time.Now().UTC()
+	token.CreatedAt = now
+	token.UpdatedAt = now
+	if token.Status == "" {
+		token.Status = ExternalAPITokenActive
+	}
+	m.externalAPITokens[token.ID] = token
+	return cloneExternalAPIToken(token), nil
+}
+
+func (m *Memory) UpdateExternalAPIToken(ctx context.Context, token ExternalAPIToken) (ExternalAPIToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.externalAPITokens[token.ID]
+	if !ok {
+		return ExternalAPIToken{}, fmt.Errorf("external api token not found: %w", ErrNotFound)
+	}
+	existing.Name = token.Name
+	existing.Status = token.Status
+	existing.UpdatedAt = time.Now().UTC()
+	m.externalAPITokens[token.ID] = existing
+	return cloneExternalAPIToken(existing), nil
+}
+
+func (m *Memory) DeleteExternalAPIToken(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.externalAPITokens[id]; !ok {
+		return fmt.Errorf("external api token not found: %w", ErrNotFound)
+	}
+	delete(m.externalAPITokens, id)
+	return nil
+}
+
+func (m *Memory) AuthenticateExternalAPIToken(ctx context.Context, rawToken string, now time.Time, clientIP string, path string) (ExternalAPIToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, token := range m.externalAPITokens {
+		if auth.ConstantTimeTokenEqual("external-api", rawToken, token.TokenHash) {
+			if token.Status != ExternalAPITokenActive {
+				return ExternalAPIToken{}, fmt.Errorf("external api token disabled: %w", ErrNotFound)
+			}
+			token.CallCount++
+			usedAt := now.UTC()
+			token.LastUsedAt = &usedAt
+			token.LastUsedIP = strings.TrimSpace(clientIP)
+			token.LastUsedPath = strings.TrimSpace(path)
+			token.UpdatedAt = usedAt
+			m.externalAPITokens[id] = token
+			return cloneExternalAPIToken(token), nil
+		}
+	}
+	return ExternalAPIToken{}, fmt.Errorf("external api token not found: %w", ErrNotFound)
+}
+
 func cloneAdminRole(role rbac.Role) rbac.Role {
 	role.Permissions = append([]string(nil), role.Permissions...)
 	return role
+}
+
+func cloneExternalAPIToken(token ExternalAPIToken) ExternalAPIToken {
+	if token.LastUsedAt != nil {
+		usedAt := token.LastUsedAt.UTC()
+		token.LastUsedAt = &usedAt
+	}
+	return token
 }
 
 func defaultAdminSecurity(adminID string) AdminSecurity {

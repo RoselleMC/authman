@@ -36,6 +36,7 @@ import {
   fetchProfiles,
   revokeBan,
   unbindProfile,
+  updatePassportSkinSource,
   updatePassportStatus,
   uploadPassportSkin,
   type PassportRow,
@@ -176,6 +177,7 @@ export function PassportDetailPage() {
       setElytraFile(null);
       void qc.invalidateQueries({ queryKey: ["admin.passport", id] });
       void qc.invalidateQueries({ queryKey: ["admin.passports"] });
+      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -185,6 +187,17 @@ export function PassportDetailPage() {
       toast.push({ tone: "success", title: t("admin.skins.resetDone") });
       void qc.invalidateQueries({ queryKey: ["admin.passport", id] });
       void qc.invalidateQueries({ queryKey: ["admin.passports"] });
+      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const skinSourceMut = useMutation({
+    mutationFn: (useUpstreamSkin: boolean) => updatePassportSkinSource(id, { use_upstream_skin: useUpstreamSkin }),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.skins.sourceSaved") });
+      void qc.invalidateQueries({ queryKey: ["admin.passport", id] });
+      void qc.invalidateQueries({ queryKey: ["admin.passports"] });
+      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -197,8 +210,9 @@ export function PassportDetailPage() {
   if (q.isLoading) return <div className="page"><Card>{t("common.loading")}</Card></div>;
   if (q.error || !q.data) return <div className="page"><ErrorBlock error={q.error} onRetry={() => q.refetch()} /></div>;
   const p = q.data;
+  const usingUpstreamSkin = Boolean(p.skin.use_upstream_skin);
   const persistedSkinModel = normalizeSkinModel(p.skin.model);
-  const hasSkinChanges = Boolean(skinFile || capeFile || elytraFile || (p.skin.has_custom_skin && skinModel !== persistedSkinModel));
+  const hasSkinChanges = !usingUpstreamSkin && Boolean(skinFile || capeFile || elytraFile || (p.skin.has_custom_skin && skinModel !== persistedSkinModel));
   const activeBan = firstActiveBan(p.bans);
   const banDurationValid = isValidDuration(banDurationValue);
   const relatedAuditIDs = [p.id, p.uuid, ...p.profiles.flatMap((profile) => [profile.id, profile.uuid])]
@@ -382,11 +396,11 @@ export function PassportDetailPage() {
                   capeUrl={previewCapeURL ?? p.skin.cape_url}
                   elytraUrl={previewElytraURL ?? p.skin.elytra_url}
                   model={skinModel}
-                  name={p.username}
                 />
               </Card>
               <Card title={t("admin.skins.state")}>
                 <DefList>
+                  <DefRow k={t("admin.skins.configuredSource")}>{t(`admin.skins.source.${p.skin.source}`)}</DefRow>
                   <DefRow k={t("admin.skins.effectiveSource")}>{t(`admin.skins.source.${p.skin.effective_source}`)}</DefRow>
                   <DefRow k={t("admin.skins.model")}>{t(`admin.skins.model.${p.skin.model === "slim" ? "slim" : "wide"}`)}</DefRow>
                   <DefRow k={t("admin.skins.defaultVariant")}>{p.skin.default_variant} · {p.skin.default_model}</DefRow>
@@ -396,28 +410,44 @@ export function PassportDetailPage() {
                   <DefRow k={t("common.updated")}>{formatAbsTime(p.skin.updated_at)}</DefRow>
                 </DefList>
               </Card>
-              <Card title={t("admin.skins.passportUpload")}>
-                <div className="skin-upload-grid">
-                  <Field label={t("admin.skins.model")}>
-                    <Select<"wide" | "slim">
-                      value={skinModel}
-                      onChange={setSkinModel}
-                      options={[
-                        { value: "wide", label: t("admin.skins.model.wide") },
-                        { value: "slim", label: t("admin.skins.model.slim") },
-                      ]}
-                    />
-                  </Field>
-                  <SkinFilePicker id="passport-skin-file" label={t("admin.skins.file.skin")} file={skinFile} onChange={setSkinFile} required />
-                  <SkinFilePicker id="passport-cape-file" label={t("admin.skins.file.cape")} file={capeFile} onChange={setCapeFile} />
-                  <SkinFilePicker id="passport-elytra-file" label={t("admin.skins.file.elytra")} file={elytraFile} onChange={setElytraFile} />
-                </div>
-                <div className="skin-actions">
-                  <Button icon="check" loading={skinMut.isPending} disabled={!hasSkinChanges} onClick={() => skinMut.mutate()}>{t("admin.skins.saveCustom")}</Button>
-                  <Button variant="secondary" icon="refresh" loading={skinDeleteMut.isPending} disabled={!p.skin.has_custom_skin} onClick={() => skinDeleteMut.mutate()}>{t("admin.skins.reset")}</Button>
-                </div>
-                <p className="card-copy">{t("admin.skins.passportUploadHint")}</p>
+              <Card title={t("admin.skins.sourceSettings")}>
+                <label className="toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={usingUpstreamSkin}
+                    disabled={skinSourceMut.isPending}
+                    onChange={(event) => skinSourceMut.mutate(event.currentTarget.checked)}
+                  />
+                  <span>
+                    <strong>{t("admin.skins.useUpstream")}</strong>
+                    <small>{t("admin.skins.useUpstreamHint")}</small>
+                  </span>
+                </label>
               </Card>
+              {!usingUpstreamSkin ? (
+                <Card title={t("admin.skins.passportUpload")}>
+                  <div className="skin-upload-grid">
+                    <Field label={t("admin.skins.model")}>
+                      <Select<"wide" | "slim">
+                        value={skinModel}
+                        onChange={setSkinModel}
+                        options={[
+                          { value: "wide", label: t("admin.skins.model.wide") },
+                          { value: "slim", label: t("admin.skins.model.slim") },
+                        ]}
+                      />
+                    </Field>
+                    <SkinFilePicker id="passport-skin-file" label={t("admin.skins.file.skin")} file={skinFile} onChange={setSkinFile} required />
+                    <SkinFilePicker id="passport-cape-file" label={t("admin.skins.file.cape")} file={capeFile} onChange={setCapeFile} />
+                    <SkinFilePicker id="passport-elytra-file" label={t("admin.skins.file.elytra")} file={elytraFile} onChange={setElytraFile} />
+                  </div>
+                  <div className="skin-actions">
+                    <Button icon="check" loading={skinMut.isPending} disabled={!hasSkinChanges} onClick={() => skinMut.mutate()}>{t("admin.skins.saveCustom")}</Button>
+                    <Button variant="secondary" icon="refresh" loading={skinDeleteMut.isPending} disabled={!p.skin.has_custom_skin} onClick={() => skinDeleteMut.mutate()}>{t("admin.skins.reset")}</Button>
+                  </div>
+                  <p className="card-copy">{t("admin.skins.passportUploadHint")}</p>
+                </Card>
+              ) : null}
             </div>
           ) : (
             <Card noBody className="table-card">

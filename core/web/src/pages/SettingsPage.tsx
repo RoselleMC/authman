@@ -39,6 +39,7 @@ import {
 import {
   createAdminRole,
   createAdminUser,
+  createExternalAPIToken,
   deleteAdminPasskey,
   deleteAdminUserPasskey,
   deleteAdminRole,
@@ -48,30 +49,35 @@ import {
   fetchAdminPermissions,
   fetchAdminRoles,
   fetchAdminUsers,
+  fetchExternalAPITokens,
   fetchIPGeoSettings,
   fetchMojangSettings,
   fetchSystemSummary,
   registerAdminPasskey,
+  revokeExternalAPIToken,
   startAdminTOTP,
   confirmAdminTOTP,
   updateAdminAccountProfile,
   updateAdminAccountPreferences,
   updateAdminUser,
   updateAdminRole,
+  updateExternalAPIToken,
   updateIPGeoSettings,
   updateMojangSettings,
   type AdminAccountSecurity,
   type AdminPermission,
   type AdminRole,
+  type ExternalAPIToken,
   type IPGeoSettings,
+  type ListFilters,
   type MojangRuntimeSettings,
   type RouteChoice,
 } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
-type SettingsSection = "account" | "admins" | "roles" | "mojang" | "geo" | "system" | "security";
+type SettingsSection = "account" | "admins" | "roles" | "external-api" | "mojang" | "geo" | "system" | "security";
 
-const SECTIONS: SettingsSection[] = ["account", "admins", "roles", "mojang", "geo", "system", "security"];
+const SECTIONS: SettingsSection[] = ["account", "admins", "roles", "external-api", "mojang", "geo", "system", "security"];
 
 function roleTone(role: string): "info" | "success" | "neutral" {
   if (role === "owner") return "info";
@@ -103,6 +109,7 @@ export function SettingsPage() {
           { value: "account", label: t("admin.settings.account"), icon: "user" },
           { value: "admins", label: t("admin.settings.admins"), icon: "users" },
           { value: "roles", label: t("admin.settings.roles"), icon: "shield" },
+          { value: "external-api", label: t("admin.settings.externalApi"), icon: "key" },
           { value: "mojang", label: t("admin.settings.mojang"), icon: "activity" },
           { value: "geo", label: t("admin.settings.geo"), icon: "globe" },
           { value: "system", label: t("admin.settings.system"), icon: "database" },
@@ -113,6 +120,7 @@ export function SettingsPage() {
         {current === "account" ? <AccountPanel /> : null}
         {current === "admins" ? <AdminsPanel /> : null}
         {current === "roles" ? <RolesPanel /> : null}
+        {current === "external-api" ? <ExternalAPITokensPanel /> : null}
         {current === "mojang" ? <MojangSettingsPanel /> : null}
         {current === "geo" ? <IPGeoSettingsPanel /> : null}
         {current === "system" ? <SystemPanel /> : null}
@@ -484,10 +492,24 @@ function AdminsPanel() {
   const [editingUser, setEditingUser] = useState<SafeAdminUser | null>(null);
   const [totpResetUser, setTOTPResetUser] = useState<SafeAdminUser | null>(null);
   const [passkeyDelete, setPasskeyDelete] = useState<{ user: SafeAdminUser; passkeyID: string; passkeyName: string } | null>(null);
-  const usersQ = useQuery({ queryKey: ["admin.users"], queryFn: fetchAdminUsers });
-  const rolesQ = useQuery({ queryKey: ["admin.roles"], queryFn: fetchAdminRoles });
-  const adminUsers: SafeAdminUser[] = (usersQ.data ?? []).map(coerceAdminUser);
-  const roles = rolesQ.data ?? [];
+  const userFilters = useMemo<ListFilters>(() => {
+    const next: ListFilters = { page: list.state.page, page_size: list.state.pageSize };
+    const q = (list.state.filters.name ?? "").trim();
+    if (q) next.q = q;
+    const role = list.state.filters.role;
+    if (role) next.kind = role;
+    const status = list.state.filters.status;
+    if (status) next.status = status;
+    if (list.state.sortKey) {
+      next.sort = list.state.sortKey;
+      next.dir = list.state.sortDir;
+    }
+    return next;
+  }, [list.state]);
+  const usersQ = useQuery({ queryKey: ["admin.users", userFilters], queryFn: () => fetchAdminUsers(userFilters) });
+  const rolesQ = useQuery({ queryKey: ["admin.roles"], queryFn: () => fetchAdminRoles({ page: 1, page_size: 100 }) });
+  const adminUsers: SafeAdminUser[] = (usersQ.data?.rows ?? []).map(coerceAdminUser);
+  const roles = rolesQ.data?.rows ?? [];
   const rolesByID = useMemo(() => new Map(roles.map((role) => [role.id, role])), [roles]);
   const canEditAdmins = hasPermission("admin.users.write");
   const canManageAdminSecurity = hasPermission("admin.users.security.write");
@@ -655,6 +677,8 @@ function AdminsPanel() {
             title={t("admin.settings.admins")}
             loading={usersQ.isLoading}
             rows={adminUsers}
+            mode="server"
+            total={usersQ.data?.meta.total ?? 0}
             columns={columns}
             rowKey={(r) => r.id}
             state={list.state}
@@ -932,9 +956,9 @@ function RolesPanel() {
   const { hasPermission } = useSession();
   const toast = useToast();
   const qc = useQueryClient();
-  const rolesQ = useQuery({ queryKey: ["admin.roles"], queryFn: fetchAdminRoles });
+  const rolesQ = useQuery({ queryKey: ["admin.roles"], queryFn: () => fetchAdminRoles({ page: 1, page_size: 100 }) });
   const permissionsQ = useQuery({ queryKey: ["admin.permissions"], queryFn: fetchAdminPermissions });
-  const roles = rolesQ.data ?? [];
+  const roles = rolesQ.data?.rows ?? [];
   const [selectedID, setSelectedID] = useState<string>("admin");
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteRoleID, setDeleteRoleID] = useState<string | null>(null);
@@ -1201,6 +1225,242 @@ function RoleCreateDialog({
         {error ? <Alert tone="warning">{String((error as { message?: string }).message ?? error)}</Alert> : null}
       </div>
     </Dialog>
+  );
+}
+
+function ExternalAPITokensPanel() {
+  const { t } = useI18n();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const { hasPermission, user } = useSession();
+  const list = useListState({ urlPrefix: "extApi", urlSync: false, defaults: { pageSize: 10 }, storageScope: user?.id });
+  const [createOpen, setCreateOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [tokenOnce, setTokenOnce] = useState<string | null>(null);
+  const [bulkRevokeRows, setBulkRevokeRows] = useState<ExternalAPIToken[]>([]);
+  const canWrite = hasPermission("external_api.write");
+  const filters = useMemo<ListFilters>(() => {
+    const next: ListFilters = { page: list.state.page, page_size: list.state.pageSize };
+    const q = (list.state.filters.name ?? "").trim();
+    if (q) next.q = q;
+    const status = list.state.filters.status;
+    if (status) next.status = status;
+    if (list.state.sortKey) {
+      next.sort = list.state.sortKey;
+      next.dir = list.state.sortDir;
+    }
+    return next;
+  }, [list.state]);
+  const q = useQuery({ queryKey: ["admin.externalTokens", filters], queryFn: () => fetchExternalAPITokens(filters) });
+  const createMut = useMutation({
+    mutationFn: () => createExternalAPIToken(name.trim()),
+    onSuccess: (created) => {
+      setTokenOnce(created.token_once);
+      setName("");
+      toast.push({ tone: "success", title: t("admin.settings.externalApi.created") });
+      void qc.invalidateQueries({ queryKey: ["admin.externalTokens"] });
+    },
+  });
+  const bulkStatusMut = useMutation({
+    mutationFn: async (input: { rows: ExternalAPIToken[]; status: ExternalAPIToken["status"] }) => {
+      await Promise.all(input.rows.filter((row) => row.status !== "revoked").map((row) => updateExternalAPIToken(row.id, { status: input.status })));
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.settings.externalApi.saved") });
+      void qc.invalidateQueries({ queryKey: ["admin.externalTokens"] });
+    },
+  });
+  const bulkRevokeMut = useMutation({
+    mutationFn: async (rows: ExternalAPIToken[]) => {
+      await Promise.all(rows.filter((row) => row.status !== "revoked").map((row) => revokeExternalAPIToken(row.id)));
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.settings.externalApi.revoked") });
+      setBulkRevokeRows([]);
+      void qc.invalidateQueries({ queryKey: ["admin.externalTokens"] });
+    },
+  });
+  const rows = q.data?.rows ?? [];
+  const columns: ListColumn<ExternalAPIToken>[] = [
+    {
+      key: "name",
+      header: t("admin.settings.externalApi.col.name"),
+      minWidth: "220px",
+      filter: { type: "text", placeholder: t("common.search") },
+      sortable: true,
+      sortValue: (row) => row.name,
+      render: (row) => (
+        <div className="identity-cell">
+          <strong>{row.name}</strong>
+        </div>
+      ),
+    },
+    {
+      key: "status",
+      header: t("admin.settings.externalApi.col.status"),
+      width: "140px",
+      filter: {
+        type: "select",
+        options: [
+          { value: "active", label: t("admin.settings.externalApi.status.active") },
+          { value: "disabled", label: t("admin.settings.externalApi.status.disabled") },
+          { value: "revoked", label: t("admin.settings.externalApi.status.revoked") },
+        ],
+      },
+      sortable: true,
+      render: (row) => <Badge tone={row.status === "active" ? "success" : row.status === "disabled" ? "warning" : "neutral"}>{t(`admin.settings.externalApi.status.${row.status}`)}</Badge>,
+    },
+    {
+      key: "call_count",
+      header: t("admin.settings.externalApi.col.calls"),
+      width: "120px",
+      sortable: true,
+      sortValue: (row) => row.call_count,
+      render: (row) => row.call_count.toLocaleString(),
+    },
+    {
+      key: "last_used_at",
+      header: t("admin.settings.externalApi.col.lastUsed"),
+      minWidth: "190px",
+      sortable: true,
+      sortValue: (row) => row.last_used_at ?? "",
+      render: (row) => (row.last_used_at ? formatAbsTime(row.last_used_at) : "—"),
+    },
+    {
+      key: "last_used_ip",
+      header: t("admin.settings.externalApi.col.lastIP"),
+      minWidth: "150px",
+      render: (row) => row.last_used_ip || "—",
+    },
+    {
+      key: "last_used_path",
+      header: t("admin.settings.externalApi.col.lastPath"),
+      minWidth: "260px",
+      render: (row) => <span className="mono-inline">{row.last_used_path || "—"}</span>,
+    },
+    {
+      key: "created_at",
+      header: t("admin.settings.externalApi.col.created"),
+      minWidth: "190px",
+      sortable: true,
+      sortValue: (row) => row.created_at ?? "",
+      render: (row) => (row.created_at ? formatAbsTime(row.created_at) : "—"),
+    },
+    {
+      key: "actions",
+      header: "",
+      align: "right",
+      mandatory: true,
+      width: "44px",
+      minWidth: "44px",
+      sticky: "right",
+      render: () => <Icon name="chevronRight" size={16} />,
+    },
+  ];
+
+  return (
+    <SettingsStack>
+      <Card noBody className="table-card">
+        {q.error ? (
+          <ErrorState error={q.error} onRetry={() => q.refetch()} />
+        ) : (
+          <AdvancedList
+            title={t("admin.settings.externalApi")}
+            loading={q.isLoading}
+            rows={rows}
+            mode="server"
+            total={q.data?.meta.total ?? 0}
+            columns={columns}
+            rowKey={(row) => row.id}
+            state={list.state}
+            onStateChange={list.setState}
+            selectable={(row) => row.status !== "revoked" && canWrite}
+            onRowClick={(row) => navigate(`/settings/external-api/${encodeURIComponent(row.id)}`)}
+            selectionActions={(selectedRows) => {
+              const actionable = selectedRows.filter((row) => row.status !== "revoked");
+              if (!canWrite || actionable.length === 0) return null;
+              const nextStatus: ExternalAPIToken["status"] = actionable.every((row) => row.status === "active") ? "disabled" : "active";
+              return (
+                <>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={nextStatus === "active" ? "check" : "close"}
+                    loading={bulkStatusMut.isPending}
+                    onClick={() => bulkStatusMut.mutate({ rows: actionable, status: nextStatus })}
+                  >
+                    {nextStatus === "active" ? t("admin.settings.externalApi.bulk.enable") : t("admin.settings.externalApi.bulk.disable")}
+                  </Button>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    icon="trash"
+                    disabled={bulkRevokeMut.isPending}
+                    onClick={() => setBulkRevokeRows(actionable)}
+                  >
+                    {t("admin.settings.externalApi.bulk.revoke")}
+                  </Button>
+                </>
+              );
+            }}
+            primaryActions={
+              <Button variant="secondary" size="sm" icon="plus" disabled={!canWrite} onClick={() => setCreateOpen(true)}>
+                {t("admin.settings.externalApi.create")}
+              </Button>
+            }
+            empty={<EmptyState icon="key" title={t("admin.settings.externalApi.empty")} />}
+            testId="external-api-token-table"
+          />
+        )}
+        <div className="card-foot-note">
+          <Icon name="info" size={13} /> {t("admin.settings.externalApi.desc")}
+        </div>
+      </Card>
+      <Dialog
+        open={createOpen}
+        onClose={() => {
+          if (!createMut.isPending) {
+            setCreateOpen(false);
+            setTokenOnce(null);
+          }
+        }}
+        icon="key"
+        iconTone="primary"
+        title={t("admin.settings.externalApi.create")}
+        desc={t("admin.settings.externalApi.create.desc")}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setCreateOpen(false)} disabled={createMut.isPending}>{t("common.close")}</Button>
+            {!tokenOnce ? (
+              <Button variant="primary" icon="plus" loading={createMut.isPending} disabled={!name.trim()} onClick={() => createMut.mutate()}>{t("admin.settings.externalApi.create")}</Button>
+            ) : null}
+          </>
+        }
+      >
+        {!tokenOnce ? (
+          <Field label={t("admin.settings.externalApi.name")}>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("admin.settings.externalApi.name.placeholder")} autoFocus />
+          </Field>
+        ) : (
+          <div className="settings-token-once">
+            <Alert tone="warning">{t("admin.settings.externalApi.tokenOnceHint")}</Alert>
+            <code>{tokenOnce}</code>
+            <Button variant="secondary" size="sm" icon="copy" onClick={() => void navigator.clipboard?.writeText(tokenOnce)}>{t("common.copy")}</Button>
+          </div>
+        )}
+      </Dialog>
+      <ConfirmDialog
+        open={bulkRevokeRows.length > 0}
+        destructive
+        title={t("admin.settings.externalApi.bulk.revoke")}
+        body={t("admin.settings.externalApi.bulk.revoke.desc").replace("{count}", String(bulkRevokeRows.length))}
+        confirmLabel={t("admin.settings.externalApi.revoke")}
+        loading={bulkRevokeMut.isPending}
+        onCancel={() => setBulkRevokeRows([])}
+        onConfirm={() => bulkRevokeMut.mutate(bulkRevokeRows)}
+      />
+    </SettingsStack>
   );
 }
 

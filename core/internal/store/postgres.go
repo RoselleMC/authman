@@ -27,12 +27,13 @@ type Postgres struct {
 	pool *pgxpool.Pool
 }
 
-const passportSelectColumns = "uuid, kind, uuid, username, username_normalized, raw_offline_name, status, registration_server_id, last_seen_server_id, last_seen_at, last_seen_ip, last_seen_geo, created_at, updated_at"
+const passportSelectColumns = "uuid, kind, uuid, username, username_normalized, raw_offline_name, status, skin_source, registration_server_id, last_seen_server_id, last_seen_at, last_seen_ip, last_seen_geo, created_at, updated_at"
 const profileSelectColumns = "uuid, uuid, protocol_name, normalized_name, display_name, status, skin_source, profile_properties, created_from_passport_id, last_seen_server_id, last_seen_at, last_seen_ip, last_seen_geo, created_at, updated_at"
 const nodeSelectColumns = "id, server_id, mode, name, token_hash, token_fingerprint, instance_fingerprint, plugin_version, velocity_version, disabled, runtime_config, created_at, last_heartbeat_at"
 const limboBlueprintSelectColumns = "id, name, description, filename, content_type, size_bytes, sha256, schematic, preview, config, created_at, updated_at"
 const profileSkinSelectColumns = "profile_id, model, skin_png, skin_content_type, skin_sha256, COALESCE(cape_png, ''::bytea), COALESCE(cape_content_type, ''), COALESCE(cape_sha256, ''), COALESCE(elytra_png, ''::bytea), COALESCE(elytra_content_type, ''), COALESCE(elytra_sha256, ''), created_at, updated_at"
 const passportSkinSelectColumns = "passport_id, model, skin_png, skin_content_type, skin_sha256, COALESCE(cape_png, ''::bytea), COALESCE(cape_content_type, ''), COALESCE(cape_sha256, ''), COALESCE(elytra_png, ''::bytea), COALESCE(elytra_content_type, ''), COALESCE(elytra_sha256, ''), created_at, updated_at"
+const externalAPITokenSelectColumns = "id, name, token_hash, token_fingerprint, status, created_by, call_count, last_used_at, last_used_ip, last_used_path, created_at, updated_at"
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*Postgres, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -104,9 +105,9 @@ func (p *Postgres) CreateOfflinePassportProfile(ctx context.Context, rawName str
 	}
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO passports (uuid, kind, username, username_normalized, raw_offline_name, status, created_at, updated_at)
-		VALUES ($1, 'offline', $2, $3, $4, $5, $6, $7)
-	`, passport.UUID.String(), passport.Username, passport.UsernameNormalized, passport.RawOfflineName, passport.Status, passport.CreatedAt, passport.UpdatedAt); err != nil {
+		INSERT INTO passports (uuid, kind, username, username_normalized, raw_offline_name, status, skin_source, created_at, updated_at)
+		VALUES ($1, 'offline', $2, $3, $4, $5, $6, $7, $8)
+	`, passport.UUID.String(), passport.Username, passport.UsernameNormalized, passport.RawOfflineName, passport.Status, NormalizePassportSkinSource(passport.Kind, passport.SkinSource), passport.CreatedAt, passport.UpdatedAt); err != nil {
 		return identity.PassportProfile{}, err
 	}
 	uniqueName, err := uniqueProtocolNameTx(ctx, tx, protocolName)
@@ -163,14 +164,14 @@ func (p *Postgres) UpsertPremiumPassportProfile(ctx context.Context, name string
 	}
 	defer tx.Rollback(ctx)
 	passport, err = scanPassportRow(tx.QueryRow(ctx, `
-		INSERT INTO passports (uuid, kind, username, username_normalized, status, created_at, updated_at)
-		VALUES ($1, 'premium', $2, $3, 'active', $4, $5)
+		INSERT INTO passports (uuid, kind, username, username_normalized, status, skin_source, created_at, updated_at)
+		VALUES ($1, 'premium', $2, $3, 'active', $4, $5, $6)
 		ON CONFLICT (uuid) DO UPDATE
 		SET username = EXCLUDED.username,
 			username_normalized = EXCLUDED.username_normalized,
 			updated_at = now()
 		RETURNING `+passportSelectColumns+`
-	`, passport.UUID.String(), passport.Username, strings.ToLower(passport.Username), passport.CreatedAt, passport.UpdatedAt))
+	`, passport.UUID.String(), passport.Username, strings.ToLower(passport.Username), NormalizePassportSkinSource(passport.Kind, passport.SkinSource), passport.CreatedAt, passport.UpdatedAt))
 	if err != nil {
 		return identity.PassportProfile{}, err
 	}
@@ -185,8 +186,7 @@ func (p *Postgres) UpsertPremiumPassportProfile(ctx context.Context, name string
 		profile = existingProfile
 		profile, err = scanProfileRow(tx.QueryRow(ctx, `
 			UPDATE profiles
-			SET skin_source = 'mojang',
-				profile_properties = $2::jsonb,
+			SET profile_properties = $2::jsonb,
 				updated_at = now()
 			WHERE uuid = $1
 			RETURNING `+profileSelectColumns+`
@@ -205,7 +205,7 @@ func (p *Postgres) UpsertPremiumPassportProfile(ctx context.Context, name string
 		}
 		profile, err = scanProfileRow(tx.QueryRow(ctx, `
 			INSERT INTO profiles (uuid, protocol_name, normalized_name, display_name, status, skin_source, profile_properties, created_from_passport_id)
-			VALUES ($1, $2, $3, $4, 'active', 'mojang', $5::jsonb, $6)
+			VALUES ($1, $2, $3, $4, 'active', 'passport', $5::jsonb, $6)
 			RETURNING `+profileSelectColumns+`
 		`, profile.UUID.String(), profile.ProtocolName, profile.NormalizedName, profile.DisplayName, string(propsJSON), passport.ID))
 		if err != nil {
@@ -501,7 +501,8 @@ func (p *Postgres) SetPassportSkin(ctx context.Context, passportID string, skin 
 	}
 	passport, err := scanPassportRow(tx.QueryRow(ctx, `
 		UPDATE passports
-		SET updated_at = now()
+		SET skin_source = 'custom',
+			updated_at = now()
 		WHERE uuid = $1
 		RETURNING `+passportSelectColumns+`
 	`, passportID))
@@ -517,6 +518,29 @@ func (p *Postgres) SetPassportSkin(ctx context.Context, passportID string, skin 
 	return passport, nil
 }
 
+func (p *Postgres) SetPassportSkinSource(ctx context.Context, passportID string, skinSource string) (identity.Passport, error) {
+	passportID = strings.TrimSpace(passportID)
+	if passportID == "" {
+		return identity.Passport{}, fmt.Errorf("passport id is required")
+	}
+	passport, err := p.GetPassportByID(ctx, passportID)
+	if err != nil {
+		return identity.Passport{}, err
+	}
+	source := NormalizePassportSkinSource(passport.Kind, skinSource)
+	passport, err = scanPassportRow(p.pool.QueryRow(ctx, `
+		UPDATE passports
+		SET skin_source = $2,
+			updated_at = now()
+		WHERE uuid = $1
+		RETURNING `+passportSelectColumns+`
+	`, passportID, source))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	return passport, err
+}
+
 func (p *Postgres) DeletePassportSkin(ctx context.Context, passportID string) (identity.Passport, error) {
 	passportID = strings.TrimSpace(passportID)
 	tx, err := p.pool.Begin(ctx)
@@ -529,7 +553,8 @@ func (p *Postgres) DeletePassportSkin(ctx context.Context, passportID string) (i
 	}
 	passport, err := scanPassportRow(tx.QueryRow(ctx, `
 		UPDATE passports
-		SET updated_at = now()
+		SET skin_source = 'upstream',
+			updated_at = now()
 		WHERE uuid = $1
 		RETURNING `+passportSelectColumns+`
 	`, passportID))
@@ -585,6 +610,34 @@ func (p *Postgres) ListPassports(ctx context.Context) []identity.Passport {
 	return out
 }
 
+func (p *Postgres) ListPassportsPage(ctx context.Context, query IdentityListQuery) ([]identity.Passport, int, error) {
+	query = normalizeIdentityListQuery(query)
+	where, args := identityPassportWhere(query)
+	var total int
+	if err := p.pool.QueryRow(ctx, "SELECT count(*) FROM passports"+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	args = append(args, query.PageSize, (query.Page-1)*query.PageSize)
+	rows, err := p.pool.Query(ctx, `
+		SELECT `+passportSelectColumns+`
+		FROM passports`+where+`
+		ORDER BY `+passportOrderBy(query.Sort, query.Dir)+`
+		LIMIT $`+strconv.Itoa(len(args)-1)+` OFFSET $`+strconv.Itoa(len(args)), args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []identity.Passport{}
+	for rows.Next() {
+		if passport, err := scanPassportRow(rows); err == nil {
+			out = append(out, passport)
+		} else {
+			return nil, 0, err
+		}
+	}
+	return out, total, rows.Err()
+}
+
 func (p *Postgres) ListProfiles(ctx context.Context) []identity.Profile {
 	rows, err := p.pool.Query(ctx, `
 		SELECT `+profileSelectColumns+`
@@ -602,6 +655,155 @@ func (p *Postgres) ListProfiles(ctx context.Context) []identity.Profile {
 		}
 	}
 	return out
+}
+
+func (p *Postgres) ListProfilesPage(ctx context.Context, query IdentityListQuery) ([]identity.Profile, int, error) {
+	query = normalizeIdentityListQuery(query)
+	where, args := identityProfileWhere(query)
+	var total int
+	if err := p.pool.QueryRow(ctx, "SELECT count(*) FROM profiles"+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	args = append(args, query.PageSize, (query.Page-1)*query.PageSize)
+	rows, err := p.pool.Query(ctx, `
+		SELECT `+profileSelectColumns+`
+		FROM profiles`+where+`
+		ORDER BY `+profileOrderBy(query.Sort, query.Dir)+`
+		LIMIT $`+strconv.Itoa(len(args)-1)+` OFFSET $`+strconv.Itoa(len(args)), args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []identity.Profile{}
+	for rows.Next() {
+		if profile, err := scanProfileRow(rows); err == nil {
+			out = append(out, profile)
+		} else {
+			return nil, 0, err
+		}
+	}
+	return out, total, rows.Err()
+}
+
+func normalizeIdentityListQuery(query IdentityListQuery) IdentityListQuery {
+	if query.Page <= 0 {
+		query.Page = 1
+	}
+	if query.PageSize <= 0 {
+		query.PageSize = 25
+	} else if query.PageSize > 100 {
+		query.PageSize = 100
+	}
+	query.Search = strings.TrimSpace(query.Search)
+	query.Kind = strings.TrimSpace(query.Kind)
+	query.Status = strings.TrimSpace(query.Status)
+	query.Binding = strings.TrimSpace(query.Binding)
+	query.Sort = strings.TrimSpace(query.Sort)
+	query.Dir = strings.TrimSpace(query.Dir)
+	if query.Dir != "desc" {
+		query.Dir = "asc"
+	}
+	return query
+}
+
+func identityPassportWhere(query IdentityListQuery) (string, []any) {
+	where := []string{}
+	args := []any{}
+	next := func(value any) string {
+		args = append(args, value)
+		return "$" + strconv.Itoa(len(args))
+	}
+	if query.Kind != "" {
+		where = append(where, "kind = "+next(query.Kind))
+	}
+	if query.Status != "" {
+		where = append(where, "status = "+next(query.Status))
+	}
+	if query.Search != "" {
+		needle := "%" + query.Search + "%"
+		where = append(where, "(uuid ILIKE "+next(needle)+" OR replace(uuid, '-', '') ILIKE "+next(needle)+" OR username ILIKE "+next(needle)+" OR username_normalized ILIKE "+next(needle)+" OR coalesce(raw_offline_name, '') ILIKE "+next(needle)+")")
+	}
+	if len(where) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(where, " AND "), args
+}
+
+func identityProfileWhere(query IdentityListQuery) (string, []any) {
+	where := []string{}
+	args := []any{}
+	next := func(value any) string {
+		args = append(args, value)
+		return "$" + strconv.Itoa(len(args))
+	}
+	if query.Status != "" {
+		where = append(where, "status = "+next(query.Status))
+	}
+	if query.Binding == "bound" {
+		where = append(where, "EXISTS (SELECT 1 FROM profile_passport_links l WHERE l.profile_id = profiles.uuid)")
+	} else if query.Binding == "unbound" {
+		where = append(where, "NOT EXISTS (SELECT 1 FROM profile_passport_links l WHERE l.profile_id = profiles.uuid)")
+	}
+	if query.Search != "" {
+		needle := "%" + query.Search + "%"
+		where = append(where, "(uuid ILIKE "+next(needle)+" OR replace(uuid, '-', '') ILIKE "+next(needle)+" OR protocol_name ILIKE "+next(needle)+" OR normalized_name ILIKE "+next(needle)+" OR display_name ILIKE "+next(needle)+")")
+	}
+	if len(where) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(where, " AND "), args
+}
+
+func passportOrderBy(sortKey string, dir string) string {
+	direction := "ASC"
+	if dir == "desc" {
+		direction = "DESC"
+	}
+	expr := "created_at"
+	switch sortKey {
+	case "username":
+		expr = "lower(username)"
+	case "profiles":
+		expr = "(SELECT count(*) FROM profile_passport_links l WHERE l.passport_id = passports.uuid)"
+	case "kind":
+		expr = "kind"
+	case "status":
+		expr = "status"
+	case "online":
+		expr = "EXISTS (SELECT 1 FROM player_presences pp WHERE pp.passport_id = passports.uuid AND pp.ended_at IS NULL)"
+	case "ban":
+		expr = "EXISTS (SELECT 1 FROM player_bans b WHERE b.scope = 'passport' AND b.target_id = passports.uuid AND b.revoked_at IS NULL AND (b.expires_at IS NULL OR b.expires_at > now()))"
+	case "uuid":
+		expr = "uuid"
+	case "lastSeen":
+		expr = "last_seen_at"
+	}
+	return expr + " " + direction + " NULLS LAST, uuid ASC"
+}
+
+func profileOrderBy(sortKey string, dir string) string {
+	direction := "ASC"
+	if dir == "desc" {
+		direction = "DESC"
+	}
+	expr := "lower(protocol_name)"
+	switch sortKey {
+	case "protocol":
+		expr = "lower(protocol_name)"
+	case "uuid":
+		expr = "uuid"
+	case "passport":
+		expr = "(SELECT lower(p.username) FROM profile_passport_links l JOIN passports p ON p.uuid = l.passport_id WHERE l.profile_id = profiles.uuid LIMIT 1)"
+	case "status":
+		expr = "status"
+	case "online":
+		expr = "EXISTS (SELECT 1 FROM player_presences pp WHERE pp.profile_id = profiles.uuid AND pp.ended_at IS NULL)"
+	case "ban":
+		expr = "EXISTS (SELECT 1 FROM player_bans b WHERE b.scope = 'profile' AND b.target_id = profiles.uuid AND b.revoked_at IS NULL AND (b.expires_at IS NULL OR b.expires_at > now()))"
+	case "lastSeen":
+		expr = "last_seen_at"
+	}
+	return expr + " " + direction + " NULLS LAST, uuid ASC"
 }
 
 func (p *Postgres) CreateProfile(ctx context.Context, profile identity.Profile) (identity.Profile, error) {
@@ -626,7 +828,7 @@ func (p *Postgres) CreateProfile(ctx context.Context, profile identity.Profile) 
 		profile.Status = identity.ProfileStatusActive
 	}
 	if profile.SkinSource == "" {
-		profile.SkinSource = "none"
+		profile.SkinSource = "passport"
 	}
 	propsJSON, err := json.Marshal(profile.ProfileProperties)
 	if err != nil {
@@ -2650,6 +2852,115 @@ func (p *Postgres) GetAdminTrustedDevice(ctx context.Context, tokenHash string, 
 	return device, err
 }
 
+func (p *Postgres) ListExternalAPITokens(ctx context.Context) []ExternalAPIToken {
+	rows, err := p.pool.Query(ctx, `
+		SELECT `+externalAPITokenSelectColumns+`
+		FROM external_api_tokens
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	tokens := make([]ExternalAPIToken, 0)
+	for rows.Next() {
+		token, err := scanExternalAPITokenRow(rows)
+		if err == nil {
+			tokens = append(tokens, token)
+		}
+	}
+	return tokens
+}
+
+func (p *Postgres) GetExternalAPIToken(ctx context.Context, id string) (ExternalAPIToken, error) {
+	token, err := scanExternalAPITokenRow(p.pool.QueryRow(ctx, `
+		SELECT `+externalAPITokenSelectColumns+`
+		FROM external_api_tokens
+		WHERE id = $1
+	`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ExternalAPIToken{}, fmt.Errorf("external api token not found: %w", ErrNotFound)
+	}
+	return token, err
+}
+
+func (p *Postgres) CreateExternalAPIToken(ctx context.Context, token ExternalAPIToken) (ExternalAPIToken, error) {
+	id, err := randomID("extapi")
+	if err != nil {
+		return ExternalAPIToken{}, err
+	}
+	token.ID = id
+	if token.Status == "" {
+		token.Status = ExternalAPITokenActive
+	}
+	created, err := scanExternalAPITokenRow(p.pool.QueryRow(ctx, `
+		INSERT INTO external_api_tokens (id, name, token_hash, token_fingerprint, status, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING `+externalAPITokenSelectColumns+`
+	`, token.ID, token.Name, token.TokenHash, token.TokenFingerprint, string(token.Status), token.CreatedBy))
+	return created, err
+}
+
+func (p *Postgres) UpdateExternalAPIToken(ctx context.Context, token ExternalAPIToken) (ExternalAPIToken, error) {
+	updated, err := scanExternalAPITokenRow(p.pool.QueryRow(ctx, `
+		UPDATE external_api_tokens
+		SET name = $2, status = $3, updated_at = now()
+		WHERE id = $1
+		RETURNING `+externalAPITokenSelectColumns+`
+	`, token.ID, token.Name, string(token.Status)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ExternalAPIToken{}, fmt.Errorf("external api token not found: %w", ErrNotFound)
+	}
+	return updated, err
+}
+
+func (p *Postgres) DeleteExternalAPIToken(ctx context.Context, id string) error {
+	tag, err := p.pool.Exec(ctx, `DELETE FROM external_api_tokens WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("external api token not found: %w", ErrNotFound)
+	}
+	return nil
+}
+
+func (p *Postgres) AuthenticateExternalAPIToken(ctx context.Context, rawToken string, now time.Time, clientIP string, path string) (ExternalAPIToken, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT `+externalAPITokenSelectColumns+`
+		FROM external_api_tokens
+		WHERE status = 'active'
+	`)
+	if err != nil {
+		return ExternalAPIToken{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		token, err := scanExternalAPITokenRow(rows)
+		if err != nil {
+			continue
+		}
+		if !auth.ConstantTimeTokenEqual("external-api", rawToken, token.TokenHash) {
+			continue
+		}
+		updated, err := scanExternalAPITokenRow(p.pool.QueryRow(ctx, `
+			UPDATE external_api_tokens
+			SET call_count = call_count + 1,
+				last_used_at = $2,
+				last_used_ip = $3,
+				last_used_path = $4,
+				updated_at = $2
+			WHERE id = $1
+			RETURNING `+externalAPITokenSelectColumns+`
+		`, token.ID, now.UTC(), strings.TrimSpace(clientIP), strings.TrimSpace(path)))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ExternalAPIToken{}, fmt.Errorf("external api token not found: %w", ErrNotFound)
+		}
+		return updated, err
+	}
+	return ExternalAPIToken{}, fmt.Errorf("external api token not found: %w", ErrNotFound)
+}
+
 type playerScanner interface {
 	Scan(dest ...any) error
 }
@@ -2660,6 +2971,7 @@ func scanPassportRow(row playerScanner) (identity.Passport, error) {
 	var rawOfflineName *string
 	var kind string
 	var status string
+	var skinSource string
 	var registrationServer *string
 	var lastSeenServer *string
 	var lastSeenAt *time.Time
@@ -2673,6 +2985,7 @@ func scanPassportRow(row playerScanner) (identity.Passport, error) {
 		&passport.UsernameNormalized,
 		&rawOfflineName,
 		&status,
+		&skinSource,
 		&registrationServer,
 		&lastSeenServer,
 		&lastSeenAt,
@@ -2692,6 +3005,7 @@ func scanPassportRow(row playerScanner) (identity.Passport, error) {
 	passport.ID = uuid.String()
 	passport.Kind = identity.PassportKind(kind)
 	passport.Status = identity.PassportStatus(status)
+	passport.SkinSource = NormalizePassportSkinSource(passport.Kind, skinSource)
 	if passport.Kind == identity.PassportKindPremium {
 		premiumUUID := uuid
 		passport.PremiumUUID = &premiumUUID
@@ -2881,6 +3195,27 @@ func scanAdminPasskeyRow(row playerScanner) (AdminPasskey, error) {
 		return AdminPasskey{}, err
 	}
 	return passkey, nil
+}
+
+func scanExternalAPITokenRow(row playerScanner) (ExternalAPIToken, error) {
+	var token ExternalAPIToken
+	var status string
+	err := row.Scan(
+		&token.ID,
+		&token.Name,
+		&token.TokenHash,
+		&token.TokenFingerprint,
+		&status,
+		&token.CreatedBy,
+		&token.CallCount,
+		&token.LastUsedAt,
+		&token.LastUsedIP,
+		&token.LastUsedPath,
+		&token.CreatedAt,
+		&token.UpdatedAt,
+	)
+	token.Status = ExternalAPITokenStatus(status)
+	return token, err
 }
 
 func scanTransferGrantRow(row playerScanner) (auth.TransferGrant, error) {
@@ -3234,6 +3569,7 @@ CREATE TABLE IF NOT EXISTS passports (
 	username_normalized text NOT NULL,
 	raw_offline_name text,
 	status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'locked', 'pending_verification', 'deleted')),
+	skin_source text NOT NULL DEFAULT 'upstream' CHECK (skin_source IN ('upstream', 'custom')),
 	registration_server_id text,
 	last_seen_server_id text,
 	last_seen_at timestamptz,
@@ -3251,6 +3587,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS passports_offline_username_unique
 
 ALTER TABLE passports ADD COLUMN IF NOT EXISTS last_seen_ip text;
 ALTER TABLE passports ADD COLUMN IF NOT EXISTS last_seen_geo jsonb;
+ALTER TABLE passports ADD COLUMN IF NOT EXISTS skin_source text NOT NULL DEFAULT 'upstream';
+UPDATE passports SET skin_source = 'upstream' WHERE skin_source IS NULL OR skin_source = '' OR skin_source IN ('mojang', 'default');
 
 CREATE TABLE IF NOT EXISTS profiles (
 	uuid text PRIMARY KEY,
@@ -3258,7 +3596,7 @@ CREATE TABLE IF NOT EXISTS profiles (
 	normalized_name text NOT NULL UNIQUE,
 	display_name text NOT NULL,
 	status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'locked', 'archived')),
-	skin_source text NOT NULL DEFAULT 'none',
+	skin_source text NOT NULL DEFAULT 'passport',
 	profile_properties jsonb NOT NULL DEFAULT '[]'::jsonb,
 	created_from_passport_id text REFERENCES passports(uuid) ON DELETE SET NULL,
 	last_seen_server_id text,
@@ -3473,6 +3811,25 @@ CREATE TABLE IF NOT EXISTS admin_trusted_devices (
 
 CREATE INDEX IF NOT EXISTS admin_trusted_devices_admin_id_idx ON admin_trusted_devices (admin_id);
 CREATE INDEX IF NOT EXISTS admin_trusted_devices_expires_at_idx ON admin_trusted_devices (expires_at);
+
+CREATE TABLE IF NOT EXISTS external_api_tokens (
+	id text PRIMARY KEY,
+	name text NOT NULL,
+	token_hash text NOT NULL UNIQUE,
+	token_fingerprint text NOT NULL,
+	status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'revoked')),
+	created_by text NOT NULL DEFAULT '',
+	call_count bigint NOT NULL DEFAULT 0,
+	last_used_at timestamptz,
+	last_used_ip text NOT NULL DEFAULT '',
+	last_used_path text NOT NULL DEFAULT '',
+	created_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS external_api_tokens_status_idx ON external_api_tokens (status);
+CREATE INDEX IF NOT EXISTS external_api_tokens_created_at_idx ON external_api_tokens (created_at DESC);
+CREATE INDEX IF NOT EXISTS external_api_tokens_last_used_at_idx ON external_api_tokens (last_used_at DESC);
 
 CREATE TABLE IF NOT EXISTS limbo_blueprints (
 	id text PRIMARY KEY,

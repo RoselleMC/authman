@@ -100,6 +100,17 @@ type AuditEventQuery struct {
 	PageSize   int
 }
 
+type IdentityListQuery struct {
+	Search   string
+	Kind     string
+	Status   string
+	Binding  string
+	Sort     string
+	Dir      string
+	Page     int
+	PageSize int
+}
+
 type PlayerPresence struct {
 	ID           string
 	PassportID   string
@@ -229,6 +240,29 @@ type AdminTrustedDevice struct {
 	ExpiresAt time.Time
 }
 
+type ExternalAPITokenStatus string
+
+const (
+	ExternalAPITokenActive   ExternalAPITokenStatus = "active"
+	ExternalAPITokenDisabled ExternalAPITokenStatus = "disabled"
+	ExternalAPITokenRevoked  ExternalAPITokenStatus = "revoked"
+)
+
+type ExternalAPIToken struct {
+	ID               string
+	Name             string
+	TokenHash        string
+	TokenFingerprint string
+	Status           ExternalAPITokenStatus
+	CreatedBy        string
+	CallCount        int64
+	LastUsedAt       *time.Time
+	LastUsedIP       string
+	LastUsedPath     string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
 type PlayerStore interface {
 	CreateOfflinePassportProfile(ctx context.Context, rawName string, protocolName string, passwordHash string) (identity.PassportProfile, error)
 	UpsertPremiumPassportProfile(ctx context.Context, name string, uuid identity.UUID, properties []identity.ProfileProperty) (identity.PassportProfile, error)
@@ -244,10 +278,13 @@ type PlayerStore interface {
 	SetProfileSkinSource(ctx context.Context, profileID string, skinSource string, properties []identity.ProfileProperty) (identity.Profile, error)
 	GetPassportSkin(ctx context.Context, passportID string) (PassportSkin, error)
 	SetPassportSkin(ctx context.Context, passportID string, skin PassportSkin) (identity.Passport, error)
+	SetPassportSkinSource(ctx context.Context, passportID string, skinSource string) (identity.Passport, error)
 	DeletePassportSkin(ctx context.Context, passportID string) (identity.Passport, error)
 	ListProfilesForPassport(ctx context.Context, passportID string) []identity.Profile
 	ListPassports(ctx context.Context) []identity.Passport
+	ListPassportsPage(ctx context.Context, query IdentityListQuery) ([]identity.Passport, int, error)
 	ListProfiles(ctx context.Context) []identity.Profile
+	ListProfilesPage(ctx context.Context, query IdentityListQuery) ([]identity.Profile, int, error)
 	CreateProfile(ctx context.Context, profile identity.Profile) (identity.Profile, error)
 	BindProfileToPassport(ctx context.Context, profileID string, passportID string, primary bool) (identity.PassportProfile, error)
 	UnbindProfile(ctx context.Context, profileID string) error
@@ -336,4 +373,10 @@ type PlayerStore interface {
 	DeletePendingAdminMFA(ctx context.Context, id string) error
 	CreateAdminTrustedDevice(ctx context.Context, device AdminTrustedDevice) (AdminTrustedDevice, error)
 	GetAdminTrustedDevice(ctx context.Context, tokenHash string, now time.Time) (AdminTrustedDevice, error)
+	ListExternalAPITokens(ctx context.Context) []ExternalAPIToken
+	GetExternalAPIToken(ctx context.Context, id string) (ExternalAPIToken, error)
+	CreateExternalAPIToken(ctx context.Context, token ExternalAPIToken) (ExternalAPIToken, error)
+	UpdateExternalAPIToken(ctx context.Context, token ExternalAPIToken) (ExternalAPIToken, error)
+	DeleteExternalAPIToken(ctx context.Context, id string) error
+	AuthenticateExternalAPIToken(ctx context.Context, rawToken string, now time.Time, clientIP string, path string) (ExternalAPIToken, error)
 }

@@ -143,7 +143,7 @@ export function LoginPage() {
                       />
                     </Field>
                   ) : null}
-                  <label className="check-row">
+                  <label className="toggle-row">
                     <input type="checkbox" checked={trustDevice} onChange={(e) => setTrustDevice(e.target.checked)} />
                     <span>{t("login.mfa.trustDevice")}</span>
                   </label>

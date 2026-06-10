@@ -111,21 +111,31 @@ function assetURL(url: string | null | undefined) {
 
 function applySkinPreviewTheme(viewer: SkinViewer, canvas: HTMLCanvasElement) {
   const theme = readSkinPreviewTheme(canvas);
+  viewer.background = theme.background;
   viewer.renderer.setClearColor(theme.background, 1);
   viewer.globalLight.intensity = theme.dark ? 3.4 : 3;
   viewer.cameraLight.intensity = theme.dark ? 1.1 : 0.6;
+  viewer.render();
 }
 
 function readSkinPreviewTheme(canvas: HTMLCanvasElement) {
-  const style = getComputedStyle(canvas);
+  const frame = canvas.closest(".skin-preview-frame") as HTMLElement | null;
+  const style = getComputedStyle(frame ?? canvas);
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
   return {
-    background: cssColorToHex(style.getPropertyValue("--skin-preview-canvas-bg").trim(), 0xf7fbf7),
-    dark: document.documentElement.getAttribute("data-theme") === "dark",
+    background: cssColorToHex(style.getPropertyValue("--skin-preview-canvas-bg").trim(), dark ? 0x111815 : 0xf4f8f4),
+    dark,
   };
 }
 
 function cssColorToHex(color: string, fallback: number) {
   if (!color) return fallback;
+  try {
+    return new THREE.Color(color).getHex();
+  } catch {
+    // Some browsers normalize custom properties through canvas even when Three.js
+    // cannot parse the exact color syntax.
+  }
   const ctx = document.createElement("canvas").getContext("2d");
   if (!ctx) return fallback;
   ctx.fillStyle = "#000";

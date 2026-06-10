@@ -46,6 +46,7 @@ type Passport struct {
 	UsernameNormalized string
 	RawOfflineName     string
 	Status             PassportStatus
+	SkinSource         string
 	RegistrationServer string
 	LastSeenServer     string
 	LastSeenAt         *time.Time
@@ -157,6 +158,7 @@ func NewOfflinePassport(_ string, rawName string) (Passport, error) {
 		UsernameNormalized: name.Normalized,
 		RawOfflineName:     name.Raw,
 		Status:             PassportStatusActive,
+		SkinSource:         "upstream",
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}, nil
@@ -179,7 +181,7 @@ func NewOfflineProfile(_ string, protocolName string, createdFromPassport string
 		NormalizedName:      name.Normalized,
 		DisplayName:         name.Protocol,
 		Status:              ProfileStatusActive,
-		SkinSource:          "none",
+		SkinSource:          "passport",
 		ProfileProperties:   []ProfileProperty{},
 		CreatedFromPassport: createdFromPassport,
 		CreatedAt:           now,
@@ -212,6 +214,7 @@ func NewPremiumPassport(_ string, name string, uuid UUID) Passport {
 		Username:           name,
 		UsernameNormalized: normalized,
 		Status:             PassportStatusActive,
+		SkinSource:         "upstream",
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
@@ -234,7 +237,7 @@ func NewPremiumProfile(_ string, name string, _ UUID, properties []ProfileProper
 		NormalizedName:      protocol.Normalized,
 		DisplayName:         protocol.Protocol,
 		Status:              ProfileStatusActive,
-		SkinSource:          "mojang",
+		SkinSource:          "passport",
 		ProfileProperties:   append([]ProfileProperty(nil), properties...),
 		CreatedFromPassport: createdFromPassport,
 		CreatedAt:           now,

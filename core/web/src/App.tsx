@@ -16,6 +16,7 @@ import { ProxyPoolPage } from "./pages/MojangPage";
 import { AuditPage } from "./pages/AuditPage";
 import { AuditDetailPage } from "./pages/AuditDetailPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { ExternalAPITokenDetailPage } from "./pages/ExternalAPITokenDetailPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { LoadingScreen } from "./components/LoadingScreen";
 
@@ -76,6 +77,7 @@ export function App() {
         <Route path="/audit" element={<AuditPage />} />
         <Route path="/audit/:id" element={<AuditDetailPage />} />
         <Route path="/settings" element={<Navigate to="/settings/account" replace />} />
+        <Route path="/settings/external-api/:id" element={<ExternalAPITokenDetailPage />} />
         <Route path="/settings/:section" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<NotFoundPage />} />

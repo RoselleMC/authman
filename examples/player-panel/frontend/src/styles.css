@@ -645,6 +645,28 @@ button:disabled {
   color: #bda37b;
 }
 
+.skin-section-title {
+  margin-top: 18px;
+}
+
+.toggle-line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 2px solid #6a5639;
+  background: #130f0b;
+  padding: 10px;
+  color: #f8eed7;
+  font-weight: 800;
+}
+
+.toggle-line input {
+  width: 18px;
+  height: 18px;
+  accent-color: #72b66f;
+}
+
 .roster-panel,
 .security-panel,
 .boundary-note {

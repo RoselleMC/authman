@@ -69,6 +69,26 @@ func containsFold(value string, query string) bool {
 	return query == "" || strings.Contains(value, query)
 }
 
+func compareInts(a int, b int) int {
+	if a == b {
+		return 0
+	}
+	if a < b {
+		return -1
+	}
+	return 1
+}
+
+func compareInts64(a int64, b int64) int {
+	if a == b {
+		return 0
+	}
+	if a < b {
+		return -1
+	}
+	return 1
+}
+
 func parseOptionalRFC3339(value string) (time.Time, bool) {
 	value = strings.TrimSpace(value)
 	if value == "" {

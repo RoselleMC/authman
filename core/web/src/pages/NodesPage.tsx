@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -26,7 +26,7 @@ import {
   type ListColumn,
   type SafeVelocityNode,
 } from "@authman/shared";
-import { createNode, deleteNode, fetchNodes } from "../api/admin";
+import { createNode, deleteNode, fetchNodes, type ListFilters } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
 function NodeStatusBadge({ status }: { status: SafeVelocityNode["status"] }) {
@@ -89,15 +89,27 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
     defaults: { pageSize: 25 },
     storageScope: user?.id,
   });
+  const filters = useMemo<ListFilters>(() => {
+    const next: ListFilters = { page: list.state.page, page_size: list.state.pageSize };
+    const q = (list.state.filters.name ?? "").trim();
+    if (q) next.q = q;
+    const status = list.state.filters.status;
+    if (status) next.status = status;
+    if (list.state.sortKey) {
+      next.sort = list.state.sortKey;
+      next.dir = list.state.sortDir;
+    }
+    return next;
+  }, [list.state]);
 
   const q = useQuery({
-    queryKey: ["admin.nodes", kind],
-    queryFn: () => fetchNodes(kind),
+    queryKey: ["admin.nodes", kind, filters],
+    queryFn: () => fetchNodes(kind, filters),
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
   });
 
-  const rows: SafeVelocityNode[] = (q.data ?? []).map(coerceVelocityNode);
+  const rows: SafeVelocityNode[] = (q.data?.rows ?? []).map(coerceVelocityNode);
 
   const deleteMut = useMutation({
     mutationFn: (n: SafeVelocityNode) => deleteNode(n.id),
@@ -330,6 +342,8 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
           title={embedded ? (kind === "limbo_portal" ? t("admin.loginPortals.tab.instances") : t("admin.nodes.heading")) : undefined}
           loading={q.isLoading}
           rows={rows}
+          mode="server"
+          total={q.data?.meta.total ?? 0}
           columns={columns}
           rowKey={(r) => r.id}
           state={list.state}

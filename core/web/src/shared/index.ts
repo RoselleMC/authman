@@ -45,6 +45,7 @@ export * from "./components/PreferenceSelect";
 export * from "./components/ThemeToggle";
 export * from "./components/AccountMenu";
 export * from "./components/IPLocation";
+export * from "./components/MinecraftRichTextPreview";
 
 export * from "./extensions/types";
 export * from "./extensions/SchemaRenderer";

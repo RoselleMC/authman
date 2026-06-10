@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     environment:
       AUTHMAN_CORE_URL: "${AUTHMAN_CORE_URL:-http://host.docker.internal:8080}"
+      AUTHMAN_EXTERNAL_API_TOKEN: "${AUTHMAN_EXTERNAL_API_TOKEN:-}"
     ports:
       - "${AUTHMAN_PLAYER_EXAMPLE_PORT:-18082}:8080"
     extra_hosts:

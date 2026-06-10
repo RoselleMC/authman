@@ -17,6 +17,8 @@ import {
   Field,
   Icon,
   Input,
+  MinecraftMotdPreview,
+  MiniMessageEditorDialog,
   PageShell,
   SecretReveal,
   Select,
@@ -29,12 +31,14 @@ import {
 } from "@authman/shared";
 import {
   createNode,
+  deleteDownstreamServerIcon,
   deleteDownstreamServer,
   deleteNode,
   fetchDownstreamServer,
   fetchLimboBlueprints,
   fetchNodes,
   updateDownstreamServer,
+  uploadDownstreamServerIcon,
   type DownstreamServer,
   type DownstreamServerInput,
 } from "../api/admin";
@@ -82,7 +86,7 @@ function parseAddress(value: string): { host: string; port: number } {
 }
 
 function nodeBelongsToServer(n: SafeVelocityNode, server: DownstreamServer): boolean {
-  return n.server_id === server.id || n.server_id === server.slug;
+  return n.status !== "disabled" && (n.server_id === server.id || n.server_id === server.slug);
 }
 
 function NodeStatusBadge({ node }: { node: SafeVelocityNode }) {
@@ -100,26 +104,28 @@ export function DownstreamServerDetailPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteNodeOpen, setDeleteNodeOpen] = useState(false);
   const [issueOpen, setIssueOpen] = useState(false);
+  const [motdOpen, setMotdOpen] = useState(false);
   const [issuedToken, setIssuedToken] = useState<IssuedToken | null>(null);
   const [input, setInput] = useState<DownstreamServerInput | null>(null);
   const [matchDomains, setMatchDomains] = useState("");
   const [downstreamAddress, setDownstreamAddress] = useState("");
+  const [iconError, setIconError] = useState("");
   const q = useQuery({ queryKey: ["admin.downstreamServer", id], queryFn: () => fetchDownstreamServer(id), enabled: !!id });
-  const blueprints = useQuery({ queryKey: ["admin.limboBlueprints"], queryFn: fetchLimboBlueprints });
+  const blueprints = useQuery({ queryKey: ["admin.limboBlueprints", "select"], queryFn: () => fetchLimboBlueprints({ page: 1, page_size: 100 }) });
   const nodesQ = useQuery({
-    queryKey: ["admin.nodes", "downstream_velocity"],
-    queryFn: () => fetchNodes("downstream_velocity"),
+    queryKey: ["admin.nodes", "downstream_velocity", "server-detail"],
+    queryFn: () => fetchNodes("downstream_velocity", { page: 1, page_size: 100 }),
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
   });
   const server = q.data;
   const node = useMemo(() => {
     if (!server) return null;
-    return (nodesQ.data ?? []).map(coerceVelocityNode).find((n) => nodeBelongsToServer(n, server)) ?? null;
+    return (nodesQ.data?.rows ?? []).map(coerceVelocityNode).find((n) => nodeBelongsToServer(n, server)) ?? null;
   }, [nodesQ.data, server]);
   const blueprintOptions = useMemo(() => [
     { value: "", label: t("admin.servers.defaultWorld") },
-    ...(blueprints.data ?? []).map((bp) => ({ value: bp.id, label: bp.name })),
+    ...(blueprints.data?.rows ?? []).map((bp) => ({ value: bp.id, label: bp.name })),
   ], [blueprints.data, t]);
 
   useEffect(() => {
@@ -189,11 +195,38 @@ export function DownstreamServerDetailPage() {
     },
     onError: (err) => toast.danger(err instanceof ApiError ? err.message : t("common.unknown")),
   });
+  const uploadIconMut = useMutation({
+    mutationFn: (file: File) => uploadDownstreamServerIcon(id, file),
+    onSuccess: (next) => {
+      toast.push({ tone: "success", title: t("admin.servers.icon.saved") });
+      setIconError("");
+      setInput(toInput(next));
+      void qc.invalidateQueries({ queryKey: ["admin.downstreamServer", id] });
+      void qc.invalidateQueries({ queryKey: ["admin.downstreamServers"] });
+    },
+    onError: (err) => {
+      const message = err instanceof ApiError ? err.message : t("common.unknown");
+      setIconError(message);
+      toast.danger(message);
+    },
+  });
+  const deleteIconMut = useMutation({
+    mutationFn: () => deleteDownstreamServerIcon(id),
+    onSuccess: (next) => {
+      toast.push({ tone: "success", title: t("admin.servers.icon.deleted") });
+      setIconError("");
+      setInput(toInput(next));
+      void qc.invalidateQueries({ queryKey: ["admin.downstreamServer", id] });
+      void qc.invalidateQueries({ queryKey: ["admin.downstreamServers"] });
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? err.message : t("common.unknown")),
+  });
 
   if (!server || !input) {
     return <PageShell><BackLink onClick={() => navigate("/nodes")}>{t("admin.servers.heading")}</BackLink><Card title={q.isLoading ? t("common.loading") : t("common.unknown")}><span /></Card></PageShell>;
   }
   const cfg = input.routing_config;
+  const serverIcon = String(cfg.server_icon || server.target.server_icon || "").trim();
   function setConfig(next: Partial<DownstreamServerInput["routing_config"]>) {
     setInput((current) => current ? { ...current, routing_config: { ...current.routing_config, ...next } } : current);
   }
@@ -208,6 +241,7 @@ export function DownstreamServerDetailPage() {
           <DetailSummary
             title={input.display_name}
             icon="server"
+            avatarUrl={serverIcon || null}
             titleMeta={<StatusBadge status={input.enabled ? (input.visible ? "active" : "hidden") : "disabled"} />}
             meta={<span className="muted-cell">{t("admin.servers.internalId")}: <span className="mono">{server.id}</span></span>}
           >
@@ -261,8 +295,49 @@ export function DownstreamServerDetailPage() {
 
           <Card title={t("admin.servers.loginPresentation")}>
             <div className="form-grid two">
-              <Field label={t("admin.servers.field.motd")}>
-                <Input value={String(cfg.motd ?? "")} onChange={(e) => setConfig({ motd: e.target.value })} />
+              <Field label={t("admin.servers.field.motd")} hint={t("admin.servers.field.motd.hint")} style={{ gridColumn: "1 / -1" }}>
+                <MinecraftMotdPreview
+                  value={String(cfg.motd ?? "")}
+                  iconUrl={serverIcon}
+                  serverName={input.display_name}
+                  address={downstreamAddress}
+                  placeholder={t("minecraftText.empty")}
+                  onClick={() => setMotdOpen(true)}
+                  testId="server-motd-preview"
+                />
+              </Field>
+              <Field label={t("admin.servers.field.icon")} hint={t("admin.servers.field.icon.hint")}>
+                <div className="server-icon-control">
+                  <div className="server-icon-preview">
+                    {cfg.server_icon ? <img src={String(cfg.server_icon)} alt="" /> : <Icon name="server" size={24} />}
+                  </div>
+                  <div className="server-icon-actions">
+                    <label className="btn btn--secondary btn--sm">
+                      <input
+                        type="file"
+                        accept="image/png"
+                        hidden
+                        onChange={(event) => {
+                          const file = event.currentTarget.files?.[0];
+                          event.currentTarget.value = "";
+                          if (file) uploadIconMut.mutate(file);
+                        }}
+                      />
+                      <span>{uploadIconMut.isPending ? t("common.loading") : t("admin.servers.icon.upload")}</span>
+                    </label>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon="refresh"
+                      disabled={!cfg.server_icon}
+                      loading={deleteIconMut.isPending}
+                      onClick={() => deleteIconMut.mutate()}
+                    >
+                      {t("admin.servers.icon.reset")}
+                    </Button>
+                    {iconError ? <p className="field-error">{iconError}</p> : null}
+                  </div>
+                </div>
               </Field>
               <Field label={t("admin.servers.col.blueprint")}>
                 <Select value={String(cfg.limbo_blueprint_id ?? "")} onChange={(value) => setConfig({ limbo_blueprint_id: value })} options={blueprintOptions} />
@@ -307,6 +382,21 @@ export function DownstreamServerDetailPage() {
         confirmLabel={t("admin.nodes.issueToken.submit")}
         loading={issueNodeMut.isPending}
         testId="dialog-server-node-issue"
+      />
+      <MiniMessageEditorDialog
+        open={motdOpen}
+        title={t("admin.servers.motd.editor")}
+        desc={t("admin.servers.motd.editor.desc")}
+        value={String(cfg.motd ?? "")}
+        serverName={input.display_name}
+        address={downstreamAddress}
+        iconUrl={serverIcon}
+        onClose={() => setMotdOpen(false)}
+        onSave={(value) => {
+          setConfig({ motd: value });
+          setMotdOpen(false);
+        }}
+        testId="dialog-server-motd"
       />
       <Dialog
         open={!!issuedToken}

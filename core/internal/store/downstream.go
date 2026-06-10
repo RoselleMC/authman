@@ -1,6 +1,7 @@
 package store
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -11,7 +12,21 @@ import (
 const (
 	DefaultTransferGrantTTLSeconds = 45
 	DefaultDownstreamPort          = 25565
+	DefaultMOTDMaxLines            = 2
 )
+
+var miniMessageLineBreakRE = regexp.MustCompile(`(?i)\r\n|\r|\n|<\s*(?:newline|br)\s*/?>`)
+
+func LimitMiniMessageLines(value string, maxLines int) string {
+	if value == "" || maxLines <= 0 {
+		return ""
+	}
+	matches := miniMessageLineBreakRE.FindAllStringIndex(value, -1)
+	if len(matches) < maxLines {
+		return value
+	}
+	return value[:matches[maxLines-1][0]]
+}
 
 type DownstreamTarget struct {
 	ServerID             string
@@ -23,6 +38,7 @@ type DownstreamTarget struct {
 	TransferHost         string
 	TransferPort         int
 	MOTD                 string
+	ServerIcon           string
 	GateEnabled          bool
 	GrantTTLSeconds      int
 	AllowedPortalSources []string
@@ -46,6 +62,7 @@ func defaultDownstreamServer(now time.Time) DownstreamServer {
 			"transfer_host":          "127.0.0.1",
 			"transfer_port":          DefaultDownstreamPort,
 			"motd":                   "Welcome to Authman",
+			"server_icon":            "",
 			"gate_enabled":           true,
 			"grant_ttl_seconds":      DefaultTransferGrantTTLSeconds,
 			"allowed_portal_sources": []string{},
@@ -95,6 +112,9 @@ func normalizeDownstreamServer(server DownstreamServer) DownstreamServer {
 	}
 	if _, ok := server.PortalConfig["motd"]; !ok {
 		server.PortalConfig["motd"] = server.DisplayName
+	}
+	if _, ok := server.PortalConfig["server_icon"]; !ok {
+		server.PortalConfig["server_icon"] = ""
 	}
 	if _, ok := server.PortalConfig["gate_enabled"]; !ok {
 		if _, ok := server.PortalConfig["grant_required"]; ok {
@@ -153,6 +173,8 @@ func DownstreamTargetFromServer(server DownstreamServer) DownstreamTarget {
 	if motd == "" {
 		motd = server.DisplayName
 	}
+	motd = LimitMiniMessageLines(motd, DefaultMOTDMaxLines)
+	serverIcon := strings.TrimSpace(stringFromAny(server.PortalConfig["server_icon"], ""))
 	return DownstreamTarget{
 		ServerID:             server.ID,
 		Slug:                 server.Slug,
@@ -163,6 +185,7 @@ func DownstreamTargetFromServer(server DownstreamServer) DownstreamTarget {
 		TransferHost:         transferHost,
 		TransferPort:         transferPort,
 		MOTD:                 motd,
+		ServerIcon:           serverIcon,
 		GateEnabled:          boolFromAny(server.PortalConfig["grant_required"], boolFromAny(server.PortalConfig["gate_enabled"], true)),
 		GrantTTLSeconds:      ttl,
 		AllowedPortalSources: stringSliceFromAny(server.PortalConfig["allowed_portal_sources"]),
@@ -182,6 +205,7 @@ func DownstreamTargetData(target DownstreamTarget) map[string]any {
 		"transfer_host":          target.TransferHost,
 		"transfer_port":          target.TransferPort,
 		"motd":                   target.MOTD,
+		"server_icon":            target.ServerIcon,
 		"grant_required":         target.GateEnabled,
 		"gate_enabled":           target.GateEnabled,
 		"grant_ttl_seconds":      target.GrantTTLSeconds,

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const port = Number.parseInt(process.env.PORT || "8080", 10);
 const coreURL = normalizeURL(process.env.AUTHMAN_CORE_URL || "http://authman:8080");
+const externalAPIToken = (process.env.AUTHMAN_EXTERNAL_API_TOKEN || "").trim();
 const staticDir = process.env.STATIC_DIR || path.resolve(__dirname, "../frontend/dist");
 const indexFile = path.join(staticDir, "index.html");
 
@@ -72,6 +73,15 @@ async function handleAPI(req, res, parsed) {
     });
     return;
   }
+  if (!externalAPIToken) {
+    writeJSON(res, 503, {
+      error: {
+        code: "example.external_token_missing",
+        message: "AUTHMAN_EXTERNAL_API_TOKEN is required for player panel API access"
+      }
+    });
+    return;
+  }
 
   const target = new URL(parsed.pathname + parsed.search, coreURL);
   const headers = {};
@@ -83,8 +93,12 @@ async function handleAPI(req, res, parsed) {
     if (lower === "host") {
       continue;
     }
+    if (lower === "authorization" || lower === "x-authman-external-token") {
+      continue;
+    }
     headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
+  headers.authorization = `Bearer ${externalAPIToken}`;
   headers["x-forwarded-host"] = req.headers.host || "";
   headers["x-forwarded-proto"] = req.socket.encrypted ? "https" : "http";
 
@@ -123,12 +137,14 @@ async function handleStatus(res) {
     const upstream = await fetch(target, { method: "GET" });
     writeJSON(res, 200, {
       core_url_configured: true,
+      external_token_configured: externalAPIToken.length > 0,
       core_health_status: upstream.status,
       core_reachable: upstream.ok
     });
   } catch {
     writeJSON(res, 200, {
       core_url_configured: true,
+      external_token_configured: externalAPIToken.length > 0,
       core_health_status: null,
       core_reachable: false
     });

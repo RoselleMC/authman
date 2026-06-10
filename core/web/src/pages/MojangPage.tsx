@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -25,7 +25,7 @@ import {
   type ListColumn,
   type SafeMojangProxy,
 } from "@authman/shared";
-import { createMojangRoute, deleteMojangRoute, fetchMojang, updateMojangRoute, type CreateMojangRouteInput } from "../api/admin";
+import { createMojangRoute, deleteMojangRoute, fetchMojang, updateMojangRoute, type CreateMojangRouteInput, type ListFilters } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
 function StateBadge({ state }: { state: string }) {
@@ -56,9 +56,23 @@ export function ProxyPoolPage() {
   const [editTarget, setEditTarget] = useState<SafeMojangProxy | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SafeMojangProxy | null>(null);
   const [bulkDeleteRows, setBulkDeleteRows] = useState<SafeMojangProxy[]>([]);
+  const filters = useMemo<ListFilters>(() => {
+    const next: ListFilters = { page: list.state.page, page_size: list.state.pageSize };
+    const q = (list.state.filters.route ?? "").trim();
+    if (q) next.q = q;
+    const kind = list.state.filters.kind;
+    if (kind) next.kind = kind;
+    const state = list.state.filters.state;
+    if (state) next.state = state;
+    if (list.state.sortKey) {
+      next.sort = list.state.sortKey;
+      next.dir = list.state.sortDir;
+    }
+    return next;
+  }, [list.state]);
   const q = useQuery({
-    queryKey: ["admin.mojang"],
-    queryFn: fetchMojang,
+    queryKey: ["admin.mojang", filters],
+    queryFn: () => fetchMojang(filters),
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
   });
@@ -117,7 +131,7 @@ export function ProxyPoolPage() {
   });
   const dialogPending = createMut.isPending || updateMut.isPending;
 
-  const status = q.data ? coerceMojangStatus(q.data) : null;
+  const status = q.data ? coerceMojangStatus(q.data.status) : null;
   const columns: ListColumn<SafeMojangProxy>[] = [
     {
       key: "route",
@@ -287,6 +301,8 @@ export function ProxyPoolPage() {
           title={t("admin.mojang.proxies")}
           loading={q.isLoading}
           rows={status?.proxies ?? []}
+          mode="server"
+          total={q.data?.meta.total ?? 0}
           columns={columns}
           rowKey={(r) => r.id}
           state={list.state}

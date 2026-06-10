@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +30,8 @@ import (
 )
 
 const version = "0.1.0-dev"
+
+var miniMessageLineBreakRE = regexp.MustCompile(`(?i)\r\n|\r|\n|<\s*(?:newline|br)\s*/?>`)
 
 type config struct {
 	Listen         string
@@ -276,18 +279,41 @@ func (p *portal) worldForBlueprint(ctx context.Context, blueprint limboBlueprint
 func (p *portal) status(ctx context.Context, req limbgo.StatusRequest) (limbgo.Status, error) {
 	host := requestedHost(req.Address, p.cfg.DefaultHost)
 	resolved, err := p.client.resolveTarget(ctx, host)
-	description := &component.Text{Content: "Authman login portal"}
+	var description component.Component = &component.Text{Content: "Authman login portal"}
 	if err == nil && resolved.Target.MOTD != "" {
-		description = &component.Text{Content: resolved.Target.MOTD}
+		motd := limitMiniMessageLines(resolved.Target.MOTD, 2)
+		parsed, parseErr := limbgo.ParseMiniMessage(motd)
+		if parseErr == nil && parsed != nil {
+			description = parsed
+		} else {
+			p.logger.Warn("failed to parse downstream motd minimessage", "host", host, "err", parseErr)
+			description = &component.Text{Content: motd}
+		}
+	}
+	favicon := ""
+	if err == nil {
+		favicon = strings.TrimSpace(resolved.Target.ServerIcon)
 	}
 	return limbgo.Status{
 		VersionName:         "Authman Limbo",
 		Protocol:            req.Protocol,
 		Description:         description,
+		Favicon:             favicon,
 		MaxPlayers:          1000,
 		OnlinePlayers:       0,
 		PreventsChatReports: limbgo.Bool(true),
 	}, nil
+}
+
+func limitMiniMessageLines(value string, maxLines int) string {
+	if value == "" || maxLines <= 0 {
+		return ""
+	}
+	matches := miniMessageLineBreakRE.FindAllStringIndex(value, -1)
+	if len(matches) < maxLines {
+		return value
+	}
+	return value[:matches[maxLines-1][0]]
 }
 
 func (p *portal) handleJoin(ctx context.Context, session limbgo.PlayerSession, event *limbgo.JoinEvent) error {
@@ -765,6 +791,7 @@ type downstreamTarget struct {
 	TransferHost string `json:"transfer_host"`
 	TransferPort int    `json:"transfer_port"`
 	MOTD         string `json:"motd"`
+	ServerIcon   string `json:"server_icon"`
 }
 
 func (c *coreClient) heartbeat(ctx context.Context) (heartbeatResponse, error) {

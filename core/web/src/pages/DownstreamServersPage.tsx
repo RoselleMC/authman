@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -20,7 +20,7 @@ import {
   useToast,
   type ListColumn,
 } from "@authman/shared";
-import { createDownstreamServer, deleteDownstreamServer, fetchDownstreamServers, updateDownstreamServer, type DownstreamServer, type DownstreamServerInput } from "../api/admin";
+import { createDownstreamServer, deleteDownstreamServer, fetchDownstreamServers, updateDownstreamServer, type DownstreamServer, type DownstreamServerInput, type ListFilters } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
 function splitCSV(value: string): string[] {
@@ -52,6 +52,7 @@ function serverInput(displayName: string, matchDomains: string, connectionAddres
       transfer_host: target.host,
       transfer_port: target.port,
       motd: displayName,
+      server_icon: "",
       gate_enabled: true,
       grant_required: true,
       grant_ttl_seconds: 45,
@@ -74,6 +75,19 @@ function inputFromServer(server: DownstreamServer, patch: Partial<Pick<Downstrea
   };
 }
 
+function serverIconURL(server: DownstreamServer): string {
+  return String(server.target.server_icon || server.routing_config.server_icon || "").trim();
+}
+
+function ServerIconCell({ server }: { server: DownstreamServer }) {
+  const icon = serverIconURL(server);
+  return (
+    <span className={`server-list-icon${icon ? " has-image" : ""}`} aria-hidden="true">
+      {icon ? <img src={icon} alt="" /> : <Icon name="server" size={17} />}
+    </span>
+  );
+}
+
 export function DownstreamServersPage() {
   const { t } = useI18n();
   const { user } = useSession();
@@ -86,7 +100,17 @@ export function DownstreamServersPage() {
   const [displayName, setDisplayName] = useState("");
   const [matchDomains, setMatchDomains] = useState("");
   const [connectionAddress, setConnectionAddress] = useState("127.0.0.1:25565");
-  const q = useQuery({ queryKey: ["admin.downstreamServers"], queryFn: fetchDownstreamServers });
+  const filters = useMemo<ListFilters>(() => {
+    const next: ListFilters = { page: list.state.page, page_size: list.state.pageSize };
+    const q = (list.state.filters.name ?? "").trim();
+    if (q) next.q = q;
+    if (list.state.sortKey) {
+      next.sort = list.state.sortKey;
+      next.dir = list.state.sortDir;
+    }
+    return next;
+  }, [list.state]);
+  const q = useQuery({ queryKey: ["admin.downstreamServers", filters], queryFn: () => fetchDownstreamServers(filters) });
   const createMut = useMutation({
     mutationFn: () => createDownstreamServer(serverInput(displayName, matchDomains, connectionAddress)),
     onSuccess: (server) => {
@@ -122,6 +146,7 @@ export function DownstreamServersPage() {
     onError: () => toast.danger(t("common.unknown")),
   });
   const columns: ListColumn<DownstreamServer>[] = [
+    { key: "icon", header: t("admin.servers.col.icon"), mandatory: true, width: "52px", minWidth: "52px", align: "center", render: (r) => <ServerIconCell server={r} /> },
     { key: "name", header: t("admin.servers.col.name"), mandatory: true, sortable: true, sortValue: (r) => r.display_name, filter: { type: "text" }, render: (r) => <strong>{r.display_name}</strong> },
     { key: "status", header: t("admin.servers.col.status"), sortable: true, sortValue: (r) => r.status, render: (r) => <StatusBadge status={r.enabled ? (r.visible ? "active" : "hidden") : "disabled"} /> },
     { key: "host", header: t("admin.servers.col.host"), minWidth: "190px", render: (r) => <span className="mono">{r.target.transfer_host}:{r.target.transfer_port}</span> },
@@ -139,7 +164,9 @@ export function DownstreamServersPage() {
         <AdvancedList
           columns={columns}
           rowKey={(r) => r.id}
-          rows={q.data ?? []}
+          mode="server"
+          rows={q.data?.rows ?? []}
+          total={q.data?.meta.total ?? 0}
           state={list.state}
           onStateChange={list.setState}
           loading={q.isLoading}

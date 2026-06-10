@@ -63,20 +63,37 @@ func main() {
 		Handler:           app.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	httpServers := []*http.Server{httpServer}
+	if cfg.ExternalHTTPAddr != "" && cfg.ExternalHTTPAddr != cfg.HTTPAddr {
+		externalServer := &http.Server{
+			Addr:              cfg.ExternalHTTPAddr,
+			Handler:           app.ExternalHandler(),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		httpServers = append(httpServers, externalServer)
+	}
 
-	errc := make(chan error, 1)
-	go func() {
-		logger.Info("authman http server starting", "addr", cfg.HTTPAddr)
-		errc <- httpServer.ListenAndServe()
-	}()
+	errc := make(chan error, len(httpServers))
+	for _, srv := range httpServers {
+		go func(srv *http.Server) {
+			kind := "core"
+			if srv != httpServer {
+				kind = "external"
+			}
+			logger.Info("authman http server starting", "kind", kind, "addr", srv.Addr)
+			errc <- srv.ListenAndServe()
+		}(srv)
+	}
 
 	select {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			logger.Error("http server shutdown failed", "error", err)
-			os.Exit(1)
+		for _, srv := range httpServers {
+			if err := srv.Shutdown(shutdownCtx); err != nil {
+				logger.Error("http server shutdown failed", "addr", srv.Addr, "error", err)
+				os.Exit(1)
+			}
 		}
 		logger.Info("authman http server stopped")
 	case err := <-errc:

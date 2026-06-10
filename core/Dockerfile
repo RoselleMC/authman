@@ -19,5 +19,5 @@ COPY --from=build /out/authman /usr/local/bin/authman
 COPY --from=web-build /src/authman/core/web/dist /usr/share/authman/core-web
 ENV AUTHMAN_CORE_WEB_ROOT=/usr/share/authman/core-web
 USER authman
-EXPOSE 8080
+EXPOSE 8080 8081
 ENTRYPOINT ["/usr/local/bin/authman"]

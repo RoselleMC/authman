@@ -2,6 +2,14 @@
    Authman component styles
    ============================================================ */
 
+@font-face {
+  font-family: "AuthmanMinecraft";
+  src: url("skinview3d/assets/minecraft.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* ---------- Buttons ---------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -39,6 +47,25 @@
 .btn--icon.btn--sm { width: 30px; }
 
 .btn .spinner { width: 14px; height: 14px; }
+
+.page-head__action .btn:not(.btn--lg):not(.btn--block),
+.card__actions .btn:not(.btn--lg):not(.btn--block),
+.section-toolbar .btn:not(.btn--lg):not(.btn--block),
+.adv-list-primary-actions .btn:not(.btn--lg):not(.btn--block),
+.adv-list-selection-actions .btn:not(.btn--lg):not(.btn--block) {
+  height: 32px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+.page-head__action .btn--icon:not(.btn--lg):not(.btn--block),
+.card__actions .btn--icon:not(.btn--lg):not(.btn--block),
+.section-toolbar .btn--icon:not(.btn--lg):not(.btn--block),
+.adv-list-primary-actions .btn--icon:not(.btn--lg):not(.btn--block),
+.adv-list-selection-actions .btn--icon:not(.btn--lg):not(.btn--block) {
+  width: 32px;
+  padding: 0;
+}
 
 /* ---------- Icon button (subtle, square) ---------- */
 .iconbtn {
@@ -341,6 +368,17 @@
 .protoname { display: inline-flex; align-items: baseline; font-family: var(--font-mono); white-space: nowrap; }
 .protoname .proto-hash { color: var(--color-primary); font-weight: 600; }
 .protoname .proto-body { color: inherit; }
+.mono-inline { font-family: var(--font-mono); overflow-wrap: anywhere; }
+.settings-token-once { display: grid; gap: 12px; }
+.settings-token-once code {
+  display: block;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
 
 /* ---------- UUID / copy ---------- */
 .copyable {
@@ -366,7 +404,6 @@
 .card__head { padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--color-border); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 .card__title { font-size: var(--font-size-md); font-weight: 600; letter-spacing: -0.01em; margin: 0; }
 .card__actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; }
-.card__actions .btn:not(.btn--lg):not(.btn--block) { height: 30px; padding: 0 var(--space-3); font-size: var(--font-size-sm); }
 .card__body { padding: var(--space-5); }
 .card-copy {
   margin: var(--space-4) 0 0;
@@ -480,6 +517,8 @@ thead .adv-list-select-hit { min-height: 38px; }
 .overlay { position: fixed; inset: 0; background: var(--color-overlay); display: flex; align-items: center; justify-content: center; padding: var(--space-5); z-index: 100; animation: ov-in .15s ease; overflow-y: auto; overscroll-behavior: contain; }
 @keyframes ov-in { from { opacity: 0; } }
 .dialog { width: 100%; max-width: 460px; max-height: min(720px, calc(100dvh - var(--space-5) * 2)); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-popover); animation: dlg-in .18s cubic-bezier(.2,.7,.3,1); display: flex; flex-direction: column; overflow: hidden; }
+.dialog--lg { max-width: 680px; }
+.dialog--xl { max-width: 880px; }
 @keyframes dlg-in { from { opacity: 0; transform: translateY(8px) scale(.98); } }
 .dialog__head { padding: var(--space-5) var(--space-5) var(--space-3); display: flex; gap: var(--space-3); align-items: flex-start; flex: 0 0 auto; }
 .dialog__icon { width: 36px; height: 36px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -487,6 +526,284 @@ thead .adv-list-select-hit { min-height: 38px; }
 .dialog__desc { font-size: var(--font-size-sm); color: var(--color-text-muted); margin: 0; line-height: 1.5; }
 .dialog__body { padding: 0 var(--space-5) var(--space-2); overflow-y: auto; min-height: 0; }
 .dialog__foot { padding: var(--space-4) var(--space-5) var(--space-5); display: flex; justify-content: flex-end; gap: var(--space-2); flex: 0 0 auto; border-top: 1px solid var(--color-border); background: var(--color-surface); }
+
+/* ---------- Textarea ---------- */
+.textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: var(--space-3);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  resize: vertical;
+  transition: border-color .14s, box-shadow .14s, background .14s;
+}
+.textarea:hover { border-color: var(--color-text-subtle); }
+.textarea:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-focus-ring); }
+.textarea--mono { font-family: var(--font-mono); }
+
+/* ---------- Minecraft rich text / MiniMessage ---------- */
+.mc-rich {
+  min-width: 0;
+  color: #fff;
+  font-family: "AuthmanMinecraft", "Minecraft", "Minecraftia", monospace;
+  font-synthesis: none;
+  -webkit-font-smoothing: none;
+  text-rendering: geometricPrecision;
+}
+.mc-rich__content {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  letter-spacing: 0;
+}
+.mc-rich__content.is-placeholder {
+  color: rgba(255,255,255,.48);
+}
+.mc-rich__content span[title],
+.mc-rich__content [data-mm-misc] {
+  text-decoration-style: dotted;
+  text-decoration-line: underline;
+  text-underline-offset: 2px;
+}
+.mc-rich__content [data-mm-obfuscated="true"] {
+  font-family: "AuthmanMinecraft", "Minecraft", "Minecraftia", monospace;
+  letter-spacing: .08em;
+  text-shadow: 0 0 5px currentColor;
+}
+.mc-rich__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+.mc-rich__tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,.1);
+  color: rgba(255,255,255,.76);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.mc-rich__error {
+  margin-top: 7px;
+  color: #ff9f9f;
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+.mc-motd {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 10px;
+  min-height: 86px;
+  padding: 10px;
+  border-radius: 2px;
+  border: 1px solid #000;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.12)),
+    #1c1c1c;
+  color: #fff;
+  text-align: left;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.07), inset 0 0 0 2px rgba(0,0,0,.35);
+  font-family: "AuthmanMinecraft", "Minecraft", "Minecraftia", monospace;
+  font-synthesis: none;
+  -webkit-font-smoothing: none;
+  text-rendering: geometricPrecision;
+}
+.mc-motd--button {
+  appearance: none;
+  cursor: pointer;
+  transition: border-color .14s, box-shadow .14s, transform .04s;
+}
+.mc-motd--button:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 55%, #ffffff 18%);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.45), 0 0 0 3px var(--color-focus-ring);
+}
+.mc-motd--button:active { transform: translateY(1px); }
+.mc-motd__icon {
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 1px;
+  background:
+    linear-gradient(135deg, rgba(96, 217, 159, .92), rgba(63, 137, 255, .82)),
+    #24302a;
+  color: white;
+  font-size: 24px;
+  line-height: 1;
+  text-shadow: 2px 2px 0 #3f3f3f;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.16);
+  overflow: hidden;
+}
+.mc-motd__icon img { width: 100%; height: 100%; object-fit: cover; image-rendering: pixelated; }
+.mc-motd__main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 1px;
+}
+.mc-motd__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.mc-motd__name {
+  min-width: 0;
+  color: #f6f6f6;
+  font-size: 16px;
+  line-height: 20px;
+  font-weight: 400;
+  text-shadow: 2px 2px 0 #3f3f3f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mc-motd__ping {
+  width: 21px;
+  height: 15px;
+  flex: 0 0 auto;
+  background:
+    linear-gradient(to top, #52d66b 0 20%, transparent 20%),
+    linear-gradient(to top, #52d66b 0 40%, transparent 40%),
+    linear-gradient(to top, #52d66b 0 60%, transparent 60%),
+    linear-gradient(to top, #52d66b 0 80%, transparent 80%),
+    linear-gradient(to top, #52d66b 0 100%, transparent 100%);
+  background-size: 3px 100%;
+  background-position: 0 0, 5px 0, 10px 0, 15px 0, 20px 0;
+  background-repeat: no-repeat;
+  opacity: .92;
+}
+.mc-motd__message {
+  min-height: 40px;
+  max-height: 40px;
+  color: #aaaaaa;
+  font-size: 16px;
+  line-height: 20px;
+  text-shadow: 2px 2px 0 #2a2a2a;
+  overflow: hidden;
+}
+.mc-motd__message .mc-rich__content,
+.mc-motd__message .mc-rich__content * {
+  text-shadow: 2px 2px 0 #2a2a2a;
+}
+.mc-motd__address {
+  color: rgba(255,255,255,.42);
+  font-size: 10px;
+  line-height: 12px;
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mm-editor {
+  display: grid;
+  gap: var(--space-4);
+}
+.mm-editor__preview {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+}
+.mm-editor__input {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-weight: 540;
+}
+.mm-editor__textarea {
+  min-height: 190px;
+  white-space: pre;
+  overflow-x: auto;
+  overflow-y: auto;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.server-icon-control {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: center;
+  min-width: 0;
+}
+.server-icon-preview {
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 48%, transparent), color-mix(in srgb, #3f89ff 40%, transparent)),
+    var(--color-surface-muted);
+  color: var(--color-text-subtle);
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-surface) 60%, transparent);
+}
+.server-icon-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+}
+.server-icon-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.server-icon-actions .field-error {
+  flex-basis: 100%;
+  margin: 0;
+}
+.field-error {
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.server-list-icon {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 42%, transparent), color-mix(in srgb, #3f89ff 36%, transparent)),
+    var(--color-surface-muted);
+  color: var(--color-text-subtle);
+  overflow: hidden;
+  vertical-align: middle;
+}
+.server-list-icon.has-image {
+  background: #1c1c1c;
+  border-color: color-mix(in srgb, var(--color-border) 70%, #000);
+}
+.server-list-icon img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  image-rendering: pixelated;
+}
 
 /* ---------- Toast ---------- */
 .toast-region { position: fixed; bottom: var(--space-5); right: var(--space-5); display: flex; flex-direction: column; gap: var(--space-2); z-index: 200; max-width: 360px; }

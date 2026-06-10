@@ -34,7 +34,7 @@ export function PageHeader({ title, desc, eyebrow, action }: PageHeaderProps) {
         <h2 className="page-title">{title}</h2>
         {desc ? <p className="page-desc">{desc}</p> : null}
       </div>
-      {action}
+      {action ? <div className="page-head__action">{action}</div> : null}
     </div>
   );
 }

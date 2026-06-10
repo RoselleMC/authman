@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"image"
-	_ "image/png"
+	"image/png"
 	"io"
 	"net/http"
 	"strings"
@@ -21,6 +22,7 @@ import (
 )
 
 const maxSkinUploadBytes = 2 * 1024 * 1024
+const maxServerIconUploadBytes = 256 * 1024
 
 type effectiveSkin struct {
 	Source          string
@@ -38,6 +40,11 @@ type effectiveSkin struct {
 
 type updateProfileSkinSourceRequest struct {
 	UsePassportSkin bool   `json:"use_passport_skin"`
+	Source          string `json:"source"`
+}
+
+type updatePassportSkinSourceRequest struct {
+	UseUpstreamSkin bool   `json:"use_upstream_skin"`
 	Source          string `json:"source"`
 }
 
@@ -174,6 +181,34 @@ func (s *Server) handleAdminDeletePassportSkin(w http.ResponseWriter, r *http.Re
 	api.WriteJSON(w, http.StatusOK, s.passportSkinData(r.Context(), passport), nil)
 }
 
+func (s *Server) handleAdminSetPassportSkinSource(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	passport, err := s.store.GetPassportByID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "passport.not_found", "passport not found"))
+		return
+	}
+	var req updatePassportSkinSourceRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	source := passportSkinSourceFromRequest(passport, req)
+	passport, err = s.store.SetPassportSkinSource(r.Context(), passport.ID, source)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "skin.save_failed", err.Error()))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, passport.ID, "passport.skin.source_update", map[string]any{
+		"source": source,
+	})
+	api.WriteJSON(w, http.StatusOK, s.passportSkinData(r.Context(), passport), nil)
+}
+
 func (s *Server) handlePortalProfileSkin(w http.ResponseWriter, r *http.Request) {
 	session, authErr := s.requirePlayer(r, false)
 	if authErr != nil {
@@ -186,6 +221,109 @@ func (s *Server) handlePortalProfileSkin(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	api.WriteJSON(w, http.StatusOK, s.profileSkinData(r.Context(), profile, &passport), nil)
+}
+
+func (s *Server) handlePortalPassportSkin(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requirePlayer(r, false)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	passport, _, _, err := s.portalSessionIdentity(r.Context(), session)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session passport was not found"))
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, s.passportSkinData(r.Context(), passport), nil)
+}
+
+func (s *Server) handlePortalUploadPassportSkin(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requirePlayer(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	passport, _, _, err := s.portalSessionIdentity(r.Context(), session)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session passport was not found"))
+		return
+	}
+	if passport.Status != identity.PassportStatusActive {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "passport.not_editable", "passport is not editable"))
+		return
+	}
+	if err := r.ParseMultipartForm(8 * 1024 * 1024); err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "skin.multipart_invalid", "invalid multipart upload"))
+		return
+	}
+	passport, skinRow, apiErr := s.saveUploadedPassportSkin(r.Context(), r, passport)
+	if apiErr != nil {
+		api.WriteError(w, apiErr)
+		return
+	}
+	s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPlayer, passport.ID, "passport.skin.self_update", map[string]any{
+		"model":       skinRow.Model,
+		"skin_sha256": skinRow.SkinSHA256,
+		"cape":        len(skinRow.CapePNG) > 0,
+		"elytra":      len(skinRow.ElytraPNG) > 0,
+	})
+	api.WriteJSON(w, http.StatusOK, s.passportSkinData(r.Context(), passport), nil)
+}
+
+func (s *Server) handlePortalDeletePassportSkin(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requirePlayer(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	passport, _, _, err := s.portalSessionIdentity(r.Context(), session)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session passport was not found"))
+		return
+	}
+	if passport.Status != identity.PassportStatusActive {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "passport.not_editable", "passport is not editable"))
+		return
+	}
+	passport, err = s.store.DeletePassportSkin(r.Context(), passport.ID)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "skin.delete_failed", err.Error()))
+		return
+	}
+	s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPlayer, passport.ID, "passport.skin.self_delete", map[string]any{})
+	api.WriteJSON(w, http.StatusOK, s.passportSkinData(r.Context(), passport), nil)
+}
+
+func (s *Server) handlePortalSetPassportSkinSource(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requirePlayer(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	passport, _, _, err := s.portalSessionIdentity(r.Context(), session)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session passport was not found"))
+		return
+	}
+	if passport.Status != identity.PassportStatusActive {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "passport.not_editable", "passport is not editable"))
+		return
+	}
+	var req updatePassportSkinSourceRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	source := passportSkinSourceFromRequest(passport, req)
+	passport, err = s.store.SetPassportSkinSource(r.Context(), passport.ID, source)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "skin.save_failed", err.Error()))
+		return
+	}
+	s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPlayer, passport.ID, "passport.skin.self_source_update", map[string]any{
+		"source": source,
+	})
+	api.WriteJSON(w, http.StatusOK, s.passportSkinData(r.Context(), passport), nil)
 }
 
 func (s *Server) handlePortalUploadProfileSkin(w http.ResponseWriter, r *http.Request) {
@@ -217,6 +355,59 @@ func (s *Server) handlePortalUploadProfileSkin(w http.ResponseWriter, r *http.Re
 		"skin_sha256": skinRow.SkinSHA256,
 		"cape":        len(skinRow.CapePNG) > 0,
 		"elytra":      len(skinRow.ElytraPNG) > 0,
+	})
+	api.WriteJSON(w, http.StatusOK, s.profileSkinData(r.Context(), profile, &passport), nil)
+}
+
+func (s *Server) handlePortalSetProfileSkinSource(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requirePlayer(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	passport, profile, _, err := s.portalSessionIdentity(r.Context(), session)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.unauthenticated", "session profile was not found"))
+		return
+	}
+	if passport.Status != identity.PassportStatusActive || profile.Status != identity.ProfileStatusActive {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "profile.not_editable", "profile is not editable"))
+		return
+	}
+	var req updateProfileSkinSourceRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	source := strings.TrimSpace(req.Source)
+	if source == "" {
+		if req.UsePassportSkin {
+			source = "passport"
+		} else {
+			source = "none"
+		}
+	}
+	props := removeTexturesProperty(profile.ProfileProperties)
+	if source == "passport" {
+		// Keep the profile's own UUID/name while inheriting the passport's effective texture payload.
+	} else if custom, err := s.store.GetProfileSkin(r.Context(), profile.ID); err == nil && len(custom.SkinPNG) > 0 {
+		property, err := s.profileCustomTexturesProperty(profile, custom)
+		if err != nil {
+			api.WriteError(w, api.NewError(http.StatusInternalServerError, "skin.textures_failed", err.Error()))
+			return
+		}
+		source = "custom"
+		props = replaceTexturesProperty(profile.ProfileProperties, property)
+	} else {
+		source = "none"
+	}
+	profile, err = s.store.SetProfileSkinSource(r.Context(), profile.ID, source, props)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "skin.save_failed", err.Error()))
+		return
+	}
+	s.audit(r, audit.ActorPlayer, passport.ID, audit.TargetPlayer, profile.ID, "profile.skin.self_source_update", map[string]any{
+		"source": source,
 	})
 	api.WriteJSON(w, http.StatusOK, s.profileSkinData(r.Context(), profile, &passport), nil)
 }
@@ -339,9 +530,14 @@ func (s *Server) handleDefaultSkinAsset(w http.ResponseWriter, r *http.Request) 
 func (s *Server) profileSkinData(ctx context.Context, profile identity.Profile, passport *identity.Passport) map[string]any {
 	eff := s.effectiveSkinForProfile(ctx, profile, passport)
 	defaultSkin := skinlib.DefaultForUUID(profile.UUID)
+	versionTimes := []time.Time{profile.UpdatedAt}
+	if passport != nil {
+		versionTimes = append(versionTimes, passport.UpdatedAt)
+	}
 	var updatedAt *time.Time
 	if custom, err := s.store.GetProfileSkin(ctx, profile.ID); err == nil {
 		updatedAt = &custom.UpdatedAt
+		versionTimes = append(versionTimes, custom.UpdatedAt)
 	}
 	return map[string]any{
 		"source":            profile.SkinSource,
@@ -350,10 +546,10 @@ func (s *Server) profileSkinData(ctx context.Context, profile identity.Profile, 
 		"model":             eff.Model,
 		"default_variant":   defaultSkin.Name,
 		"default_model":     defaultSkin.Model,
-		"skin_url":          eff.SkinURL,
-		"cape_url":          emptyStringNil(eff.CapeURL),
-		"elytra_url":        emptyStringNil(eff.ElytraURL),
-		"avatar_url":        eff.AvatarURL,
+		"skin_url":          cacheBustedAssetURL(eff.SkinURL, versionTimes...),
+		"cape_url":          emptyStringNil(cacheBustedAssetURL(eff.CapeURL, versionTimes...)),
+		"elytra_url":        emptyStringNil(cacheBustedAssetURL(eff.ElytraURL, versionTimes...)),
+		"avatar_url":        cacheBustedAssetURL(eff.AvatarURL, versionTimes...),
 		"has_custom_skin":   eff.HasCustomSkin,
 		"has_custom_cape":   eff.HasCustomCape,
 		"has_custom_elytra": eff.HasCustomElytra,
@@ -365,20 +561,24 @@ func (s *Server) profileSkinData(ctx context.Context, profile identity.Profile, 
 func (s *Server) passportSkinData(ctx context.Context, passport identity.Passport) map[string]any {
 	eff := s.effectiveSkinForPassport(ctx, passport)
 	defaultSkin := skinlib.DefaultForUUID(passport.UUID)
+	versionTimes := []time.Time{passport.UpdatedAt}
 	var updatedAt *time.Time
 	if custom, err := s.store.GetPassportSkin(ctx, passport.ID); err == nil {
 		updatedAt = &custom.UpdatedAt
+		versionTimes = append(versionTimes, custom.UpdatedAt)
 	}
+	source := store.NormalizePassportSkinSource(passport.Kind, passport.SkinSource)
 	return map[string]any{
-		"source":            eff.Source,
+		"source":            source,
+		"use_upstream_skin": eff.Source != "custom" && source == store.PassportSkinSourceUpstream,
 		"effective_source":  eff.Source,
 		"model":             eff.Model,
 		"default_variant":   defaultSkin.Name,
 		"default_model":     defaultSkin.Model,
-		"skin_url":          eff.SkinURL,
-		"cape_url":          emptyStringNil(eff.CapeURL),
-		"elytra_url":        emptyStringNil(eff.ElytraURL),
-		"avatar_url":        eff.AvatarURL,
+		"skin_url":          cacheBustedAssetURL(eff.SkinURL, versionTimes...),
+		"cape_url":          emptyStringNil(cacheBustedAssetURL(eff.CapeURL, versionTimes...)),
+		"elytra_url":        emptyStringNil(cacheBustedAssetURL(eff.ElytraURL, versionTimes...)),
+		"avatar_url":        cacheBustedAssetURL(eff.AvatarURL, versionTimes...),
 		"has_custom_skin":   eff.HasCustomSkin,
 		"has_custom_cape":   eff.HasCustomCape,
 		"has_custom_elytra": eff.HasCustomElytra,
@@ -502,6 +702,18 @@ func (s *Server) saveUploadedPassportSkin(ctx context.Context, r *http.Request, 
 	return updated, skinRow, nil
 }
 
+func passportSkinSourceFromRequest(passport identity.Passport, req updatePassportSkinSourceRequest) string {
+	source := strings.TrimSpace(req.Source)
+	if source == "" {
+		if req.UseUpstreamSkin {
+			source = store.PassportSkinSourceUpstream
+		} else {
+			source = store.PassportSkinSourceCustom
+		}
+	}
+	return store.NormalizePassportSkinSource(passport.Kind, source)
+}
+
 func (s *Server) profileCustomTexturesProperty(profile identity.Profile, skinRow store.ProfileSkin) (identity.ProfileProperty, error) {
 	return skinlib.BuildTexturesProperty(profile.UUID, profile.ProtocolName, s.cfg.PublicBaseURL, skinlib.TextureURLs{
 		Skin:   "/api/assets/profiles/" + profile.ID + "/skin.png",
@@ -570,38 +782,48 @@ func (s *Server) effectiveSkinForProfile(ctx context.Context, profile identity.P
 }
 
 func (s *Server) effectiveSkinForPassport(ctx context.Context, passport identity.Passport) effectiveSkin {
-	if custom, err := s.store.GetPassportSkin(ctx, passport.ID); err == nil && len(custom.SkinPNG) > 0 {
-		properties := []identity.ProfileProperty(nil)
-		if property, err := s.passportCustomTexturesProperty(passport, custom); err == nil {
-			properties = []identity.ProfileProperty{property}
-		}
-		return effectiveSkin{
-			Source:          "custom",
-			Model:           custom.Model,
-			SkinURL:         "/api/assets/passports/" + passport.ID + "/skin.png",
-			CapeURL:         optionalPassportAssetURL(passport.ID, "cape.png", custom.CapePNG),
-			ElytraURL:       optionalPassportAssetURL(passport.ID, "elytra.png", custom.ElytraPNG),
-			AvatarURL:       "/api/assets/passports/" + passport.ID + "/avatar.png",
-			HasCustomSkin:   true,
-			HasCustomCape:   len(custom.CapePNG) > 0,
-			HasCustomElytra: len(custom.ElytraPNG) > 0,
-			Properties:      properties,
+	source := store.NormalizePassportSkinSource(passport.Kind, passport.SkinSource)
+	if source == store.PassportSkinSourceCustom {
+		if custom, err := s.store.GetPassportSkin(ctx, passport.ID); err == nil && len(custom.SkinPNG) > 0 {
+			properties := []identity.ProfileProperty(nil)
+			if property, err := s.passportCustomTexturesProperty(passport, custom); err == nil {
+				properties = []identity.ProfileProperty{property}
+			}
+			return effectiveSkin{
+				Source:          "custom",
+				Model:           custom.Model,
+				SkinURL:         "/api/assets/passports/" + passport.ID + "/skin.png",
+				CapeURL:         optionalPassportAssetURL(passport.ID, "cape.png", custom.CapePNG),
+				ElytraURL:       optionalPassportAssetURL(passport.ID, "elytra.png", custom.ElytraPNG),
+				AvatarURL:       "/api/assets/passports/" + passport.ID + "/avatar.png",
+				HasCustomSkin:   true,
+				HasCustomCape:   len(custom.CapePNG) > 0,
+				HasCustomElytra: len(custom.ElytraPNG) > 0,
+				Properties:      properties,
+			}
 		}
 	}
-	if passport.Kind == identity.PassportKindPremium {
+	if passport.Kind == identity.PassportKindPremium && source == store.PassportSkinSourceUpstream {
 		if primary, err := s.store.GetPrimaryProfileForPassport(ctx, passport.ID); err == nil && len(primary.ProfileProperties) > 0 {
 			props := append([]identity.ProfileProperty(nil), primary.ProfileProperties...)
 			urls := skinlib.TextureURLsFromProperty(props)
-			if urls.Skin != "" {
-				return effectiveSkin{
-					Source:     "mojang",
-					Model:      urls.Model,
-					SkinURL:    urls.Skin,
-					CapeURL:    urls.Cape,
-					ElytraURL:  urls.Elytra,
-					AvatarURL:  "/api/assets/passports/" + passport.ID + "/avatar.png",
-					Properties: props,
-				}
+			model := urls.Model
+			if model != "slim" {
+				model = "wide"
+			}
+			if urls.Skin == "" {
+				def := skinlib.DefaultForUUID(passport.UUID)
+				model = def.Model
+				urls.Skin = "/api/assets/default-skins/" + def.Model + "/" + def.Name + ".png"
+			}
+			return effectiveSkin{
+				Source:     "mojang",
+				Model:      model,
+				SkinURL:    urls.Skin,
+				CapeURL:    urls.Cape,
+				ElytraURL:  urls.Elytra,
+				AvatarURL:  "/api/assets/passports/" + passport.ID + "/avatar.png",
+				Properties: props,
 			}
 		}
 	}
@@ -718,6 +940,32 @@ func readPNGPart(r *http.Request, field string, required bool) ([]byte, string, 
 		contentType = "image/png"
 	}
 	return raw, contentType, nil
+}
+
+func readServerIconDataURI(r *http.Request, field string) (string, error) {
+	file, _, err := r.FormFile(field)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, maxServerIconUploadBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(raw) == 0 {
+		return "", errors.New("file is required")
+	}
+	if len(raw) > maxServerIconUploadBytes {
+		return "", errors.New("file is too large")
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		return "", errors.New("file must be a PNG image")
+	}
+	if cfg.Width != 64 || cfg.Height != 64 {
+		return "", errors.New("server icon must be 64x64 pixels")
+	}
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(raw), nil
 }
 
 func writePNG(w http.ResponseWriter, raw []byte) {

@@ -1,7 +1,9 @@
 import { useEffect, type ReactNode, type CSSProperties } from "react";
 import { Icon, type IconName } from "./Icon";
+import { cx } from "../utils/cx";
 
 export type DialogIconTone = "neutral" | "danger" | "primary" | "warning";
+export type DialogSize = "md" | "lg" | "xl";
 
 interface Props {
   open: boolean;
@@ -13,6 +15,7 @@ interface Props {
   children?: ReactNode;
   footer?: ReactNode;
   testId?: string;
+  size?: DialogSize;
 }
 
 const TONE_STYLE: Record<DialogIconTone, CSSProperties> = {
@@ -22,7 +25,7 @@ const TONE_STYLE: Record<DialogIconTone, CSSProperties> = {
   warning: { background: "var(--color-warning-soft)", color: "var(--color-warning)" },
 };
 
-export function Dialog({ open, onClose, icon, iconTone = "neutral", title, desc, children, footer, testId }: Props) {
+export function Dialog({ open, onClose, icon, iconTone = "neutral", title, desc, children, footer, testId, size = "md" }: Props) {
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
@@ -41,7 +44,7 @@ export function Dialog({ open, onClose, icon, iconTone = "neutral", title, desc,
       }}
       data-testid={testId}
     >
-      <div className="dialog" role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
+      <div className={cx("dialog", size !== "md" ? `dialog--${size}` : null)} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
         <div className="dialog__head">
           {icon ? (
             <div className="dialog__icon" style={TONE_STYLE[iconTone]}>

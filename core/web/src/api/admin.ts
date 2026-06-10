@@ -117,6 +117,28 @@ export interface PlayerListMeta {
   page_size: number;
 }
 
+export interface ListFilters extends Record<string, string | number | undefined> {
+  q?: string;
+  kind?: string;
+  status?: string;
+  state?: string;
+  binding?: string;
+  page?: number;
+  page_size?: number;
+  sort?: string;
+  dir?: "asc" | "desc";
+}
+
+export interface ListResult<T> {
+  rows: T[];
+  meta: PlayerListMeta;
+}
+
+function listResult<T>(data: T[], meta: unknown): ListResult<T> {
+  const m = (meta as Partial<PlayerListMeta> | undefined) ?? {};
+  return { rows: data, meta: { total: m.total ?? data.length, page: m.page ?? 1, page_size: m.page_size ?? data.length } };
+}
+
 export interface ProfileSummary {
   id: string;
   uuid: string;
@@ -234,6 +256,7 @@ export interface ProfileSkinInfo {
 
 export interface PassportSkinInfo {
   source: string;
+  use_upstream_skin?: boolean;
   effective_source: "custom" | "mojang" | "textures" | "default";
   model: "slim" | "wide" | string;
   default_variant: string;
@@ -261,7 +284,7 @@ export interface IdentityListFilters extends Record<string, string | number | un
 
 export async function fetchPassports(filters: IdentityListFilters, signal?: AbortSignal) {
   const res = await apiFetch<PassportRow[]>("/admin/passports", { method: "GET", query: filters, signal });
-  return { rows: res.data, meta: (res.meta as unknown as PlayerListMeta) ?? { total: res.data.length, page: 1, page_size: res.data.length } };
+  return listResult(res.data, res.meta);
 }
 
 export async function fetchPassport(id: string): Promise<PassportDetail> {
@@ -286,7 +309,7 @@ export async function kickPassport(id: string, reason: string): Promise<{ ended_
 
 export async function fetchProfiles(filters: IdentityListFilters, signal?: AbortSignal) {
   const res = await apiFetch<ProfileRow[]>("/admin/profiles", { method: "GET", query: filters, signal });
-  return { rows: res.data, meta: (res.meta as unknown as PlayerListMeta) ?? { total: res.data.length, page: 1, page_size: res.data.length } };
+  return listResult(res.data, res.meta);
 }
 
 export async function fetchProfile(id: string): Promise<ProfileDetail> {
@@ -329,6 +352,11 @@ export async function uploadPassportSkin(id: string, input: { skin?: File | null
   if (input.cape) form.set("cape", input.cape);
   if (input.elytra) form.set("elytra", input.elytra);
   return multipartFetch<PassportSkinInfo>(`/admin/passports/${encodeURIComponent(id)}/skin`, { method: "POST", body: form });
+}
+
+export async function updatePassportSkinSource(id: string, input: { use_upstream_skin: boolean }): Promise<PassportSkinInfo> {
+  const res = await apiFetch<PassportSkinInfo>(`/admin/passports/${encodeURIComponent(id)}/skin/source`, { method: "POST", body: input });
+  return res.data;
 }
 
 export async function deletePassportSkin(id: string): Promise<PassportSkinInfo> {
@@ -386,31 +414,31 @@ export interface VelocityNode {
   created_at: string;
 }
 
-export async function fetchNodes(kind: "limbo_portal" | "downstream_velocity" | "all" = "all"): Promise<VelocityNode[]> {
+export async function fetchNodes(kind: "limbo_portal" | "downstream_velocity" | "all" = "all", filters: ListFilters = {}): Promise<ListResult<VelocityNode>> {
   const path = kind === "limbo_portal" ? "/admin/login-portals" : kind === "downstream_velocity" ? "/admin/downstream/nodes" : "/admin/nodes";
-  const res = await apiFetch<VelocityNode[]>(path);
-  return res.data;
+  const res = await apiFetch<VelocityNode[]>(path, { query: filters });
+  return listResult(res.data, res.meta);
 }
 
 export async function fetchNode(id: string): Promise<VelocityNode> {
-  const res = await apiFetch<VelocityNode>(`/admin/velocity/nodes/${encodeURIComponent(id)}`);
+  const res = await apiFetch<VelocityNode>(`/admin/nodes/${encodeURIComponent(id)}`);
   return res.data;
 }
 
 export async function updateNode(id: string, input: { name: string; runtime_config: Record<string, unknown> }): Promise<VelocityNode> {
-  const res = await apiFetch<VelocityNode>(`/admin/velocity/nodes/${encodeURIComponent(id)}`, { method: "PUT", body: input });
+  const res = await apiFetch<VelocityNode>(`/admin/nodes/${encodeURIComponent(id)}`, { method: "PUT", body: input });
   return res.data;
 }
 
 export async function rotateNodeToken(id: string): Promise<{ token_once: string; token_fingerprint: string }> {
-  const res = await apiFetch<{ token_once: string; token_fingerprint: string }>(`/admin/velocity/nodes/${encodeURIComponent(id)}/rotate`, { method: "POST" });
+  const res = await apiFetch<{ token_once: string; token_fingerprint: string }>(`/admin/nodes/${encodeURIComponent(id)}/rotate`, { method: "POST" });
   return res.data;
 }
 export async function disableNode(id: string): Promise<void> {
   await apiFetch<null>(`/admin/velocity/nodes/${encodeURIComponent(id)}/disable`, { method: "POST" });
 }
 export async function deleteNode(id: string): Promise<void> {
-  await apiFetch<null>(`/admin/velocity/nodes/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await apiFetch<null>(`/admin/nodes/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 export async function createNode(input: { name: string; kind?: "limbo_portal" | "downstream_velocity"; server_id?: string }): Promise<{ token_once: string; token_fingerprint: string; node: VelocityNode }> {
   const path = input.kind === "limbo_portal" ? "/admin/login-portals" : input.kind === "downstream_velocity" ? "/admin/downstream/nodes" : "/admin/nodes";
@@ -494,9 +522,9 @@ export interface MojangStatus {
   }>;
 }
 
-export async function fetchMojang(): Promise<MojangStatus> {
-  const res = await apiFetch<MojangStatus>("/admin/mojang/upstream/status");
-  return res.data;
+export async function fetchMojang(filters: ListFilters = {}): Promise<{ status: MojangStatus; meta: PlayerListMeta }> {
+  const res = await apiFetch<MojangStatus>("/admin/mojang/upstream/status", { query: filters });
+  return { status: res.data, meta: listResult(res.data.proxies ?? [], res.meta).meta };
 }
 
 export interface CreateMojangRouteInput {
@@ -572,6 +600,49 @@ export async function updateIPGeoSettings(input: IPGeoSettings): Promise<IPGeoSe
   return res.data;
 }
 
+export interface ExternalAPIToken {
+  id: string;
+  name: string;
+  token_fingerprint: string;
+  status: "active" | "disabled" | "revoked";
+  created_by: string;
+  call_count: number;
+  last_used_at: string | null;
+  last_used_ip: string;
+  last_used_path: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExternalAPITokenCreated extends ExternalAPIToken {
+  token_once: string;
+}
+
+export async function fetchExternalAPITokens(filters: ListFilters = {}): Promise<ListResult<ExternalAPIToken>> {
+  const res = await apiFetch<ExternalAPIToken[]>("/admin/external-tokens", { query: filters });
+  return listResult(res.data, res.meta);
+}
+
+export async function fetchExternalAPIToken(id: string): Promise<ExternalAPIToken> {
+  const res = await apiFetch<ExternalAPIToken>(`/admin/external-tokens/${encodeURIComponent(id)}`);
+  return res.data;
+}
+
+export async function createExternalAPIToken(name: string): Promise<ExternalAPITokenCreated> {
+  const res = await apiFetch<ExternalAPITokenCreated>("/admin/external-tokens", { method: "POST", body: { name } });
+  return res.data;
+}
+
+export async function updateExternalAPIToken(id: string, input: { name?: string; status?: ExternalAPIToken["status"] }): Promise<ExternalAPIToken> {
+  const res = await apiFetch<ExternalAPIToken>(`/admin/external-tokens/${encodeURIComponent(id)}`, { method: "PUT", body: input });
+  return res.data;
+}
+
+export async function revokeExternalAPIToken(id: string): Promise<ExternalAPIToken> {
+  const res = await apiFetch<ExternalAPIToken>(`/admin/external-tokens/${encodeURIComponent(id)}`, { method: "DELETE" });
+  return res.data;
+}
+
 export interface DownstreamServer {
   id: string;
   slug: string;
@@ -588,6 +659,7 @@ export interface DownstreamServer {
     transfer_host?: string;
     transfer_port?: number;
     motd?: string;
+    server_icon?: string;
     grant_required?: boolean;
     gate_enabled?: boolean;
     grant_ttl_seconds?: number;
@@ -605,6 +677,7 @@ export interface DownstreamServer {
     transfer_host: string;
     transfer_port: number;
     motd: string;
+    server_icon?: string;
     grant_required: boolean;
     gate_enabled: boolean;
     grant_ttl_seconds: number;
@@ -626,9 +699,9 @@ export interface DownstreamServerInput {
   extension_providers: string[];
 }
 
-export async function fetchDownstreamServers(): Promise<DownstreamServer[]> {
-  const res = await apiFetch<DownstreamServer[]>("/admin/downstream-servers");
-  return res.data;
+export async function fetchDownstreamServers(filters: ListFilters = {}): Promise<ListResult<DownstreamServer>> {
+  const res = await apiFetch<DownstreamServer[]>("/admin/downstream-servers", { query: filters });
+  return listResult(res.data, res.meta);
 }
 export async function fetchDownstreamServer(id: string): Promise<DownstreamServer> {
   const res = await apiFetch<DownstreamServer>(`/admin/downstream-servers/${encodeURIComponent(id)}`);
@@ -641,6 +714,14 @@ export async function createDownstreamServer(input: DownstreamServerInput): Prom
 export async function updateDownstreamServer(id: string, input: DownstreamServerInput): Promise<DownstreamServer> {
   const res = await apiFetch<DownstreamServer>(`/admin/downstream-servers/${encodeURIComponent(id)}`, { method: "PUT", body: input });
   return res.data;
+}
+export async function uploadDownstreamServerIcon(id: string, file: File): Promise<DownstreamServer> {
+  const form = new FormData();
+  form.set("icon", file);
+  return multipartFetch<DownstreamServer>(`/admin/downstream-servers/${encodeURIComponent(id)}/icon`, { method: "POST", body: form });
+}
+export async function deleteDownstreamServerIcon(id: string): Promise<DownstreamServer> {
+  return multipartFetch<DownstreamServer>(`/admin/downstream-servers/${encodeURIComponent(id)}/icon`, { method: "DELETE" });
 }
 export async function deleteDownstreamServer(id: string): Promise<void> {
   await apiFetch<null>(`/admin/downstream-servers/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -693,9 +774,9 @@ export interface LimboBlueprint {
   updated_at: string;
 }
 
-export async function fetchLimboBlueprints(): Promise<LimboBlueprint[]> {
-  const res = await apiFetch<LimboBlueprint[]>("/admin/limbo-blueprints");
-  return res.data;
+export async function fetchLimboBlueprints(filters: ListFilters = {}): Promise<ListResult<LimboBlueprint>> {
+  const res = await apiFetch<LimboBlueprint[]>("/admin/limbo-blueprints", { query: filters });
+  return listResult(res.data, res.meta);
 }
 
 export async function fetchLimboBlueprint(id: string): Promise<LimboBlueprint> {
@@ -804,9 +885,9 @@ export interface AdminUser {
   security?: AdminAccountSecurity;
 }
 
-export async function fetchAdminUsers(): Promise<AdminUser[]> {
-  const res = await apiFetch<AdminUser[]>("/admin/users");
-  return res.data;
+export async function fetchAdminUsers(filters: ListFilters = {}): Promise<ListResult<AdminUser>> {
+  const res = await apiFetch<AdminUser[]>("/admin/users", { query: filters });
+  return listResult(res.data, res.meta);
 }
 
 export interface CreateAdminUserInput {
@@ -873,9 +954,9 @@ export async function fetchAdminPermissions(): Promise<AdminPermission[]> {
   return res.data;
 }
 
-export async function fetchAdminRoles(): Promise<AdminRole[]> {
-  const res = await apiFetch<AdminRole[]>("/admin/roles");
-  return res.data;
+export async function fetchAdminRoles(filters: ListFilters = {}): Promise<ListResult<AdminRole>> {
+  const res = await apiFetch<AdminRole[]>("/admin/roles", { query: filters });
+  return listResult(res.data, res.meta);
 }
 
 export interface CreateAdminRoleInput {

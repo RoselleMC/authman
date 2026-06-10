@@ -89,6 +89,7 @@
 /* ---------- Pages ---------- */
 .page { max-width: 1180px; margin: 0 auto; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 20px; gap: 16px; }
+.page-head__action { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; flex-shrink: 0; }
 .page-eyebrow { font-size: 12px; color: var(--color-text-subtle); margin: 0 0 4px; font-family: var(--font-mono); white-space: nowrap; }
 .page-title { font-size: 24px; font-weight: 640; letter-spacing: -0.02em; margin: 0; }
 

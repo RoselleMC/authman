@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -18,7 +18,7 @@ import {
   useToast,
   type ListColumn,
 } from "@authman/shared";
-import { fetchLimboBlueprints, uploadLimboBlueprint, type LimboBlueprint } from "../api/admin";
+import { fetchLimboBlueprints, uploadLimboBlueprint, type LimboBlueprint, type ListFilters } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
 function formatBytes(value: number): string {
@@ -44,7 +44,17 @@ export function LimboBlueprintsPage({ embedded = false, basePath = "/limbo-bluep
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const q = useQuery({ queryKey: ["admin.limboBlueprints"], queryFn: fetchLimboBlueprints });
+  const filters = useMemo<ListFilters>(() => {
+    const next: ListFilters = { page: list.state.page, page_size: list.state.pageSize };
+    const q = (list.state.filters.name ?? "").trim();
+    if (q) next.q = q;
+    if (list.state.sortKey) {
+      next.sort = list.state.sortKey;
+      next.dir = list.state.sortDir;
+    }
+    return next;
+  }, [list.state]);
+  const q = useQuery({ queryKey: ["admin.limboBlueprints", filters], queryFn: () => fetchLimboBlueprints(filters) });
   const uploadMut = useMutation({
     mutationFn: () => {
       if (!file) throw new Error("file required");
@@ -85,7 +95,9 @@ export function LimboBlueprintsPage({ embedded = false, basePath = "/limbo-bluep
           title={embedded ? t("admin.limboBlueprints.heading") : undefined}
           columns={columns}
           rowKey={(r) => r.id}
-          rows={q.data ?? []}
+          mode="server"
+          rows={q.data?.rows ?? []}
+          total={q.data?.meta.total ?? 0}
           state={list.state}
           onStateChange={list.setState}
           loading={q.isLoading}

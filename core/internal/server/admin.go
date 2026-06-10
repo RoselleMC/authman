@@ -330,37 +330,29 @@ func (s *Server) handleAdminPassports(w http.ResponseWriter, r *http.Request) {
 	status := strings.TrimSpace(q.Get("status"))
 	sortKey := strings.TrimSpace(q.Get("sort"))
 	sortDir := strings.TrimSpace(q.Get("dir"))
-	passports := s.store.ListPassports(r.Context())
-	filtered := make([]identity.Passport, 0, len(passports))
-	for _, passport := range passports {
-		if kind != "" && string(passport.Kind) != kind {
-			continue
-		}
-		if status != "" && string(passport.Status) != status {
-			continue
-		}
-		if search != "" &&
-			!containsFold(passport.ID, search) &&
-			!containsFold(passport.Username, search) &&
-			!containsFold(passport.UsernameNormalized, search) &&
-			!containsFold(passport.UUID.String(), search) &&
-			!containsFold(passport.UUID.Compact(), search) {
-			continue
-		}
-		filtered = append(filtered, passport)
+	passports, total, err := s.store.ListPassportsPage(r.Context(), store.IdentityListQuery{
+		Search:   search,
+		Kind:     kind,
+		Status:   status,
+		Sort:     sortKey,
+		Dir:      sortDir,
+		Page:     params.Page,
+		PageSize: params.PageSize,
+	})
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "passport.query_failed", "failed to query passports"))
+		return
 	}
-	sortPassports(filtered, sortKey, sortDir)
-	start, end := pageBounds(len(filtered), params)
-	data := make([]map[string]any, 0, end-start)
+	data := make([]map[string]any, 0, len(passports))
 	now := time.Now()
-	for _, passport := range filtered[start:end] {
+	for _, passport := range passports {
 		profiles := s.store.ListProfilesForPassport(r.Context(), passport.ID)
 		presences := s.store.ListPassportPresences(r.Context(), passport.ID)
 		row := passportRowData(passport, profiles, presences)
 		s.enrichPassportRow(r.Context(), row, passport, now)
 		data = append(data, row)
 	}
-	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), len(filtered), params))
+	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), total, params))
 }
 
 func (s *Server) handleAdminPassportDetail(w http.ResponseWriter, r *http.Request) {
@@ -435,34 +427,22 @@ func (s *Server) handleAdminProfiles(w http.ResponseWriter, r *http.Request) {
 	binding := strings.TrimSpace(q.Get("binding"))
 	sortKey := strings.TrimSpace(q.Get("sort"))
 	sortDir := strings.TrimSpace(q.Get("dir"))
-	profiles := s.store.ListProfiles(r.Context())
-	filtered := make([]identity.Profile, 0, len(profiles))
-	for _, profile := range profiles {
-		if status != "" && string(profile.Status) != status {
-			continue
-		}
-		_, bindErr := s.store.GetPassportForProfile(r.Context(), profile.ID)
-		if binding == "bound" && bindErr != nil {
-			continue
-		}
-		if binding == "unbound" && bindErr == nil {
-			continue
-		}
-		if search != "" &&
-			!containsFold(profile.ID, search) &&
-			!containsFold(profile.ProtocolName, search) &&
-			!containsFold(profile.NormalizedName, search) &&
-			!containsFold(profile.UUID.String(), search) &&
-			!containsFold(profile.UUID.Compact(), search) {
-			continue
-		}
-		filtered = append(filtered, profile)
+	profiles, total, err := s.store.ListProfilesPage(r.Context(), store.IdentityListQuery{
+		Search:   search,
+		Status:   status,
+		Binding:  binding,
+		Sort:     sortKey,
+		Dir:      sortDir,
+		Page:     params.Page,
+		PageSize: params.PageSize,
+	})
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "profile.query_failed", "failed to query profiles"))
+		return
 	}
-	sortProfiles(filtered, sortKey, sortDir)
-	start, end := pageBounds(len(filtered), params)
-	data := make([]map[string]any, 0, end-start)
+	data := make([]map[string]any, 0, len(profiles))
 	now := time.Now()
-	for _, profile := range filtered[start:end] {
+	for _, profile := range profiles {
 		var passport *identity.Passport
 		if p, err := s.store.GetPassportForProfile(r.Context(), profile.ID); err == nil {
 			passport = &p
@@ -471,7 +451,7 @@ func (s *Server) handleAdminProfiles(w http.ResponseWriter, r *http.Request) {
 		s.enrichProfileRow(r.Context(), row, profile, passport, now)
 		data = append(data, row)
 	}
-	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), len(filtered), params))
+	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), total, params))
 }
 
 func (s *Server) handleAdminCreateProfile(w http.ResponseWriter, r *http.Request) {
@@ -1020,6 +1000,13 @@ func (s *Server) handleAdminMojangRoutes(w http.ResponseWriter, r *http.Request)
 		api.WriteError(w, err)
 		return
 	}
+	params := parseListPageParams(r)
+	query := r.URL.Query()
+	search := strings.TrimSpace(query.Get("q"))
+	kindFilter := strings.TrimSpace(query.Get("kind"))
+	stateFilter := strings.TrimSpace(query.Get("state"))
+	sortKey := strings.TrimSpace(query.Get("sort"))
+	sortDir := strings.TrimSpace(query.Get("dir"))
 	now := time.Now().UTC()
 	routeData := []map[string]any{}
 	overall := "mojang_disabled"
@@ -1058,6 +1045,28 @@ func (s *Server) handleAdminMojangRoutes(w http.ResponseWriter, r *http.Request)
 			overall = "mojang_unavailable"
 		}
 	}
+	filteredRoutes := routeData[:0]
+	for _, route := range routeData {
+		if kindFilter != "" && fmt.Sprint(route["kind"]) != kindFilter {
+			continue
+		}
+		if stateFilter != "" && fmt.Sprint(route["state"]) != stateFilter {
+			continue
+		}
+		if search != "" && !containsFold(fmt.Sprint(route["id"]), search) && !containsFold(fmt.Sprint(route["url_masked"]), search) {
+			continue
+		}
+		filteredRoutes = append(filteredRoutes, route)
+	}
+	sort.SliceStable(filteredRoutes, func(i, j int) bool {
+		cmp := compareMapListValues(filteredRoutes[i], filteredRoutes[j], sortKey)
+		if sortDir == "desc" {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+	start, end := pageBounds(len(filteredRoutes), params)
+	pagedRoutes := append([]map[string]any(nil), filteredRoutes[start:end]...)
 	events := []map[string]any{}
 	if s.mojangVerifier != nil {
 		for _, event := range s.mojangVerifier.EventsSnapshot() {
@@ -1066,10 +1075,10 @@ func (s *Server) handleAdminMojangRoutes(w http.ResponseWriter, r *http.Request)
 	}
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"overall": overall,
-		"proxies": routeData,
+		"proxies": pagedRoutes,
 		"cache":   s.mojangCacheSnapshot(),
 		"events":  events,
-	}, nil)
+	}, listMeta(len(pagedRoutes), len(filteredRoutes), params))
 }
 
 func (s *Server) handleAdminCreateMojangRoute(w http.ResponseWriter, r *http.Request) {
@@ -1650,12 +1659,44 @@ func (s *Server) handleAdminDownstreamServers(w http.ResponseWriter, r *http.Req
 		api.WriteError(w, err)
 		return
 	}
+	params := parseListPageParams(r)
+	query := r.URL.Query()
+	search := strings.TrimSpace(query.Get("q"))
+	sortKey := strings.TrimSpace(query.Get("sort"))
+	sortDir := strings.TrimSpace(query.Get("dir"))
 	servers := s.store.ListDownstreamServers(r.Context())
-	data := make([]map[string]any, 0, len(servers))
+	filtered := make([]store.DownstreamServer, 0, len(servers))
 	for _, server := range servers {
+		data := downstreamServerData(server)
+		if search != "" && !containsFold(server.ID, search) && !containsFold(server.Slug, search) && !containsFold(server.DisplayName, search) && !containsFold(fmt.Sprint(data["target"]), search) {
+			continue
+		}
+		filtered = append(filtered, server)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		a, b := filtered[i], filtered[j]
+		cmp := 0
+		switch sortKey {
+		case "name":
+			cmp = strings.Compare(strings.ToLower(a.DisplayName), strings.ToLower(b.DisplayName))
+		case "status":
+			cmp = strings.Compare(a.Status, b.Status)
+		case "updated":
+			cmp = compareTime(a.UpdatedAt, b.UpdatedAt)
+		default:
+			cmp = strings.Compare(strings.ToLower(a.DisplayName), strings.ToLower(b.DisplayName))
+		}
+		if sortDir == "desc" {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+	start, end := pageBounds(len(filtered), params)
+	data := make([]map[string]any, 0, end-start)
+	for _, server := range filtered[start:end] {
 		data = append(data, downstreamServerData(server))
 	}
-	api.WriteJSON(w, http.StatusOK, data, map[string]any{"count": len(data)})
+	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), len(filtered), params))
 }
 
 func (s *Server) handleAdminDownstreamServerDetail(w http.ResponseWriter, r *http.Request) {
@@ -1724,6 +1765,69 @@ func (s *Server) handleAdminUpdateDownstreamServer(w http.ResponseWriter, r *htt
 		return
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, server.ID, "server.upsert", map[string]any{"slug": server.Slug})
+	api.WriteJSON(w, http.StatusOK, downstreamServerData(server), nil)
+}
+
+func (s *Server) handleAdminUploadDownstreamServerIcon(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	server, err := s.store.GetDownstreamServer(r.Context(), id)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "server.not_found", "server not found"))
+		return
+	}
+	if err := r.ParseMultipartForm(512 * 1024); err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.icon_multipart_invalid", "invalid multipart upload"))
+		return
+	}
+	icon, err := readServerIconDataURI(r, "icon")
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.icon_invalid", err.Error()))
+		return
+	}
+	if server.PortalConfig == nil {
+		server.PortalConfig = map[string]any{}
+	}
+	server.PortalConfig["server_icon"] = icon
+	server, err = s.store.UpsertDownstreamServer(r.Context(), server)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.save_failed", err.Error()))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, server.ID, "server.icon.update", map[string]any{
+		"slug": server.Slug,
+	})
+	api.WriteJSON(w, http.StatusOK, downstreamServerData(server), nil)
+}
+
+func (s *Server) handleAdminDeleteDownstreamServerIcon(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	server, err := s.store.GetDownstreamServer(r.Context(), id)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "server.not_found", "server not found"))
+		return
+	}
+	if server.PortalConfig == nil {
+		server.PortalConfig = map[string]any{}
+	}
+	delete(server.PortalConfig, "server_icon")
+	server, err = s.store.UpsertDownstreamServer(r.Context(), server)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.save_failed", err.Error()))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, server.ID, "server.icon.delete", map[string]any{
+		"slug": server.Slug,
+	})
 	api.WriteJSON(w, http.StatusOK, downstreamServerData(server), nil)
 }
 
@@ -1828,6 +1932,13 @@ func downstreamServerFromRequest(req downstreamServerRequest) (store.DownstreamS
 	default:
 		return store.DownstreamServer{}, api.NewError(http.StatusBadRequest, "server.status_invalid", "server status is invalid")
 	}
+	routingConfig := map[string]any{}
+	for key, value := range req.RoutingConfig {
+		routingConfig[key] = value
+	}
+	if raw, ok := routingConfig["motd"].(string); ok {
+		routingConfig["motd"] = store.LimitMiniMessageLines(raw, store.DefaultMOTDMaxLines)
+	}
 	return store.DownstreamServer{
 		ID:                 strings.TrimSpace(req.ID),
 		Slug:               strings.TrimSpace(req.ID),
@@ -1835,7 +1946,7 @@ func downstreamServerFromRequest(req downstreamServerRequest) (store.DownstreamS
 		Status:             status,
 		RegistrationOpen:   req.RegistrationOpen,
 		PortalTheme:        map[string]any{},
-		PortalConfig:       req.RoutingConfig,
+		PortalConfig:       routingConfig,
 		ExtensionProviders: req.ExtensionProviders,
 	}, nil
 }
@@ -1921,11 +2032,40 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, err)
 		return
 	}
+	params := parseListPageParams(r)
+	query := r.URL.Query()
+	search := strings.TrimSpace(query.Get("q"))
+	roleFilter := strings.TrimSpace(query.Get("kind"))
+	statusFilter := strings.TrimSpace(query.Get("status"))
+	sortKey := strings.TrimSpace(query.Get("sort"))
+	sortDir := strings.TrimSpace(query.Get("dir"))
 	users := []map[string]any{s.adminDataWithSecurity(r.Context())}
 	for _, user := range s.store.ListAdminUsers(r.Context()) {
 		users = append(users, s.adminUserDataWithSecurity(r.Context(), user))
 	}
-	api.WriteJSON(w, http.StatusOK, users, map[string]any{"count": len(users)})
+	filtered := users[:0]
+	for _, user := range users {
+		if roleFilter != "" && fmt.Sprint(user["role"]) != roleFilter {
+			continue
+		}
+		if statusFilter != "" && fmt.Sprint(user["status"]) != statusFilter {
+			continue
+		}
+		if search != "" && !containsFold(fmt.Sprint(user["username"]), search) && !containsFold(fmt.Sprint(user["email"]), search) && !containsFold(fmt.Sprint(user["display_name"]), search) {
+			continue
+		}
+		filtered = append(filtered, user)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		cmp := compareMapListValues(filtered[i], filtered[j], sortKey)
+		if sortDir == "desc" {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+	start, end := pageBounds(len(filtered), params)
+	data := append([]map[string]any(nil), filtered[start:end]...)
+	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), len(filtered), params))
 }
 
 func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -2177,12 +2317,30 @@ func (s *Server) handleAdminRoles(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, err)
 		return
 	}
+	params := parseListPageParams(r)
+	query := r.URL.Query()
+	search := strings.TrimSpace(query.Get("q"))
+	sortKey := strings.TrimSpace(query.Get("sort"))
+	sortDir := strings.TrimSpace(query.Get("dir"))
 	roles := s.store.ListAdminRoles(r.Context())
 	data := make([]map[string]any, 0, len(roles))
 	for _, role := range roles {
-		data = append(data, adminRoleData(role))
+		row := adminRoleData(role)
+		if search != "" && !containsFold(fmt.Sprint(row["id"]), search) && !containsFold(fmt.Sprint(row["name"]), search) && !containsFold(fmt.Sprint(row["alias"]), search) && !containsFold(fmt.Sprint(row["description"]), search) {
+			continue
+		}
+		data = append(data, row)
 	}
-	api.WriteJSON(w, http.StatusOK, data, map[string]any{"count": len(data)})
+	sort.SliceStable(data, func(i, j int) bool {
+		cmp := compareMapListValues(data[i], data[j], sortKey)
+		if sortDir == "desc" {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+	start, end := pageBounds(len(data), params)
+	paged := append([]map[string]any(nil), data[start:end]...)
+	api.WriteJSON(w, http.StatusOK, paged, listMeta(len(paged), len(data), params))
 }
 
 func (s *Server) handleAdminCreateRole(w http.ResponseWriter, r *http.Request) {
@@ -2678,6 +2836,40 @@ func sortProfiles(profiles []identity.Profile, key string, dir string) {
 		}
 		return cmp < 0
 	})
+}
+
+func compareMapListValues(a map[string]any, b map[string]any, key string) int {
+	if key == "" {
+		key = "name"
+	}
+	left := mapListSortValue(a, key)
+	right := mapListSortValue(b, key)
+	return strings.Compare(strings.ToLower(left), strings.ToLower(right))
+}
+
+func mapListSortValue(row map[string]any, key string) string {
+	switch key {
+	case "route":
+		key = "id"
+	case "name":
+		if value := fmt.Sprint(row["display_name"]); value != "" && value != "<nil>" {
+			return value
+		}
+		if value := fmt.Sprint(row["username"]); value != "" && value != "<nil>" {
+			return value
+		}
+	case "count":
+		key = "request_count"
+	case "created":
+		key = "created_at"
+	case "updated":
+		key = "updated_at"
+	}
+	value := fmt.Sprint(row[key])
+	if value == "<nil>" {
+		return ""
+	}
+	return value
 }
 
 func compareTimePtr(a *time.Time, b *time.Time) int {

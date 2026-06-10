@@ -33,12 +33,47 @@ func (s *Server) handleAdminLimboBlueprints(w http.ResponseWriter, r *http.Reque
 		api.WriteError(w, err)
 		return
 	}
+	params := parseListPageParams(r)
+	query := r.URL.Query()
+	search := strings.TrimSpace(query.Get("q"))
+	sortKey := strings.TrimSpace(query.Get("sort"))
+	sortDir := strings.TrimSpace(query.Get("dir"))
 	blueprints := s.store.ListLimboBlueprints(r.Context())
-	data := make([]map[string]any, 0, len(blueprints))
+	filtered := make([]store.LimboBlueprint, 0, len(blueprints))
 	for _, blueprint := range blueprints {
+		if search != "" && !containsFold(blueprint.ID, search) && !containsFold(blueprint.Name, search) && !containsFold(blueprint.Description, search) && !containsFold(blueprint.Filename, search) {
+			continue
+		}
+		filtered = append(filtered, blueprint)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		a, b := filtered[i], filtered[j]
+		cmp := 0
+		switch sortKey {
+		case "name":
+			cmp = strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+		case "blocks":
+			cmp = compareInts(blueprintBlockCount(a), blueprintBlockCount(b))
+		case "size":
+			cmp = compareInts64(a.SizeBytes, b.SizeBytes)
+		case "dimension":
+			cmp = strings.Compare(fmt.Sprint(a.Config["dimension"]), fmt.Sprint(b.Config["dimension"]))
+		case "updated":
+			cmp = compareTime(a.UpdatedAt, b.UpdatedAt)
+		default:
+			cmp = compareTime(b.UpdatedAt, a.UpdatedAt)
+		}
+		if sortDir == "desc" {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+	start, end := pageBounds(len(filtered), params)
+	data := make([]map[string]any, 0, end-start)
+	for _, blueprint := range filtered[start:end] {
 		data = append(data, limboBlueprintData(blueprint, false))
 	}
-	api.WriteJSON(w, http.StatusOK, data, map[string]any{"count": len(data)})
+	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), len(filtered), params))
 }
 
 func (s *Server) handleAdminLimboBlueprintDetail(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +266,26 @@ func limboBlueprintData(blueprint store.LimboBlueprint, includeSchematic bool) m
 		data["schematic_base64"] = base64.StdEncoding.EncodeToString(blueprint.Schematic)
 	}
 	return data
+}
+
+func blueprintBlockCount(blueprint store.LimboBlueprint) int {
+	value, ok := blueprint.Preview["block_count"]
+	if !ok {
+		return 0
+	}
+	switch n := value.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return int(i)
+		}
+	}
+	return 0
 }
 
 func defaultLimboBlueprintConfig(worldID string, input map[string]any) map[string]any {

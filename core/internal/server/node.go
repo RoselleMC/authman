@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -122,16 +123,57 @@ func (s *Server) handleAdminListDownstreamNodes(w http.ResponseWriter, r *http.R
 }
 
 func (s *Server) writeAdminNodes(w http.ResponseWriter, r *http.Request, kind string) {
+	params := parseListPageParams(r)
+	q := r.URL.Query()
+	search := strings.TrimSpace(q.Get("q"))
+	status := strings.TrimSpace(q.Get("status"))
+	sortKey := strings.TrimSpace(q.Get("sort"))
+	sortDir := strings.TrimSpace(q.Get("dir"))
 	nodes := s.nodes.List(r.Context())
-	data := make([]map[string]any, 0, len(nodes))
+	filtered := make([]node.Node, 0, len(nodes))
 	kind = strings.TrimSpace(kind)
 	for _, n := range nodes {
+		nodeState := nodeStatus(n)
+		if status == "" && n.Disabled {
+			continue
+		}
 		if kind != "" && node.NormalizeKind(n.Mode) != kind {
 			continue
 		}
+		if status != "" && nodeState != status {
+			continue
+		}
+		if search != "" && !containsFold(n.ID, search) && !containsFold(n.Name, search) && !containsFold(n.PluginVersion, search) && !containsFold(n.VelocityVersion, search) {
+			continue
+		}
+		filtered = append(filtered, n)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		a, b := filtered[i], filtered[j]
+		cmp := 0
+		switch sortKey {
+		case "name":
+			cmp = strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+		case "status":
+			cmp = strings.Compare(nodeStatus(a), nodeStatus(b))
+		case "seen":
+			cmp = compareTimePtr(a.LastHeartbeatAt, b.LastHeartbeatAt)
+		case "created":
+			cmp = compareTime(a.CreatedAt, b.CreatedAt)
+		default:
+			cmp = strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+		}
+		if sortDir == "desc" {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+	start, end := pageBounds(len(filtered), params)
+	data := make([]map[string]any, 0, end-start)
+	for _, n := range filtered[start:end] {
 		data = append(data, s.nodeData(r.Context(), n))
 	}
-	api.WriteJSON(w, http.StatusOK, data, map[string]any{"count": len(data)})
+	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), len(filtered), params))
 }
 
 func (s *Server) handleAdminCreateNodeWithKind(w http.ResponseWriter, r *http.Request, kind string) {
@@ -468,7 +510,7 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 		"verification_by": "mojang",
 	})
 	player := identity.PlayerFromPassportProfileLink(pp)
-	player.ProfileProperties = s.effectiveProfilePropertiesByID(r.Context(), player.ID)
+	player.ProfileProperties = s.effectiveProfileProperties(r.Context(), pp.Profile, &pp.Passport)
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"profile": map[string]any{
 			"uuid":       pp.Passport.UUID.String(),
@@ -554,7 +596,9 @@ func (s *Server) resolveNodePlayer(ctx context.Context, n node.Node, req resolve
 		if err != nil {
 			return identity.Player{}, api.NewError(http.StatusInternalServerError, "premium.upsert_failed", "failed to persist premium profile")
 		}
-		return identity.PlayerFromPassportProfileLink(pp), nil
+		player := identity.PlayerFromPassportProfileLink(pp)
+		player.ProfileProperties = s.effectiveProfileProperties(ctx, pp.Profile, &pp.Passport)
+		return player, nil
 	}
 	player, err := s.store.GetOfflinePlayer(ctx, normalizeNodeUsername(req.Username))
 	if err != nil {

@@ -46,6 +46,8 @@ var Catalog = []Permission{
 	{Key: "system.read", Group: "settings", Label: "View system summary", Description: "Read runtime version, database, and feature-flag status."},
 	{Key: "security.read", Group: "security", Label: "View security settings", Description: "Read email, SMTP, and multi-factor authentication settings."},
 	{Key: "security.write", Group: "security", Label: "Manage security settings", Description: "Modify email, SMTP, and multi-factor authentication settings."},
+	{Key: "external_api.read", Group: "settings", Label: "View external API tokens", Description: "Read player-panel API token metadata and usage statistics."},
+	{Key: "external_api.write", Group: "settings", Label: "Manage external API tokens", Description: "Create, disable, and revoke player-panel API tokens."},
 }
 
 var catalogKeys = func() map[string]struct{} {
@@ -91,6 +93,8 @@ func DefaultRoles() []Role {
 				"admin.roles.read",
 				"system.read",
 				"security.read",
+				"external_api.read",
+				"external_api.write",
 			},
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -112,6 +116,7 @@ func DefaultRoles() []Role {
 				"admin.roles.read",
 				"system.read",
 				"security.read",
+				"external_api.read",
 			},
 			CreatedAt: now,
 			UpdatedAt: now,

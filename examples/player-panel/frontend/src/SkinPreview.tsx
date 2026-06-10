@@ -7,10 +7,9 @@ interface SkinPreviewProps {
   capeUrl?: string | null;
   elytraUrl?: string | null;
   model?: string;
-  name?: string;
 }
 
-export function SkinPreview({ skinUrl, capeUrl, elytraUrl, model, name }: SkinPreviewProps) {
+export function SkinPreview({ skinUrl, capeUrl, elytraUrl, model }: SkinPreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<SkinViewer | null>(null);
 
@@ -26,7 +25,6 @@ export function SkinPreview({ skinUrl, capeUrl, elytraUrl, model, name }: SkinPr
       enableControls: true,
       background: 0x18120d,
       zoom: 0.86,
-      nameTag: name,
       animation: new IdleAnimation(),
       preserveDrawingBuffer: true
     });
@@ -58,7 +56,7 @@ export function SkinPreview({ skinUrl, capeUrl, elytraUrl, model, name }: SkinPr
       viewer.dispose();
       viewerRef.current = null;
     };
-  }, [name]);
+  }, []);
 
   useEffect(() => {
     const viewer = viewerRef.current;

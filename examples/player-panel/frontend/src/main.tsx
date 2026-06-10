@@ -5,8 +5,10 @@ import {
   changePassword,
   checkName,
   createProfile,
+  deletePassportSkin,
   deleteProfileSkin,
   getExampleStatus,
+  getPassportSkin,
   getProfileSkin,
   getPortalConfig,
   getSession,
@@ -16,9 +18,13 @@ import {
   register,
   restoreProfile,
   selectProfile,
+  setProfileSkinSource,
+  setPassportSkinSource,
+  uploadPassportSkin,
   uploadProfileSkin,
   type ExampleStatus,
   type PortalConfig,
+  type PortalPassportSkin,
   type PortalProfileSkin,
   type PortalProfile,
   type PortalSession
@@ -347,7 +353,7 @@ function AuthenticatedPanel({
         {tab === "profile" ? (
           <ProfileView session={session} onMessage={onMessage} onSession={onSession} />
         ) : null}
-        {tab === "skin" ? <SkinView session={session} onMessage={onMessage} /> : null}
+        {tab === "skin" ? <SkinView session={session} onMessage={onMessage} onSession={onSession} /> : null}
         {tab === "passport" ? (
           <PassportView session={session} config={config} onMessage={onMessage} />
         ) : null}
@@ -564,29 +570,50 @@ function ProfileView({
   );
 }
 
-function SkinView({ session, onMessage }: { session: PortalSession; onMessage: (message: string) => void }) {
+function SkinView({
+  session,
+  onMessage,
+  onSession
+}: {
+  session: PortalSession;
+  onMessage: (message: string) => void;
+  onSession: (session: PortalSession) => void;
+}) {
   const [skin, setSkin] = useState<PortalProfileSkin | null>(null);
+  const [passportSkin, setPassportSkin] = useState<PortalPassportSkin | null>(null);
   const [skinFile, setSkinFile] = useState<File | null>(null);
   const [capeFile, setCapeFile] = useState<File | null>(null);
   const [elytraFile, setElytraFile] = useState<File | null>(null);
+  const [passportSkinFile, setPassportSkinFile] = useState<File | null>(null);
+  const [passportCapeFile, setPassportCapeFile] = useState<File | null>(null);
+  const [passportElytraFile, setPassportElytraFile] = useState<File | null>(null);
   const [model, setModel] = useState<"wide" | "slim">("wide");
+  const [passportModel, setPassportModel] = useState<"wide" | "slim">("wide");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const skinPreviewURL = useObjectURL(skinFile);
   const capePreviewURL = useObjectURL(capeFile);
   const elytraPreviewURL = useObjectURL(elytraFile);
+  const passportSkinPreviewURL = useObjectURL(passportSkinFile);
+  const passportCapePreviewURL = useObjectURL(passportCapeFile);
+  const passportElytraPreviewURL = useObjectURL(passportElytraFile);
 
   useEffect(() => {
     let active = true;
     setLoading(true);
-    getProfileSkin()
-      .then((nextSkin) => {
+    Promise.all([getProfileSkin(), getPassportSkin()])
+      .then(([nextSkin, nextPassportSkin]) => {
         if (!active) return;
         setSkin(nextSkin);
+        setPassportSkin(nextPassportSkin);
         setModel(nextSkin.model === "slim" ? "slim" : "wide");
+        setPassportModel(nextPassportSkin.model === "slim" ? "slim" : "wide");
         setSkinFile(null);
         setCapeFile(null);
         setElytraFile(null);
+        setPassportSkinFile(null);
+        setPassportCapeFile(null);
+        setPassportElytraFile(null);
       })
       .catch((err) => {
         if (active) onMessage(errorMessage(err));
@@ -599,10 +626,28 @@ function SkinView({ session, onMessage }: { session: PortalSession; onMessage: (
     };
   }, [session.profile.id, onMessage]);
 
-  const hasChanges = Boolean(skinFile || capeFile || elytraFile || (skin?.has_custom_skin && normalizeModel(skin.model) !== model));
+  const usingPassportSkin = Boolean(skin?.use_passport_skin);
+  const usingUpstreamSkin = Boolean(passportSkin?.use_upstream_skin);
+  const hasChanges = !usingPassportSkin && Boolean(skinFile || capeFile || elytraFile || (skin?.has_custom_skin && normalizeModel(skin.model) !== model));
+  const hasPassportChanges = !usingUpstreamSkin && Boolean(
+    passportSkinFile ||
+      passportCapeFile ||
+      passportElytraFile ||
+      (passportSkin?.has_custom_skin && normalizeModel(passportSkin.model) !== passportModel)
+  );
   const previewSkin = skinPreviewURL || versionedAsset(skin?.skin_url, skin?.updated_at);
   const previewCape = capePreviewURL || versionedAsset(skin?.cape_url, skin?.updated_at);
   const previewElytra = elytraPreviewURL || versionedAsset(skin?.elytra_url, skin?.updated_at);
+  const passportPreviewSkin = passportSkinPreviewURL || versionedAsset(passportSkin?.skin_url, passportSkin?.updated_at);
+  const passportPreviewCape = passportCapePreviewURL || versionedAsset(passportSkin?.cape_url, passportSkin?.updated_at);
+  const passportPreviewElytra = passportElytraPreviewURL || versionedAsset(passportSkin?.elytra_url, passportSkin?.updated_at);
+
+  async function refreshSession() {
+    const nextSession = await getSession();
+    if (nextSession) {
+      onSession(nextSession);
+    }
+  }
 
   async function save() {
     setBusy(true);
@@ -614,6 +659,7 @@ function SkinView({ session, onMessage }: { session: PortalSession; onMessage: (
       setSkinFile(null);
       setCapeFile(null);
       setElytraFile(null);
+      await refreshSession();
       onMessage("Skin settings saved.");
     } catch (err) {
       onMessage(errorMessage(err));
@@ -632,6 +678,7 @@ function SkinView({ session, onMessage }: { session: PortalSession; onMessage: (
       setSkinFile(null);
       setCapeFile(null);
       setElytraFile(null);
+      await refreshSession();
       onMessage("Custom skin reset.");
     } catch (err) {
       onMessage(errorMessage(err));
@@ -640,7 +687,95 @@ function SkinView({ session, onMessage }: { session: PortalSession; onMessage: (
     }
   }
 
-  if (loading || !skin) {
+  async function togglePassportSource(usePassportSkin: boolean) {
+    setBusy(true);
+    onMessage("");
+    try {
+      const nextSkin = await setProfileSkinSource(usePassportSkin);
+      setSkin(nextSkin);
+      setModel(nextSkin.model === "slim" ? "slim" : "wide");
+      setSkinFile(null);
+      setCapeFile(null);
+      setElytraFile(null);
+      await refreshSession();
+      onMessage(usePassportSkin ? "Profile now inherits the passport skin." : "Profile now uses its own skin priority.");
+    } catch (err) {
+      onMessage(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function savePassportSkin() {
+    setBusy(true);
+    onMessage("");
+    try {
+      const nextSkin = await uploadPassportSkin({
+        skin: passportSkinFile,
+        cape: passportCapeFile,
+        elytra: passportElytraFile,
+        model: passportModel
+      });
+      setPassportSkin(nextSkin);
+      setPassportModel(nextSkin.model === "slim" ? "slim" : "wide");
+      setPassportSkinFile(null);
+      setPassportCapeFile(null);
+      setPassportElytraFile(null);
+      const nextProfileSkin = await getProfileSkin();
+      setSkin(nextProfileSkin);
+      await refreshSession();
+      onMessage("Passport skin settings saved.");
+    } catch (err) {
+      onMessage(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleUpstreamSource(useUpstreamSkin: boolean) {
+    setBusy(true);
+    onMessage("");
+    try {
+      const nextSkin = await setPassportSkinSource(useUpstreamSkin);
+      setPassportSkin(nextSkin);
+      setPassportModel(nextSkin.model === "slim" ? "slim" : "wide");
+      setPassportSkinFile(null);
+      setPassportCapeFile(null);
+      setPassportElytraFile(null);
+      const nextProfileSkin = await getProfileSkin();
+      setSkin(nextProfileSkin);
+      setModel(nextProfileSkin.model === "slim" ? "slim" : "wide");
+      await refreshSession();
+      onMessage(useUpstreamSkin ? "Passport now uses upstream skin." : "Passport now allows custom texture priority.");
+    } catch (err) {
+      onMessage(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetPassportSkin() {
+    setBusy(true);
+    onMessage("");
+    try {
+      const nextSkin = await deletePassportSkin();
+      setPassportSkin(nextSkin);
+      setPassportModel(nextSkin.model === "slim" ? "slim" : "wide");
+      setPassportSkinFile(null);
+      setPassportCapeFile(null);
+      setPassportElytraFile(null);
+      const nextProfileSkin = await getProfileSkin();
+      setSkin(nextProfileSkin);
+      await refreshSession();
+      onMessage("Passport custom skin reset.");
+    } catch (err) {
+      onMessage(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (loading || !skin || !passportSkin) {
     return <div className="empty">Loading skin workshop...</div>;
   }
 
@@ -652,6 +787,10 @@ function SkinView({ session, onMessage }: { session: PortalSession; onMessage: (
           <h2>{session.profile.protocol_name}</h2>
         </div>
       </header>
+      <div className="section-heading skin-section-title">
+        <h3>Selected profile skin</h3>
+        <small>Choose whether this profile inherits the passport skin or uses its own custom texture.</small>
+      </div>
       <div className="skin-workshop">
         <section className="skin-preview-panel">
           {previewSkin ? (
@@ -660,7 +799,6 @@ function SkinView({ session, onMessage }: { session: PortalSession; onMessage: (
               capeUrl={previewCape}
               elytraUrl={previewElytra}
               model={model}
-              name={session.profile.protocol_name}
             />
           ) : (
             <div className="empty">No skin preview available.</div>
@@ -685,32 +823,143 @@ function SkinView({ session, onMessage }: { session: PortalSession; onMessage: (
               <span>Custom cape / elytra</span>
               <strong>{skin.has_custom_cape || skin.has_custom_elytra ? "Yes" : "No"}</strong>
             </article>
+            <article className="inventory-slot">
+              <span>Uses passport skin</span>
+              <strong>{usingPassportSkin ? "Yes" : "No"}</strong>
+            </article>
           </div>
 
           <div className="field-stack">
-            <label>
-              Arm model
-              <select value={model} onChange={(event) => setModel(event.target.value === "slim" ? "slim" : "wide")}>
-                <option value="wide">Wide arms</option>
-                <option value="slim">Slim arms</option>
-              </select>
+            <label className="toggle-line">
+              <input
+                type="checkbox"
+                checked={usingPassportSkin}
+                disabled={busy}
+                onChange={(event) => togglePassportSource(event.currentTarget.checked)}
+              />
+              <span>Inherit passport skin when this profile has no custom override</span>
             </label>
-            <SkinFileInput id="player-skin-file" label="Skin PNG" file={skinFile} onChange={setSkinFile} />
-            <SkinFileInput id="player-cape-file" label="Cape PNG" file={capeFile} onChange={setCapeFile} />
-            <SkinFileInput id="player-elytra-file" label="Elytra PNG" file={elytraFile} onChange={setElytraFile} />
+            {!usingPassportSkin ? (
+              <>
+                <label>
+                  Arm model
+                  <select value={model} onChange={(event) => setModel(event.target.value === "slim" ? "slim" : "wide")}>
+                    <option value="wide">Wide arms</option>
+                    <option value="slim">Slim arms</option>
+                  </select>
+                </label>
+                <SkinFileInput id="player-skin-file" label="Skin PNG" file={skinFile} onChange={setSkinFile} />
+                <SkinFileInput id="player-cape-file" label="Cape PNG" file={capeFile} onChange={setCapeFile} />
+                <SkinFileInput id="player-elytra-file" label="Elytra PNG" file={elytraFile} onChange={setElytraFile} />
+              </>
+            ) : null}
           </div>
 
-          <div className="button-row">
-            <button className="primary" type="button" disabled={busy || !hasChanges} onClick={save}>
-              {busy ? "Saving..." : "Save Skin"}
-            </button>
-            <button className="secondary" type="button" disabled={busy || !skin.has_custom_skin} onClick={reset}>
-              Reset Custom
-            </button>
+          {!usingPassportSkin ? (
+            <>
+              <div className="button-row">
+                <button className="primary" type="button" disabled={busy || !hasChanges} onClick={save}>
+                  {busy ? "Saving..." : "Save Skin"}
+                </button>
+                <button className="secondary" type="button" disabled={busy || !skin.has_custom_skin} onClick={reset}>
+                  Reset Custom
+                </button>
+              </div>
+              <p className="inline-status">
+                Profile skin edits apply only to the currently selected profile. Uploading a custom skin switches this
+                profile back to its own custom texture priority.
+              </p>
+            </>
+          ) : (
+            <p className="inline-status">Custom profile texture controls are hidden while this profile inherits the passport skin.</p>
+          )}
+        </section>
+      </div>
+      <div className="section-heading skin-section-title">
+        <h3>Passport global skin</h3>
+        <small>Used by this passport and by profiles that inherit passport skin.</small>
+      </div>
+      <div className="skin-workshop">
+        <section className="skin-preview-panel">
+          {passportPreviewSkin ? (
+            <SkinPreview
+              skinUrl={passportPreviewSkin}
+              capeUrl={passportPreviewCape}
+              elytraUrl={passportPreviewElytra}
+              model={passportModel}
+            />
+          ) : (
+            <div className="empty">No passport skin preview available.</div>
+          )}
+        </section>
+
+        <section className="skin-editor-panel">
+          <div className="inventory-grid compact">
+            <article className="inventory-slot">
+              <span>Effective source</span>
+              <strong>{passportSkin.effective_source}</strong>
+            </article>
+            <article className="inventory-slot">
+              <span>Default skin</span>
+              <strong>{passportSkin.default_variant} · {passportSkin.default_model}</strong>
+            </article>
+            <article className="inventory-slot">
+              <span>Custom skin</span>
+              <strong>{passportSkin.has_custom_skin ? "Yes" : "No"}</strong>
+            </article>
+            <article className="inventory-slot">
+              <span>Custom cape / elytra</span>
+              <strong>{passportSkin.has_custom_cape || passportSkin.has_custom_elytra ? "Yes" : "No"}</strong>
+            </article>
+            <article className="inventory-slot">
+              <span>Uses upstream skin</span>
+              <strong>{usingUpstreamSkin ? "Yes" : "No"}</strong>
+            </article>
           </div>
-          <p className="inline-status">
-            Skin edits apply to the currently selected profile only.
-          </p>
+
+          <div className="field-stack">
+            <label className="toggle-line">
+              <input
+                type="checkbox"
+                checked={usingUpstreamSkin}
+                disabled={busy}
+                onChange={(event) => toggleUpstreamSource(event.currentTarget.checked)}
+              />
+              <span>Use upstream passport skin from Mojang or UUID default.</span>
+            </label>
+            {!usingUpstreamSkin ? (
+              <>
+                <label>
+                  Arm model
+                  <select value={passportModel} onChange={(event) => setPassportModel(event.target.value === "slim" ? "slim" : "wide")}>
+                    <option value="wide">Wide arms</option>
+                    <option value="slim">Slim arms</option>
+                  </select>
+                </label>
+                <SkinFileInput id="passport-skin-file" label="Passport skin PNG" file={passportSkinFile} onChange={setPassportSkinFile} />
+                <SkinFileInput id="passport-cape-file" label="Passport cape PNG" file={passportCapeFile} onChange={setPassportCapeFile} />
+                <SkinFileInput id="passport-elytra-file" label="Passport elytra PNG" file={passportElytraFile} onChange={setPassportElytraFile} />
+              </>
+            ) : null}
+          </div>
+
+          {!usingUpstreamSkin ? (
+            <>
+              <div className="button-row">
+                <button className="primary" type="button" disabled={busy || !hasPassportChanges} onClick={savePassportSkin}>
+                  {busy ? "Saving..." : "Save Passport Skin"}
+                </button>
+                <button className="secondary" type="button" disabled={busy || !passportSkin.has_custom_skin} onClick={resetPassportSkin}>
+                  Reset Passport Custom
+                </button>
+              </div>
+              <p className="inline-status">
+                Uploading here makes Authman use this custom passport skin until upstream skin is enabled again.
+              </p>
+            </>
+          ) : (
+            <p className="inline-status">Custom passport texture controls are hidden while upstream skin is enabled.</p>
+          )}
         </section>
       </div>
     </div>
@@ -1011,6 +1260,12 @@ function normalizeModel(model: string | undefined) {
 function versionedAsset(url: string | null | undefined, version: string | null | undefined) {
   if (!url) return "";
   if (!version || url.startsWith("blob:") || url.startsWith("data:")) return url;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    if (parsed.searchParams.has("v")) return url;
+  } catch {
+    if (/[?&]v=/.test(url)) return url;
+  }
   return `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}`;
 }
 

@@ -8,7 +8,9 @@ import mc.roselle.authman.config.AuthmanConfig
 import mc.roselle.authman.config.RuntimeConfig
 import mc.roselle.authman.model.DownstreamConsumeResult
 import mc.roselle.authman.model.DownstreamResourcePack
+import mc.roselle.authman.model.DownstreamServerOption
 import mc.roselle.authman.model.DownstreamTarget
+import mc.roselle.authman.model.DownstreamTransferResult
 import mc.roselle.authman.model.NodeAction
 import mc.roselle.authman.model.ResolvedPlayer
 import java.net.http.HttpClient
@@ -43,7 +45,7 @@ class AuthmanClient(
         )
     }
 
-    fun consumeTransferGrant(token: String, serverId: String, uuid: String, protocolName: String, source: String): DownstreamConsumeResult {
+    fun consumeTransferGrant(token: String, serverId: String, uuid: String, protocolName: String, source: String, remoteIp: String): DownstreamConsumeResult {
         val response = post(
             "/api/node/downstream/transfer-grants/consume",
             mapOf(
@@ -52,6 +54,7 @@ class AuthmanClient(
                 "uuid" to uuid,
                 "protocol_name" to protocolName,
                 "source" to source,
+                "remote_ip" to remoteIp,
             ),
         )
         if (!response.ok) {
@@ -75,6 +78,37 @@ class AuthmanClient(
             presenceId = presence.stringOr("id", ""),
             target = parseDownstreamTarget(target),
             privilegedPassport = passport.boolean("privileged"),
+        )
+    }
+
+    fun createDownstreamTransfer(playerId: String, username: String, serverId: String, source: String, remoteIp: String, protocolVersion: Int): DownstreamTransferResult {
+        val response = post(
+            "/api/node/downstream/transfers",
+            mapOf(
+                "player_id" to playerId,
+                "username" to username,
+                "server_id" to serverId,
+                "source" to source,
+                "remote_ip" to remoteIp,
+                "protocol_version" to protocolVersion,
+            ),
+        )
+        if (!response.ok) {
+            throw AuthmanHttpException("create downstream transfer", response)
+        }
+        val data = response.jsonData()
+        val player = data.obj("player")
+        return DownstreamTransferResult(
+            token = data.string("token"),
+            resolved = ResolvedPlayer(
+                uuid = UUID.fromString(player.string("uuid")),
+                protocolName = player.string("protocol_name"),
+                authUsername = player.string("protocol_name"),
+                locked = player.boolean("locked"),
+                authRequired = false,
+                properties = parseProperties(player["properties"]),
+            ),
+            target = parseDownstreamTarget(data.obj("target")),
         )
     }
 
@@ -129,6 +163,8 @@ class AuthmanClient(
             body = response.body,
             runtime = parseRuntime(data.obj("runtime_config")),
             actions = parseNodeActions(data["actions"]),
+            downstreamServers = parseDownstreamServers(data["downstream_servers"]),
+            playerMessages = parsePlayerMessages(data["player_messages"]),
             accessRevoked = false,
         )
     }
@@ -182,8 +218,27 @@ data class HeartbeatResult(
     val body: String,
     val runtime: RuntimeConfig?,
     val actions: List<NodeAction> = emptyList(),
+    val downstreamServers: List<DownstreamServerOption> = emptyList(),
+    val playerMessages: Map<String, String> = emptyMap(),
     val accessRevoked: Boolean,
 )
+
+private fun parsePlayerMessages(element: JsonElement?): Map<String, String> {
+    if (element == null || element.isJsonNull || !element.isJsonObject) {
+        return emptyMap()
+    }
+    val messages = element.asJsonObject["messages"]
+    if (messages == null || messages.isJsonNull || !messages.isJsonObject) {
+        return emptyMap()
+    }
+    val out = mutableMapOf<String, String>()
+    for ((key, value) in messages.asJsonObject.entrySet()) {
+        if (!value.isJsonNull && value.isJsonPrimitive) {
+            out[key] = value.asString
+        }
+    }
+    return out
+}
 
 private fun parseRuntime(obj: JsonObject): RuntimeConfig {
 	return RuntimeConfig(
@@ -224,10 +279,33 @@ private fun parseNodeActions(element: JsonElement?): List<NodeAction> {
 private fun parseDownstreamTarget(obj: JsonObject): DownstreamTarget {
     return DownstreamTarget(
         serverId = obj.stringOr("server_id", ""),
+        transferHost = obj.stringOr("transfer_host", ""),
+        transferPort = obj.int("transfer_port", 25565),
         resourcePackEnabled = obj.boolean("resource_pack_enabled"),
         resourcePackRequired = obj.boolean("resource_pack_required"),
         resourcePacks = parseResourcePacks(obj["resource_packs"]),
     )
+}
+
+private fun parseDownstreamServers(element: JsonElement?): List<DownstreamServerOption> {
+    if (element == null || element.isJsonNull || !element.isJsonArray) {
+        return emptyList()
+    }
+    return element.asJsonArray.mapNotNull { item ->
+        val obj = item.asJsonObject ?: return@mapNotNull null
+        val id = obj.stringOr("id", "").trim()
+        if (id.isBlank()) {
+            return@mapNotNull null
+        }
+        DownstreamServerOption(
+            id = id,
+            slug = obj.stringOr("slug", id),
+            displayName = obj.stringOr("display_name", id),
+            status = obj.stringOr("status", "active"),
+            transferHost = obj.stringOr("transfer_host", ""),
+            transferPort = obj.int("transfer_port", 25565),
+        )
+    }
 }
 
 private fun parseResourcePacks(element: JsonElement?): List<DownstreamResourcePack> {
@@ -271,10 +349,21 @@ data class AuthmanResponse(
         val root = gson.fromJson(body, JsonObject::class.java)
         return root.obj("data")
     }
+
+    fun errorCode(): String = errorField("code")
+
+    fun errorMessage(): String = errorField("message")
+
+    private fun errorField(field: String): String = runCatching {
+        gson.fromJson(body, JsonObject::class.java)?.obj("error")?.stringOr(field, "") ?: ""
+    }.getOrDefault("")
 }
 
 class AuthmanHttpException(operation: String, response: AuthmanResponse) :
-    IllegalStateException("Authman $operation failed with HTTP ${response.statusCode}: ${response.body}")
+    IllegalStateException("Authman $operation failed with HTTP ${response.statusCode}: ${response.body}") {
+    val errorCode: String = response.errorCode()
+    val errorMessage: String = response.errorMessage()
+}
 
 private fun JsonObject.obj(key: String): JsonObject =
     get(key)?.asJsonObject ?: JsonObject()

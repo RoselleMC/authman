@@ -481,6 +481,8 @@ export interface PortalRuntimeConfig {
 export interface PortalSettings {
   transfer_cookie_key: string;
   fallback_server_id: string;
+  max_profiles_per_passport?: number;
+  auto_join_single_profile?: boolean;
   available_servers?: Array<{
     id: string;
     slug: string;
@@ -495,7 +497,121 @@ export async function fetchPortalSettings(): Promise<PortalSettings> {
 }
 
 export async function updatePortalSettings(input: PortalSettings): Promise<PortalSettings> {
-  const res = await apiFetch<PortalSettings>("/admin/portal-settings", { method: "PUT", body: input });
+  // Strip the read-only echo field; the Go decoder rejects unknown fields.
+  const { available_servers: _availableServers, ...body } = input;
+  const res = await apiFetch<PortalSettings>("/admin/portal-settings", { method: "PUT", body });
+  return res.data;
+}
+
+export type PlayerMessageDialogScreen = "login" | "register" | "profile_create" | "profile_select";
+
+export const PLAYER_DIALOG_SCREENS: PlayerMessageDialogScreen[] = ["login", "register", "profile_create", "profile_select"];
+
+export type PlayerMessageDialogWhen = "always" | "auth_required" | "premium_passthrough" | "premium_unverified" | "error";
+
+export type PlayerDialogBodyKind = "text" | "item";
+export type PlayerDialogInputKind = "text" | "boolean" | "option" | "range";
+export type PlayerDialogInputRole = "" | "password" | "confirm" | "profile_name" | "profile_choice";
+export type PlayerDialogActionKind = "submit" | "open_url" | "copy_to_clipboard" | "open_screen";
+export type PlayerDialogAfterAction = "wait_for_response" | "none";
+
+export interface PlayerDialogBody {
+  id: string;
+  kind: PlayerDialogBodyKind;
+  when?: PlayerMessageDialogWhen;
+  text?: string;
+  width?: number;
+  item?: string;
+  count?: number;
+  description?: string;
+  show_tooltip?: boolean;
+  show_decorations?: boolean;
+  height?: number;
+}
+
+export interface PlayerDialogOption {
+  id: string;
+  display: string;
+  initial?: boolean;
+}
+
+export interface PlayerDialogInput {
+  id: string;
+  kind: PlayerDialogInputKind;
+  role?: PlayerDialogInputRole;
+  key: string;
+  label: string;
+  label_visible?: boolean;
+  when?: PlayerMessageDialogWhen;
+  width?: number;
+  initial?: string;
+  max_length?: number;
+  multiline?: boolean;
+  multiline_lines?: number;
+  initial_bool?: boolean;
+  on_true?: string;
+  on_false?: string;
+  options?: PlayerDialogOption[];
+  start?: number;
+  end?: number;
+  step?: number | null;
+  initial_num?: number | null;
+  label_format?: string;
+}
+
+export interface PlayerDialogAction {
+  kind: PlayerDialogActionKind;
+  url?: string;
+  value?: string;
+  screen?: string;
+}
+
+export interface PlayerDialogButton {
+  id: string;
+  label: string;
+  tooltip?: string;
+  width?: number;
+  when?: PlayerMessageDialogWhen;
+  action: PlayerDialogAction;
+}
+
+export interface PlayerMessageDialogDoc {
+  version: number;
+  title: string;
+  external_title?: string;
+  can_close_with_escape?: boolean;
+  pause?: boolean;
+  after_action?: PlayerDialogAfterAction;
+  columns?: number;
+  body: PlayerDialogBody[];
+  inputs: PlayerDialogInput[];
+  buttons: PlayerDialogButton[];
+}
+
+export interface PlayerMessagesData {
+  messages: {
+    defaults: Record<string, string>;
+    overrides: Record<string, string>;
+    placeholders: Record<string, string[]>;
+  };
+  dialogs: Record<PlayerMessageDialogScreen, {
+    default: PlayerMessageDialogDoc;
+    override: PlayerMessageDialogDoc | null;
+  }>;
+}
+
+export interface PlayerMessagesUpdateInput {
+  messages: Record<string, string>;
+  dialogs: Partial<Record<PlayerMessageDialogScreen, PlayerMessageDialogDoc | null>>;
+}
+
+export async function fetchPlayerMessages(): Promise<PlayerMessagesData> {
+  const res = await apiFetch<PlayerMessagesData>("/admin/settings/player-messages");
+  return res.data;
+}
+
+export async function updatePlayerMessages(input: PlayerMessagesUpdateInput): Promise<PlayerMessagesData> {
+  const res = await apiFetch<PlayerMessagesData>("/admin/settings/player-messages", { method: "PUT", body: input });
   return res.data;
 }
 
@@ -672,6 +788,39 @@ export async function updateSMTPSettings(input: SMTPSettings): Promise<SMTPSetti
 
 export async function sendSMTPTest(to: string): Promise<{ ok: boolean; delivery: "smtp" | "log" }> {
   const res = await apiFetch<{ ok: boolean; delivery: "smtp" | "log" }>("/admin/settings/smtp/test", { method: "POST", body: { to } });
+  return res.data;
+}
+
+export interface PasswordRecoveryKeyStatus {
+  algorithm: string;
+  public_key_pem: string;
+  fingerprint: string;
+  size_bits: number;
+  created_at: string;
+  downloaded_at?: string;
+  private_key_available: boolean;
+}
+
+export interface PasswordRecoveryPrivateKeyDownload {
+  private_key_pem: string;
+  fingerprint: string;
+  algorithm: string;
+  filename: string;
+  destroyed_at: string;
+}
+
+export async function fetchPasswordRecoveryKeyStatus(): Promise<PasswordRecoveryKeyStatus> {
+  const res = await apiFetch<PasswordRecoveryKeyStatus>("/admin/settings/security/password-recovery-key");
+  return res.data;
+}
+
+export async function downloadPasswordRecoveryPrivateKey(): Promise<PasswordRecoveryPrivateKeyDownload> {
+  const res = await apiFetch<PasswordRecoveryPrivateKeyDownload>("/admin/settings/security/password-recovery-key/download", { method: "POST" });
+  return res.data;
+}
+
+export async function factoryResetSystem(confirm: string): Promise<PasswordRecoveryKeyStatus> {
+  const res = await apiFetch<PasswordRecoveryKeyStatus>("/admin/settings/system/factory-reset", { method: "POST", body: { confirm } });
   return res.data;
 }
 

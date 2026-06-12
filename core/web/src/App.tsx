@@ -15,6 +15,8 @@ import { LimboBlueprintDetailPage } from "./pages/LimboBlueprintDetailPage";
 import { ProxyPoolPage } from "./pages/MojangPage";
 import { AuditPage } from "./pages/AuditPage";
 import { AuditDetailPage } from "./pages/AuditDetailPage";
+import { PlayerDialogEditorPage } from "./pages/PlayerDialogEditorPage";
+import { PlayerMessageScenePage } from "./pages/PlayerMessageScenePage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ExternalAPITokenDetailPage } from "./pages/ExternalAPITokenDetailPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
@@ -63,6 +65,9 @@ export function App() {
         <Route path="/login-portals" element={<LoginPortalsPage tab="instances" />} />
         <Route path="/login-portals/blueprints" element={<LoginPortalsPage tab="blueprints" />} />
         <Route path="/login-portals/blueprints/:id" element={<LimboBlueprintDetailPage />} />
+        <Route path="/login-portals/messages" element={<LoginPortalsPage tab="messages" />} />
+        <Route path="/login-portals/messages/dialogs/:screen" element={<PlayerDialogEditorPage />} />
+        <Route path="/login-portals/messages/scenes/:scene" element={<PlayerMessageScenePage />} />
         <Route path="/login-portals/settings" element={<LoginPortalsPage tab="settings" />} />
         <Route path="/login-portals/:id" element={<NodeDetailPage />} />
         <Route path="/nodes" element={<DownstreamServersPage />} />

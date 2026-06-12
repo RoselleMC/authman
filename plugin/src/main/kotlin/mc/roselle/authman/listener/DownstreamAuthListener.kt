@@ -14,6 +14,7 @@ import com.velocitypowered.api.proxy.Player
 import com.velocitypowered.api.proxy.ProxyServer
 import mc.roselle.authman.AuthmanPlugin
 import mc.roselle.authman.api.AuthmanClient
+import mc.roselle.authman.api.AuthmanHttpException
 import mc.roselle.authman.config.AuthmanConfig
 import mc.roselle.authman.message.AuthmanMessages
 import mc.roselle.authman.model.DownstreamResourcePack
@@ -110,18 +111,31 @@ class DownstreamAuthListener(
             reject(player, "empty Authman transfer grant cookie")
             return
         }
-        val source = player.remoteAddress.address?.hostAddress ?: player.remoteAddress.hostString
+        val remoteIp = player.remoteAddress.address?.hostAddress ?: player.remoteAddress.hostString
         val result = try {
             client.consumeTransferGrant(
                 token = token,
                 serverId = config.serverId,
                 uuid = player.uniqueId.toString(),
                 protocolName = player.username,
-                source = source,
+                source = remoteIp,
+                remoteIp = remoteIp,
             )
         } catch (ex: Exception) {
             plugin.lockIfCoreRejected(ex)
             validating.remove(player.uniqueId)
+            if (ex is AuthmanHttpException) {
+                when (ex.errorCode) {
+                    "auth.banned" -> {
+                        rejectWith(player, "banned: ${ex.errorMessage}", messages.banned(ex.errorMessage, player.username))
+                        return
+                    }
+                    "auth.account_locked" -> {
+                        rejectWith(player, "account locked", messages.locked(player.username))
+                        return
+                    }
+                }
+            }
             reject(player, "invalid Authman transfer grant: ${ex.message}")
             return
         }
@@ -358,12 +372,16 @@ class DownstreamAuthListener(
     }
 
     private fun reject(player: Player, reason: String) {
+        rejectWith(player, reason, messages.temporaryUnavailable())
+    }
+
+    private fun rejectWith(player: Player, reason: String, message: Component) {
         pending.remove(player.uniqueId)
         allowed.remove(player.uniqueId)
         validating.remove(player.uniqueId)
         logger.info("Rejected Authman downstream player {}: {}", player.username, reason)
         if (player.isActive) {
-            player.disconnect(messages.temporaryUnavailable())
+            player.disconnect(message)
         }
     }
 }

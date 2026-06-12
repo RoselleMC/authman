@@ -31,7 +31,7 @@ func (s *Server) handleHasJoined(w http.ResponseWriter, r *http.Request) {
 	profile, err := service.HasJoined(r.Context(), req)
 	if err != nil {
 		if errors.Is(err, yggdrasil.ErrProfileNotFound) {
-			s.audit(r, audit.ActorSystem, "yggdrasil", audit.TargetPlayer, strings.TrimSpace(req.Username), "yggdrasil.has_joined_not_found", map[string]any{
+			s.auditWithClientIP(r, req.IP, audit.ActorSystem, "yggdrasil", audit.TargetPlayer, strings.TrimSpace(req.Username), "yggdrasil.has_joined_not_found", map[string]any{
 				"username":  req.Username,
 				"server_id": req.ServerID,
 				"ip":        req.IP,
@@ -39,7 +39,7 @@ func (s *Server) handleHasJoined(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		s.audit(r, audit.ActorSystem, "yggdrasil", audit.TargetPlayer, strings.TrimSpace(req.Username), "yggdrasil.has_joined_failure", map[string]any{
+		s.auditWithClientIP(r, req.IP, audit.ActorSystem, "yggdrasil", audit.TargetPlayer, strings.TrimSpace(req.Username), "yggdrasil.has_joined_failure", map[string]any{
 			"username":  req.Username,
 			"server_id": req.ServerID,
 			"ip":        req.IP,
@@ -56,8 +56,8 @@ func (s *Server) recordHasJoined(r *http.Request, req yggdrasil.HasJoinedRequest
 	if playerID := authmanPlayerID(profile); playerID != "" {
 		player, err := s.store.GetPlayerByID(r.Context(), playerID)
 		if err == nil {
-			s.recordPlayerSeen(r, player, req.ServerID, time.Now())
-			s.audit(r, audit.ActorPlayer, player.ID, audit.TargetPlayer, player.ID, "yggdrasil.has_joined", playerEventDetails(player, map[string]any{
+			s.recordPlayerSeenWithClientIP(r, player, req.ServerID, req.IP, time.Now())
+			s.auditWithClientIP(r, req.IP, audit.ActorPlayer, player.ID, audit.TargetPlayer, player.ID, "yggdrasil.has_joined", playerEventDetails(player, map[string]any{
 				"server_id": req.ServerID,
 				"ip":        req.IP,
 				"kind":      identity.PlayerKindOffline,
@@ -69,8 +69,8 @@ func (s *Server) recordHasJoined(r *http.Request, req yggdrasil.HasJoinedRequest
 	if !ok {
 		return
 	}
-	s.recordPassportProfileSeen(r, pp.Passport, pp.Profile, req.ServerID, time.Now())
-	s.audit(r, audit.ActorPlayer, pp.Passport.ID, audit.TargetPlayer, pp.Profile.ID, "yggdrasil.has_joined", map[string]any{
+	s.recordPassportProfileSeenWithClientIP(r, pp.Passport, pp.Profile, req.ServerID, req.IP, time.Now())
+	s.auditWithClientIP(r, req.IP, audit.ActorPlayer, pp.Passport.ID, audit.TargetPlayer, pp.Profile.ID, "yggdrasil.has_joined", map[string]any{
 		"passport_id":   pp.Passport.ID,
 		"profile_id":    pp.Profile.ID,
 		"protocol_name": pp.Profile.ProtocolName,
@@ -78,6 +78,35 @@ func (s *Server) recordHasJoined(r *http.Request, req yggdrasil.HasJoinedRequest
 		"ip":            req.IP,
 		"kind":          identity.PlayerKindPremium,
 	})
+}
+
+// profilePropertiesToIdentity converts yggdrasil profile properties into the
+// identity property type for passport-level texture persistence.
+func profilePropertiesToIdentity(properties []yggdrasil.Property) []identity.ProfileProperty {
+	out := make([]identity.ProfileProperty, 0, len(properties))
+	for _, property := range properties {
+		out = append(out, identity.ProfileProperty{Name: property.Name, Value: property.Value, Signature: property.Signature})
+	}
+	return out
+}
+
+// persistPremiumPassport stores only the verified premium passport; profiles
+// are created explicitly through the limbo profile dialog or the web portal.
+func (s *Server) persistPremiumPassport(ctx context.Context, profile yggdrasil.Profile) (identity.Passport, bool) {
+	if strings.TrimSpace(profile.ID) == "" || strings.TrimSpace(profile.Name) == "" {
+		return identity.Passport{}, false
+	}
+	for _, property := range profile.Properties {
+		if property.Name == yggdrasil.PropertyAuthmanKind && property.Value == string(identity.PlayerKindOffline) {
+			return identity.Passport{}, false
+		}
+	}
+	uuid, err := identity.ParseUUID(profile.ID)
+	if err != nil {
+		return identity.Passport{}, false
+	}
+	passport, err := s.store.UpsertPremiumPassport(ctx, profile.Name, uuid)
+	return passport, err == nil
 }
 
 func (s *Server) persistPremiumProfile(ctx context.Context, profile yggdrasil.Profile) (identity.PassportProfile, bool) {

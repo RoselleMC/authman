@@ -218,6 +218,10 @@ func IsLimboPortal(value string) bool {
 	return NormalizeKind(value) == "limbo_portal"
 }
 
+func IsDownstreamVelocity(value string) bool {
+	return NormalizeKind(value) == "downstream_velocity"
+}
+
 func (r *Registry) List(ctx context.Context) []Node {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

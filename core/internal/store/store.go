@@ -177,20 +177,24 @@ type PlayerBan struct {
 }
 
 type OfflineCredential struct {
-	PlayerID          string
-	PassportID        string
-	PasswordHash      string
-	PasswordUpdatedAt *time.Time
-	FailedAttempts    int
-	LockedUntil       *time.Time
+	PlayerID               string
+	PassportID             string
+	PasswordHash           string
+	EncryptedPassword      string
+	PasswordKeyFingerprint string
+	PasswordUpdatedAt      *time.Time
+	FailedAttempts         int
+	LockedUntil            *time.Time
 }
 
 type PassportCredential struct {
-	PassportID        string
-	PasswordHash      string
-	PasswordUpdatedAt *time.Time
-	FailedAttempts    int
-	LockedUntil       *time.Time
+	PassportID             string
+	PasswordHash           string
+	EncryptedPassword      string
+	PasswordKeyFingerprint string
+	PasswordUpdatedAt      *time.Time
+	FailedAttempts         int
+	LockedUntil            *time.Time
 }
 
 type AdminUser struct {
@@ -282,7 +286,12 @@ type ExternalAPIToken struct {
 }
 
 type PlayerStore interface {
-	CreateOfflinePassportProfile(ctx context.Context, rawName string, protocolName string, passwordHash string) (identity.PassportProfile, error)
+	CreateOfflinePassportProfile(ctx context.Context, rawName string, protocolName string, passwordHash string, encryptedPassword string, keyFingerprint string) (identity.PassportProfile, error)
+	CreateOfflinePassport(ctx context.Context, rawName string, passwordHash string, encryptedPassword string, keyFingerprint string) (identity.Passport, error)
+	UpsertPremiumPassport(ctx context.Context, name string, uuid identity.UUID) (identity.Passport, error)
+	GetPremiumPassportByUsername(ctx context.Context, username string) (identity.Passport, error)
+	SetPassportPremiumTextures(ctx context.Context, passportID string, properties []identity.ProfileProperty) error
+	GetPassportPremiumTextures(ctx context.Context, passportID string) []identity.ProfileProperty
 	UpsertPremiumPassportProfile(ctx context.Context, name string, uuid identity.UUID, properties []identity.ProfileProperty) (identity.PassportProfile, error)
 	GetPassportByID(ctx context.Context, id string) (identity.Passport, error)
 	GetPassportByUsername(ctx context.Context, username string) (identity.Passport, error)
@@ -312,7 +321,9 @@ type PlayerStore interface {
 	RecordPassportLoginFailure(ctx context.Context, passportID string, now time.Time) (PassportCredential, error)
 	RecordPassportLoginSuccess(ctx context.Context, passportID string) error
 	RecordPlayerSeen(ctx context.Context, passportID string, profileID string, serverID string, ip string, geo *identity.IPGeo, now time.Time) error
-	UpdatePassportPassword(ctx context.Context, passportID string, passwordHash string) error
+	UpdatePassportPassword(ctx context.Context, passportID string, passwordHash string, encryptedPassword string, keyFingerprint string) error
+	SetPassportPasswordRecovery(ctx context.Context, passportID string, encryptedPassword string, keyFingerprint string) error
+	FactoryResetPlayerData(ctx context.Context) error
 	CreateOfflinePlayer(ctx context.Context, rawName string, passwordHash string) (identity.Player, error)
 	UpsertPremiumPlayer(ctx context.Context, name string, uuid identity.UUID, properties []identity.ProfileProperty) (identity.Player, error)
 	GetOfflinePlayer(ctx context.Context, rawName string) (identity.Player, error)
@@ -324,7 +335,7 @@ type PlayerStore interface {
 	RecordOfflineLoginSuccess(ctx context.Context, playerID string) error
 	ListPlayers(ctx context.Context) []identity.Player
 	SetPlayerLocked(ctx context.Context, id string, locked bool) (identity.Player, error)
-	UpdateOfflinePassword(ctx context.Context, id string, passwordHash string) error
+	UpdateOfflinePassword(ctx context.Context, id string, passwordHash string, encryptedPassword string, keyFingerprint string) error
 	SaveSession(ctx context.Context, session auth.Session) error
 	GetSession(ctx context.Context, id string) (auth.Session, error)
 	UpdateSession(ctx context.Context, session auth.Session) error

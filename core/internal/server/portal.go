@@ -30,11 +30,16 @@ func (s *Server) handleOfflineRegister(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "auth.password_policy_failed", "password does not satisfy policy"))
 		return
 	}
+	encryptedPassword, keyFingerprint, err := s.offlinePasswordCredential(r.Context(), req.Password)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "password_recovery.encrypt_failed", "failed to encrypt recoverable password"))
+		return
+	}
 	username := req.Username
 	if username == "" {
 		username = req.RawUsername
 	}
-	pp, err := s.store.CreateOfflinePassportProfile(r.Context(), username, username, passwordHash)
+	pp, err := s.store.CreateOfflinePassportProfile(r.Context(), username, username, passwordHash, encryptedPassword, keyFingerprint)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "player.offline_registration_failed", err.Error()))
 		return
@@ -221,7 +226,12 @@ func (s *Server) handlePortalChangePassword(w http.ResponseWriter, r *http.Reque
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "auth.password_policy_failed", "password does not satisfy policy"))
 		return
 	}
-	if err := s.store.UpdatePassportPassword(r.Context(), passport.ID, passwordHash); err != nil {
+	encryptedPassword, keyFingerprint, err := s.offlinePasswordCredential(r.Context(), req.NewPassword)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "password_recovery.encrypt_failed", "failed to encrypt recoverable password"))
+		return
+	}
+	if err := s.store.UpdatePassportPassword(r.Context(), passport.ID, passwordHash, encryptedPassword, keyFingerprint); err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "auth.password_update_failed", "failed to update password"))
 		return
 	}
@@ -366,6 +376,11 @@ func (s *Server) handlePortalCreateProfile(w http.ResponseWriter, r *http.Reques
 	var req portalCreateProfileRequest
 	if err := api.DecodeJSON(r, &req); err != nil {
 		api.WriteError(w, err)
+		return
+	}
+	settings := s.portalSettings(r.Context())
+	if existing := s.store.ListProfilesForPassport(r.Context(), passport.ID); len(existing) >= settings.MaxProfilesPerPassport {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "profile.limit_reached", "this passport already has the maximum number of profiles"))
 		return
 	}
 	name, err := identity.NormalizeProtocolName(req.ProtocolName)

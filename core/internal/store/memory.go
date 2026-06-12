@@ -42,6 +42,7 @@ type Memory struct {
 	downstreamPrivileges map[string]map[string]DownstreamServerPrivilegedPassport
 	limboBlueprints      map[string]LimboBlueprint
 	profileSkins         map[string]ProfileSkin
+	premiumTextures      map[string][]identity.ProfileProperty
 	passportSkins        map[string]PassportSkin
 	transferGrants       map[string]auth.TransferGrant
 	extensionData        map[string]ExtensionPlayerData
@@ -78,6 +79,7 @@ func NewMemory() *Memory {
 		downstreamPrivileges: make(map[string]map[string]DownstreamServerPrivilegedPassport),
 		limboBlueprints:      make(map[string]LimboBlueprint),
 		profileSkins:         make(map[string]ProfileSkin),
+		premiumTextures:      make(map[string][]identity.ProfileProperty),
 		passportSkins:        make(map[string]PassportSkin),
 		transferGrants:       make(map[string]auth.TransferGrant),
 		extensionData:        make(map[string]ExtensionPlayerData),
@@ -94,7 +96,7 @@ func NewMemory() *Memory {
 	return m
 }
 
-func (m *Memory) CreateOfflinePassportProfile(ctx context.Context, rawName string, protocolName string, passwordHash string) (identity.PassportProfile, error) {
+func (m *Memory) CreateOfflinePassportProfile(ctx context.Context, rawName string, protocolName string, passwordHash string, encryptedPassword string, keyFingerprint string) (identity.PassportProfile, error) {
 	name, err := identity.NormalizeOfflineName(rawName)
 	if err != nil {
 		return identity.PassportProfile{}, err
@@ -121,9 +123,11 @@ func (m *Memory) CreateOfflinePassportProfile(ctx context.Context, rawName strin
 	}
 	pp := m.storePassportProfileLocked(passport, profile, true)
 	m.credentialsByPlayer[passport.ID] = OfflineCredential{
-		PlayerID:     passport.ID,
-		PassportID:   passport.ID,
-		PasswordHash: passwordHash,
+		PlayerID:               passport.ID,
+		PassportID:             passport.ID,
+		PasswordHash:           passwordHash,
+		EncryptedPassword:      encryptedPassword,
+		PasswordKeyFingerprint: keyFingerprint,
 	}
 	return pp, nil
 }
@@ -390,6 +394,16 @@ func (m *Memory) ListProfilesForPassport(ctx context.Context, passportID string)
 			out = append(out, profile)
 		}
 	}
+	// Match Postgres ordering (primary first, then protocol name) so callers
+	// that assume profiles[0] is primary behave identically across stores.
+	sort.Slice(out, func(i, j int) bool {
+		pi := m.profileLinks[out[i].ID].IsPrimary
+		pj := m.profileLinks[out[j].ID].IsPrimary
+		if pi != pj {
+			return pi
+		}
+		return out[i].ProtocolName < out[j].ProtocolName
+	})
 	return out
 }
 
@@ -746,8 +760,60 @@ func (m *Memory) RecordPlayerSeen(ctx context.Context, passportID string, profil
 	return nil
 }
 
-func (m *Memory) UpdatePassportPassword(ctx context.Context, passportID string, passwordHash string) error {
-	return m.UpdateOfflinePassword(ctx, passportID, passwordHash)
+func (m *Memory) UpdatePassportPassword(ctx context.Context, passportID string, passwordHash string, encryptedPassword string, keyFingerprint string) error {
+	return m.UpdateOfflinePassword(ctx, passportID, passwordHash, encryptedPassword, keyFingerprint)
+}
+
+func (m *Memory) SetPassportPasswordRecovery(ctx context.Context, passportID string, encryptedPassword string, keyFingerprint string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	passportID = m.passportIDForCredentialLocked(passportID)
+	credential, ok := m.credentialsByPlayer[passportID]
+	if !ok {
+		return fmt.Errorf("offline credential not found: %w", ErrNotFound)
+	}
+	credential.PlayerID = passportID
+	credential.PassportID = passportID
+	credential.EncryptedPassword = encryptedPassword
+	credential.PasswordKeyFingerprint = keyFingerprint
+	credential.PasswordUpdatedAt = ptrTime(time.Now().UTC())
+	m.credentialsByPlayer[passportID] = credential
+	return nil
+}
+
+func (m *Memory) FactoryResetPlayerData(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.passportsByID = make(map[string]identity.Passport)
+	m.profilesByID = make(map[string]identity.Profile)
+	m.passportByUsername = make(map[string]string)
+	m.profileLinks = make(map[string]identity.ProfilePassportLink)
+	m.profilesByPassport = make(map[string]map[string]struct{})
+	m.playersByID = make(map[string]identity.Player)
+	m.offlineByNormalized = make(map[string]string)
+	m.protocolNameIndex = make(map[string]string)
+	m.credentialsByPlayer = make(map[string]OfflineCredential)
+	for id, session := range m.sessionsByID {
+		if session.Kind == auth.SessionPlayer {
+			delete(m.sessionsByID, id)
+		}
+	}
+	m.portalLinksByToken = make(map[string]auth.PortalLink)
+	m.auditEvents = nil
+	m.presencesByID = make(map[string]PlayerPresence)
+	m.bansByID = make(map[string]PlayerBan)
+	for id, action := range m.nodeActionsByID {
+		if action.PassportID != "" || action.ProfileID != "" || action.PresenceID != "" {
+			delete(m.nodeActionsByID, id)
+		}
+	}
+	m.downstreamPrivileges = make(map[string]map[string]DownstreamServerPrivilegedPassport)
+	m.profileSkins = make(map[string]ProfileSkin)
+	m.premiumTextures = make(map[string][]identity.ProfileProperty)
+	m.passportSkins = make(map[string]PassportSkin)
+	m.transferGrants = make(map[string]auth.TransferGrant)
+	m.extensionData = make(map[string]ExtensionPlayerData)
+	return nil
 }
 
 func cloneProfileSkin(skin ProfileSkin) ProfileSkin {
@@ -777,7 +843,7 @@ func cloneIPGeo(geo *identity.IPGeo) *identity.IPGeo {
 }
 
 func (m *Memory) CreateOfflinePlayer(ctx context.Context, rawName string, passwordHash string) (identity.Player, error) {
-	pp, err := m.CreateOfflinePassportProfile(ctx, rawName, rawName, passwordHash)
+	pp, err := m.CreateOfflinePassportProfile(ctx, rawName, rawName, passwordHash, "", "")
 	if err != nil {
 		return identity.Player{}, err
 	}
@@ -922,7 +988,7 @@ func (m *Memory) SetPlayerLocked(ctx context.Context, id string, locked bool) (i
 	return m.refreshProfilePlayerLocked(id), nil
 }
 
-func (m *Memory) UpdateOfflinePassword(ctx context.Context, id string, passwordHash string) error {
+func (m *Memory) UpdateOfflinePassword(ctx context.Context, id string, passwordHash string, encryptedPassword string, keyFingerprint string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	passportID := id
@@ -937,12 +1003,16 @@ func (m *Memory) UpdateOfflinePassword(ctx context.Context, id string, passwordH
 	if passport.Kind != identity.PassportKindOffline {
 		return fmt.Errorf("player is not offline")
 	}
-	m.credentialsByPlayer[passportID] = OfflineCredential{
-		PlayerID:          passportID,
-		PassportID:        passportID,
-		PasswordHash:      passwordHash,
-		PasswordUpdatedAt: ptrTime(time.Now().UTC()),
-	}
+	credential := m.credentialsByPlayer[passportID]
+	credential.PlayerID = passportID
+	credential.PassportID = passportID
+	credential.PasswordHash = passwordHash
+	credential.EncryptedPassword = encryptedPassword
+	credential.PasswordKeyFingerprint = keyFingerprint
+	credential.PasswordUpdatedAt = ptrTime(time.Now().UTC())
+	credential.FailedAttempts = 0
+	credential.LockedUntil = nil
+	m.credentialsByPlayer[passportID] = credential
 	return nil
 }
 
@@ -1092,11 +1162,13 @@ func passportCredentialFromOffline(credential OfflineCredential) PassportCredent
 		passportID = credential.PlayerID
 	}
 	return PassportCredential{
-		PassportID:        passportID,
-		PasswordHash:      credential.PasswordHash,
-		PasswordUpdatedAt: credential.PasswordUpdatedAt,
-		FailedAttempts:    credential.FailedAttempts,
-		LockedUntil:       credential.LockedUntil,
+		PassportID:             passportID,
+		PasswordHash:           credential.PasswordHash,
+		EncryptedPassword:      credential.EncryptedPassword,
+		PasswordKeyFingerprint: credential.PasswordKeyFingerprint,
+		PasswordUpdatedAt:      credential.PasswordUpdatedAt,
+		FailedAttempts:         credential.FailedAttempts,
+		LockedUntil:            credential.LockedUntil,
 	}
 }
 
@@ -1839,6 +1911,9 @@ func (m *Memory) ConsumeTransferGrant(ctx context.Context, tokenHash string, ser
 }
 
 func portalGrantSourceAllowed(grant auth.TransferGrant, allowed []string) bool {
+	if strings.HasPrefix(strings.TrimSpace(grant.PortalSource), "downstream-command:") {
+		return true
+	}
 	if len(allowed) == 0 {
 		return true
 	}

@@ -11,16 +11,24 @@ import (
 )
 
 func (s *Server) recordPassportProfileSeen(r *http.Request, passport identity.Passport, profile identity.Profile, serverID string, now time.Time) {
-	ip, geo := s.requestIPGeo(r)
+	s.recordPassportProfileSeenWithClientIP(r, passport, profile, serverID, "", now)
+}
+
+func (s *Server) recordPassportProfileSeenWithClientIP(r *http.Request, passport identity.Passport, profile identity.Profile, serverID string, ipOverride string, now time.Time) {
+	ip, geo := s.requestIPGeoWithClientIP(r, ipOverride)
 	_ = s.store.RecordPlayerSeen(r.Context(), passport.ID, profile.ID, strings.TrimSpace(serverID), ip, geo, now)
 }
 
 func (s *Server) recordPlayerSeen(r *http.Request, player identity.Player, serverID string, now time.Time) {
+	s.recordPlayerSeenWithClientIP(r, player, serverID, "", now)
+}
+
+func (s *Server) recordPlayerSeenWithClientIP(r *http.Request, player identity.Player, serverID string, ipOverride string, now time.Time) {
 	passportID := ""
 	if passport, err := s.store.GetPassportForProfile(r.Context(), player.ID); err == nil {
 		passportID = passport.ID
 	}
-	ip, geo := s.requestIPGeo(r)
+	ip, geo := s.requestIPGeoWithClientIP(r, ipOverride)
 	_ = s.store.RecordPlayerSeen(r.Context(), passportID, player.ID, strings.TrimSpace(serverID), ip, geo, now)
 }
 

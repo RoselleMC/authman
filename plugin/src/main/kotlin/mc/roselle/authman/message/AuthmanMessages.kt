@@ -1,37 +1,59 @@
 package mc.roselle.authman.message
 
-import com.velocitypowered.api.proxy.Player
-import mc.roselle.authman.config.AuthmanConfig
+import java.util.concurrent.atomic.AtomicReference
 import net.kyori.adventure.text.Component
-import net.kyori.adventure.text.format.NamedTextColor
-import net.kyori.adventure.text.format.TextDecoration
+import net.kyori.adventure.text.minimessage.MiniMessage
 
-class AuthmanMessages(private val config: AuthmanConfig) {
-    fun sendTemporaryUnavailable(player: Player) {
-        player.sendMessage(Component.text("Authman 暂时不可用，请稍后重试 / Authman is temporarily unavailable.", NamedTextColor.RED))
+/**
+ * Player-visible gate messages. Sources are MiniMessage strings delivered by
+ * Authman Core through the node heartbeat; built-in defaults keep every flow
+ * working when Core is unreachable or a key is unset.
+ */
+class AuthmanMessages {
+    private val mini = MiniMessage.miniMessage()
+    private val overrides = AtomicReference<Map<String, String>>(emptyMap())
+
+    fun apply(messages: Map<String, String>) {
+        overrides.set(messages.filterValues { it.isNotBlank() })
     }
 
-    fun temporaryUnavailable(): Component =
-        Component.text("Authman 暂时不可用，请稍后重试。\nAuthman is temporarily unavailable.", NamedTextColor.RED)
+    fun temporaryUnavailable(): Component = render(KEY_UNAVAILABLE, emptyMap())
 
-    fun locked(): Component =
-        Component.text("This Authman account is locked.\n该 Authman 账号已锁定。", NamedTextColor.RED)
+    fun locked(playerName: String = ""): Component = render(KEY_LOCKED, mapOf("player" to playerName))
 
-    private fun sendHeading(player: Player, english: String, chinese: String, suffix: Component) {
-        player.sendMessage(
-            Component.text("  ")
-                .append(Component.text(english, NamedTextColor.GREEN, TextDecoration.BOLD))
-                .append(Component.text(" / $chinese", NamedTextColor.DARK_GREEN, TextDecoration.BOLD))
-                .append(Component.space())
-                .append(suffix),
+    fun banned(reason: String, playerName: String = ""): Component =
+        render(KEY_BANNED, mapOf("reason" to reason, "player" to playerName))
+
+    fun defaultDisconnect(playerName: String = ""): Component =
+        render(KEY_DEFAULT_DISCONNECT, mapOf("player" to playerName))
+
+    private fun render(key: String, vars: Map<String, String>): Component {
+        val source = overrides.get()[key] ?: DEFAULTS.getValue(key)
+        var resolved = source
+        for ((name, value) in vars) {
+            resolved = resolved.replace("{$name}", sanitize(value))
+        }
+        return try {
+            mini.deserialize(resolved)
+        } catch (_: Exception) {
+            Component.text(resolved.replace("<newline>", "\n"))
+        }
+    }
+
+    private fun sanitize(value: String): String = value.replace("<", "").replace(">", "")
+
+    companion object {
+        const val KEY_UNAVAILABLE = "gate.kick.unavailable"
+        const val KEY_LOCKED = "gate.kick.locked"
+        const val KEY_BANNED = "gate.kick.banned"
+        const val KEY_DEFAULT_DISCONNECT = "gate.kick.default_disconnect"
+
+        // Must mirror internal/playermsg defaults in the Go backend.
+        private val DEFAULTS = mapOf(
+            KEY_UNAVAILABLE to "<red>Authman 暂时不可用，请稍后重试。<newline>Authman is temporarily unavailable.</red>",
+            KEY_LOCKED to "<red>This Authman account is locked.<newline>该 Authman 账号已锁定。</red>",
+            KEY_BANNED to "<red>You are banned from this server.</red><newline><gray>{reason}</gray>",
+            KEY_DEFAULT_DISCONNECT to "Authman disconnected this session.",
         )
     }
-
-    private fun indent(message: String, color: NamedTextColor = NamedTextColor.GRAY): Component =
-        Component.text("    ").append(Component.text(message, color))
-
-    private fun indicator(message: String, color: NamedTextColor): Component =
-        Component.text("[").color(NamedTextColor.DARK_GRAY)
-            .append(Component.text(message, color, TextDecoration.BOLD))
-            .append(Component.text("]", NamedTextColor.DARK_GRAY))
 }

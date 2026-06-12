@@ -804,8 +804,13 @@ func (s *Server) effectiveSkinForPassport(ctx context.Context, passport identity
 		}
 	}
 	if passport.Kind == identity.PassportKindPremium && source == store.PassportSkinSourceUpstream {
-		if primary, err := s.store.GetPrimaryProfileForPassport(ctx, passport.ID); err == nil && len(primary.ProfileProperties) > 0 {
-			props := append([]identity.ProfileProperty(nil), primary.ProfileProperties...)
+		props := s.store.GetPassportPremiumTextures(ctx, passport.ID)
+		if len(props) == 0 {
+			if primary, err := s.store.GetPrimaryProfileForPassport(ctx, passport.ID); err == nil {
+				props = append([]identity.ProfileProperty(nil), primary.ProfileProperties...)
+			}
+		}
+		if len(props) > 0 {
 			urls := skinlib.TextureURLsFromProperty(props)
 			model := urls.Model
 			if model != "slim" {

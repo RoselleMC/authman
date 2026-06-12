@@ -2,9 +2,10 @@ import { useNavigate } from "react-router-dom";
 import { PageHeader, PageShell, Tabs, useI18n } from "@authman/shared";
 import { LimboBlueprintsPage } from "./LimboBlueprintsPage";
 import { NodesPage } from "./NodesPage";
+import { PlayerMessagesPage } from "./PlayerMessagesPage";
 import { PortalSettingsPage } from "./PortalSettingsPage";
 
-type LoginPortalTab = "instances" | "blueprints" | "settings";
+type LoginPortalTab = "instances" | "blueprints" | "messages" | "settings";
 
 interface LoginPortalsPageProps {
   tab: LoginPortalTab;
@@ -23,12 +24,14 @@ export function LoginPortalsPage({ tab }: LoginPortalsPageProps) {
         tabs={[
           { value: "instances", label: t("admin.loginPortals.tab.instances"), icon: "layers" },
           { value: "blueprints", label: t("admin.loginPortals.tab.blueprints"), icon: "box" },
+          { value: "messages", label: t("admin.loginPortals.tab.messages"), icon: "mail" },
           { value: "settings", label: t("admin.loginPortals.tab.settings"), icon: "settings" },
         ]}
       />
       <div className="tab-panel">
         {tab === "instances" ? <NodesPage kind="limbo_portal" embedded /> : null}
         {tab === "blueprints" ? <LimboBlueprintsPage embedded basePath="/login-portals/blueprints" /> : null}
+        {tab === "messages" ? <PlayerMessagesPage embedded /> : null}
         {tab === "settings" ? <PortalSettingsPage embedded /> : null}
       </div>
     </PageShell>

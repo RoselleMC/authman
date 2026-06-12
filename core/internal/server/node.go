@@ -316,9 +316,11 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		api.WriteJSON(w, http.StatusOK, map[string]any{
-			"node":           s.nodeData(r.Context(), node),
-			"runtime_config": s.nodeRuntimeConfig(r.Context(), node),
-			"actions":        nodeActionRows(s.store.ListPendingNodeActions(r.Context(), node.ID, time.Now(), 50)),
+			"node":               s.nodeData(r.Context(), node),
+			"runtime_config":     s.nodeRuntimeConfig(r.Context(), node),
+			"player_messages":    s.playerMessagesPayload(r.Context(), node.Mode),
+			"actions":            nodeActionRows(s.store.ListPendingNodeActions(r.Context(), node.ID, time.Now(), 50)),
+			"downstream_servers": s.nodeDownstreamServerChoices(r.Context(), node),
 		}, nil)
 		return
 	}
@@ -328,9 +330,11 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.WriteJSON(w, http.StatusOK, map[string]any{
-		"node":           s.nodeData(r.Context(), node),
-		"runtime_config": s.nodeRuntimeConfig(r.Context(), node),
-		"actions":        nodeActionRows(s.store.ListPendingNodeActions(r.Context(), node.ID, time.Now(), 50)),
+		"node":               s.nodeData(r.Context(), node),
+		"runtime_config":     s.nodeRuntimeConfig(r.Context(), node),
+		"player_messages":    s.playerMessagesPayload(r.Context(), node.Mode),
+		"actions":            nodeActionRows(s.store.ListPendingNodeActions(r.Context(), node.ID, time.Now(), 50)),
+		"downstream_servers": s.nodeDownstreamServerChoices(r.Context(), node),
 	}, nil)
 }
 
@@ -355,6 +359,7 @@ type resolvePlayerRequest struct {
 	AuthSource        string                       `json:"auth_source"`
 	Verified          bool                         `json:"verified"`
 	VerifiedUUID      string                       `json:"verified_uuid"`
+	RemoteIP          string                       `json:"remote_ip"`
 	ProfileProperties []nodeProfilePropertyRequest `json:"profile_properties"`
 }
 
@@ -375,6 +380,7 @@ type verifyLimboSessionRequest struct {
 type limboLoginPolicyRequest struct {
 	Username        string `json:"username"`
 	ClaimedUUID     string `json:"claimed_uuid"`
+	RemoteIP        string `json:"remote_ip"`
 	ProtocolVersion int    `json:"protocol_version"`
 	RequestedHost   string `json:"requested_host"`
 }
@@ -383,6 +389,7 @@ type resolvePortalTargetRequest struct {
 	ServerID        string `json:"server_id"`
 	Slug            string `json:"slug"`
 	RequestedHost   string `json:"requested_host"`
+	RemoteIP        string `json:"remote_ip"`
 	ProtocolVersion int    `json:"protocol_version"`
 }
 
@@ -393,6 +400,7 @@ type createTransferGrantRequest struct {
 	Slug            string `json:"slug"`
 	RequestedHost   string `json:"requested_host"`
 	Source          string `json:"source"`
+	RemoteIP        string `json:"remote_ip"`
 	TTLSeconds      int    `json:"ttl_seconds"`
 	ProtocolVersion int    `json:"protocol_version"`
 }
@@ -404,6 +412,7 @@ type consumeTransferGrantRequest struct {
 	UUID         string `json:"uuid"`
 	ProtocolName string `json:"protocol_name"`
 	Source       string `json:"source"`
+	RemoteIP     string `json:"remote_ip"`
 }
 
 type endPresenceRequest struct {
@@ -475,7 +484,7 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 		IP:       strings.TrimSpace(req.RemoteIP),
 	})
 	if err != nil {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "limbo.session.verify_failure", map[string]any{
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "limbo.session.verify_failure", map[string]any{
 			"username":        req.Username,
 			"server_id":       req.ServerID,
 			"remote_ip":       req.RemoteIP,
@@ -485,8 +494,8 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 			"verification_by": "mojang",
 		})
 		if errors.Is(err, mojang.ErrAllRoutesFailed) || !errors.Is(err, yggdrasil.ErrProfileNotFound) {
-			if player, ok := s.resolveOfflineAfterMojangFailure(r.Context(), req.Username); ok {
-				s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "limbo.session.verify_offline_fallback", playerEventDetails(player, map[string]any{
+			if passport, ok := s.resolveOfflineAfterMojangFailure(r.Context(), req.Username); ok {
+				s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, passport.ID, "limbo.session.verify_offline_fallback", (map[string]any{
 					"username":        req.Username,
 					"server_id":       req.ServerID,
 					"remote_ip":       req.RemoteIP,
@@ -504,31 +513,33 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "session.verify_failed", err.Error()))
 		return
 	}
-	pp, ok := s.persistPremiumProfile(r.Context(), profile)
+	passport, ok := s.persistPremiumPassport(r.Context(), profile)
 	if !ok {
-		api.WriteError(w, api.NewError(http.StatusInternalServerError, "session.persist_failed", "failed to persist premium profile"))
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "session.persist_failed", "failed to persist premium passport"))
 		return
 	}
-	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, pp.Profile.ID, "limbo.session.verify_success", map[string]any{
-		"passport_id":     pp.Passport.ID,
-		"profile_id":      pp.Profile.ID,
+	_ = s.store.SetPassportPremiumTextures(r.Context(), passport.ID, profilePropertiesToIdentity(profile.Properties))
+	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, passport.ID, "limbo.session.verify_success", map[string]any{
+		"passport_id":     passport.ID,
 		"username":        profile.Name,
-		"uuid":            pp.Passport.UUID.String(),
+		"uuid":            passport.UUID.String(),
+		"remote_ip":       req.RemoteIP,
 		"requested_host":  req.RequestedHost,
 		"protocol":        req.ProtocolVersion,
 		"verification_by": "mojang",
 	})
-	player := identity.PlayerFromPassportProfileLink(pp)
-	player.ProfileProperties = s.effectiveProfileProperties(r.Context(), pp.Profile, &pp.Passport)
+	properties := make([]identity.ProfileProperty, 0, len(profile.Properties))
+	for _, property := range profile.Properties {
+		properties = append(properties, identity.ProfileProperty{Name: property.Name, Value: property.Value, Signature: property.Signature})
+	}
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"profile": map[string]any{
-			"uuid":       pp.Passport.UUID.String(),
+			"uuid":       passport.UUID.String(),
 			"name":       profile.Name,
-			"properties": profilePropertiesData(player.ProfileProperties),
+			"properties": profilePropertiesData(properties),
 			"source":     "mojang",
 			"verified":   true,
 		},
-		"player": playerData(player),
 	}, nil)
 }
 
@@ -558,6 +569,7 @@ func (s *Server) handleNodeResolveLimboLoginPolicy(w http.ResponseWriter, r *htt
 			"claimed_uuid":     strings.TrimSpace(req.ClaimedUUID),
 			"login_mode":       mode,
 			"reason":           reason,
+			"remote_ip":        req.RemoteIP,
 			"requested_host":   req.RequestedHost,
 			"protocol_version": req.ProtocolVersion,
 		}
@@ -566,7 +578,7 @@ func (s *Server) handleNodeResolveLimboLoginPolicy(w http.ResponseWriter, r *htt
 			details["premium_name"] = premium.Name
 			details["claimed_uuid_matches_mojang"] = sameProfileUUID(req.ClaimedUUID, premium.ID)
 		}
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, username, "limbo.login_policy", details)
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, username, "limbo.login_policy", details)
 		data := map[string]any{
 			"login_mode": mode,
 			"reason":     reason,
@@ -606,9 +618,10 @@ func (s *Server) handleNodeResolveLimboLoginPolicy(w http.ResponseWriter, r *htt
 		writePolicy("offline", "registered_offline_during_mojang_outage", nil)
 		return
 	}
-	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, username, "limbo.login_policy_failure", map[string]any{
+	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, username, "limbo.login_policy_failure", map[string]any{
 		"username":         username,
 		"claimed_uuid":     strings.TrimSpace(req.ClaimedUUID),
+		"remote_ip":        req.RemoteIP,
 		"requested_host":   req.RequestedHost,
 		"protocol_version": req.ProtocolVersion,
 		"reason":           err.Error(),
@@ -616,12 +629,12 @@ func (s *Server) handleNodeResolveLimboLoginPolicy(w http.ResponseWriter, r *htt
 	api.WriteError(w, api.NewError(http.StatusServiceUnavailable, "mojang.verifier_unavailable", err.Error()))
 }
 
-func (s *Server) resolveOfflineAfterMojangFailure(ctx context.Context, username string) (identity.Player, bool) {
-	player, err := s.ResolveOffline(ctx, strings.TrimSpace(username))
-	if err != nil || player.Kind != identity.PlayerKindOffline {
-		return identity.Player{}, false
+func (s *Server) resolveOfflineAfterMojangFailure(ctx context.Context, username string) (identity.Passport, bool) {
+	passport, err := s.store.GetPassportByUsername(ctx, strings.TrimSpace(username))
+	if err != nil || passport.Kind != identity.PassportKindOffline {
+		return identity.Passport{}, false
 	}
-	return player, true
+	return passport, true
 }
 
 func sameProfileUUID(left string, right string) bool {
@@ -649,83 +662,77 @@ func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request)
 		api.WriteError(w, err)
 		return
 	}
-	player, apiErr := s.resolveNodePlayer(r.Context(), n, req)
+	passport, apiErr := s.resolveNodePassport(r.Context(), n, req)
 	if apiErr != nil {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "player.resolve_failure", map[string]any{
-			"reason":   apiErr.Message,
-			"username": strings.TrimSpace(req.Username),
-			"kind":     node.NormalizeKind(n.Mode),
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "player.resolve_failure", map[string]any{
+			"reason":    apiErr.Message,
+			"username":  strings.TrimSpace(req.Username),
+			"kind":      node.NormalizeKind(n.Mode),
+			"remote_ip": req.RemoteIP,
 		})
 		api.WriteError(w, apiErr)
 		return
 	}
-	player.ProfileProperties = s.effectiveProfilePropertiesByID(r.Context(), player.ID)
-	authRequired := player.Kind == identity.PlayerKindOffline && !player.Locked
-	authKind := "premium"
-	if player.Kind == identity.PlayerKindOffline {
-		authKind = "offline_password"
-	}
-	authUsername := player.ProtocolName
-	if passport, err := s.store.GetPassportForProfile(r.Context(), player.ID); err == nil && passport.Username != "" {
-		authUsername = passport.Username
-	}
-	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "player.resolve", playerEventDetails(player, map[string]any{
+	data := s.nodePassportResolveData(r.Context(), passport, req.Verified)
+	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, passport.ID, "player.resolve", map[string]any{
 		"requested_username": strings.TrimSpace(req.Username),
-		"auth_required":      authRequired,
-		"auth_kind":          authKind,
-		"auth_username":      authUsername,
+		"passport_id":        passport.ID,
+		"passport_kind":      string(passport.Kind),
+		"auth":               data["auth"],
 		"kind":               node.NormalizeKind(n.Mode),
-	}))
-	api.WriteJSON(w, http.StatusOK, map[string]any{
-		"player": playerData(player),
-		"auth": map[string]any{
-			"required": authRequired,
-			"kind":     authKind,
-			"locked":   player.Locked,
-			"username": authUsername,
-		},
-	}, nil)
+		"remote_ip":          req.RemoteIP,
+	})
+	api.WriteJSON(w, http.StatusOK, data, nil)
 }
 
-func (s *Server) resolveNodePlayer(ctx context.Context, n node.Node, req resolvePlayerRequest) (identity.Player, *api.Error) {
+func (s *Server) resolveNodePassport(ctx context.Context, n node.Node, req resolvePlayerRequest) (identity.Passport, *api.Error) {
 	if req.Verified {
 		if !node.IsLimboPortal(n.Mode) {
-			return identity.Player{}, api.NewError(http.StatusForbidden, "node.kind_forbidden", "only limbo portal nodes can submit verified session profiles")
+			return identity.Passport{}, api.NewError(http.StatusForbidden, "node.kind_forbidden", "only limbo portal nodes can submit verified session profiles")
 		}
 		if strings.TrimSpace(req.LoginMode) != "online" {
-			return identity.Player{}, api.NewError(http.StatusBadRequest, "session.login_mode_invalid", "verified session must use online login mode")
+			return identity.Passport{}, api.NewError(http.StatusBadRequest, "session.login_mode_invalid", "verified session must use online login mode")
 		}
 		uuid, err := identity.ParseUUID(req.VerifiedUUID)
 		if err != nil {
-			return identity.Player{}, api.NewError(http.StatusBadRequest, "session.uuid_invalid", "verified UUID is invalid")
+			return identity.Passport{}, api.NewError(http.StatusBadRequest, "session.uuid_invalid", "verified UUID is invalid")
 		}
-		pp, err := s.store.UpsertPremiumPassportProfile(ctx, strings.TrimSpace(req.Username), uuid, nodeProfileProperties(req.ProfileProperties))
+		passport, err := s.store.UpsertPremiumPassport(ctx, strings.TrimSpace(req.Username), uuid)
 		if err != nil {
-			return identity.Player{}, api.NewError(http.StatusInternalServerError, "premium.upsert_failed", "failed to persist premium profile")
+			return identity.Passport{}, api.NewError(http.StatusInternalServerError, "premium.upsert_failed", "failed to persist premium passport")
 		}
-		player := identity.PlayerFromPassportProfileLink(pp)
-		player.ProfileProperties = s.effectiveProfileProperties(ctx, pp.Profile, &pp.Passport)
-		return player, nil
+		if props := nodeProfileProperties(req.ProfileProperties); len(props) > 0 {
+			_ = s.store.SetPassportPremiumTextures(ctx, passport.ID, props)
+		}
+		return passport, nil
 	}
-	player, err := s.store.GetOfflinePlayer(ctx, normalizeNodeUsername(req.Username))
+	if passport, err := s.findPassportByLoginName(ctx, strings.TrimSpace(req.Username)); err == nil {
+		return passport, nil
+	}
+	// Legacy fallback: a downstream gate may resolve a bare profile protocol
+	// name; map it back to its passport.
+	player, err := s.store.GetPlayerByProtocolName(ctx, strings.TrimSpace(req.Username))
 	if err != nil {
-		player, err = s.store.GetPlayerByProtocolName(ctx, strings.TrimSpace(req.Username))
-		if err != nil {
-			return identity.Player{}, api.NewError(http.StatusNotFound, "player.not_found", "player not found")
-		}
+		return identity.Passport{}, api.NewError(http.StatusNotFound, "player.not_found", "player not found")
 	}
-	return player, nil
+	passport, err := s.store.GetPassportForProfile(ctx, player.ID)
+	if err != nil {
+		return identity.Passport{}, api.NewError(http.StatusNotFound, "player.not_found", "player not found")
+	}
+	return passport, nil
 }
 
 type authenticatePlayerRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	RemoteIP string `json:"remote_ip"`
 }
 
 type registerOfflinePlayerRequest struct {
 	Username      string `json:"username"`
 	Password      string `json:"password"`
 	RequestedHost string `json:"requested_host"`
+	RemoteIP      string `json:"remote_ip"`
 }
 
 type upsertExtensionDataRequest struct {
@@ -749,43 +756,52 @@ func (s *Server) handleNodeAuthenticatePlayer(w http.ResponseWriter, r *http.Req
 		api.WriteError(w, err)
 		return
 	}
-	player, credential, err := s.store.GetOfflineCredential(r.Context(), normalizeNodeUsername(req.Username))
+	// Authenticate at the passport level: a freshly registered passport has no
+	// profiles yet, so password verification must not require one.
+	passport, credential, err := s.store.GetPassportCredential(r.Context(), normalizeNodeUsername(req.Username))
 	if err != nil {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "offline.password.failure", map[string]any{
-			"reason":   "credential_not_found",
-			"username": strings.TrimSpace(req.Username),
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "offline.password.failure", map[string]any{
+			"reason":    "credential_not_found",
+			"username":  strings.TrimSpace(req.Username),
+			"remote_ip": req.RemoteIP,
 		})
 		api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
 		return
 	}
-	if player.Locked || credentialLocked(credential, time.Now()) {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "offline.password.rejected", playerEventDetails(player, map[string]any{
+	if passport.Status == identity.PassportStatusLocked || passportCredentialLocked(credential, time.Now()) {
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPassport, passport.ID, "offline.password.rejected", map[string]any{
 			"reason":       "account_locked",
 			"locked_until": credential.LockedUntil,
-		}))
+			"remote_ip":    req.RemoteIP,
+		})
 		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.account_locked", "account is locked"))
 		return
 	}
 	ok, err := auth.VerifyPassword(req.Password, credential.PasswordHash)
 	if err != nil || !ok {
-		updatedCredential, _ := s.store.RecordOfflineLoginFailure(r.Context(), player.ID, time.Now())
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "offline.password.failure", playerEventDetails(player, map[string]any{
+		updatedCredential, _ := s.store.RecordPassportLoginFailure(r.Context(), passport.ID, time.Now())
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPassport, passport.ID, "offline.password.failure", map[string]any{
 			"reason":          "password_mismatch",
 			"failed_attempts": updatedCredential.FailedAttempts,
 			"locked_until":    updatedCredential.LockedUntil,
-		}))
+			"remote_ip":       req.RemoteIP,
+		})
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "auth.invalid_credentials", "invalid username or password"))
 		return
 	}
-	_ = s.store.RecordOfflineLoginSuccess(r.Context(), player.ID)
-	s.recordPlayerSeen(r, player, n.ServerID, time.Now())
-	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "offline.password.success", playerEventDetails(player, map[string]any{
+	_ = s.store.RecordPassportLoginSuccess(r.Context(), passport.ID)
+	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPassport, passport.ID, "offline.password.success", map[string]any{
 		"server_id": n.ServerID,
-	}))
-	api.WriteJSON(w, http.StatusOK, map[string]any{
-		"authenticated": true,
-		"player":        playerData(player),
-	}, nil)
+		"remote_ip": req.RemoteIP,
+	})
+	response := map[string]any{"authenticated": true, "passport_id": passport.ID}
+	if primary, err := s.store.GetPrimaryProfileForPassport(r.Context(), passport.ID); err == nil {
+		player := identity.PlayerFromPassportProfile(passport, primary)
+		player.ProfileProperties = s.effectiveProfileProperties(r.Context(), primary, &passport)
+		s.recordPlayerSeenWithClientIP(r, player, n.ServerID, req.RemoteIP, time.Now())
+		response["player"] = playerData(player)
+	}
+	api.WriteJSON(w, http.StatusOK, response, nil)
 }
 
 func (s *Server) handleNodeRegisterOfflinePlayer(w http.ResponseWriter, r *http.Request) {
@@ -813,30 +829,28 @@ func (s *Server) handleNodeRegisterOfflinePlayer(w http.ResponseWriter, r *http.
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "auth.password_policy_failed", "password does not satisfy policy"))
 		return
 	}
-	pp, err := s.store.CreateOfflinePassportProfile(r.Context(), username, username, passwordHash)
+	encryptedPassword, keyFingerprint, err := s.offlinePasswordCredential(r.Context(), req.Password)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "password_recovery.encrypt_failed", "failed to encrypt recoverable password"))
+		return
+	}
+	passport, err := s.store.CreateOfflinePassport(r.Context(), username, passwordHash, encryptedPassword, keyFingerprint)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "player.offline_registration_failed", err.Error()))
 		return
 	}
-	now := time.Now()
-	s.recordPassportProfileSeen(r, pp.Passport, pp.Profile, n.ServerID, now)
-	player := identity.PlayerFromPassportProfileLink(pp)
-	player.ProfileProperties = s.effectiveProfileProperties(r.Context(), pp.Profile, &pp.Passport)
-	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "offline.register", playerEventDetails(player, map[string]any{
-		"passport_id":    pp.Passport.ID,
-		"profile_id":     pp.Profile.ID,
+	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, passport.ID, "offline.register", map[string]any{
+		"passport_id":    passport.ID,
 		"requested_host": req.RequestedHost,
 		"server_id":      n.ServerID,
-	}))
-	api.WriteJSON(w, http.StatusCreated, map[string]any{
-		"player": playerData(player),
-		"auth": map[string]any{
-			"required": false,
-			"kind":     "offline_password",
-			"locked":   player.Locked,
-			"username": pp.Passport.Username,
-		},
-	}, nil)
+		"remote_ip":      req.RemoteIP,
+	})
+	data := s.nodePassportResolveData(r.Context(), passport, false)
+	// The player just proved this passport by setting its password.
+	if auth, ok := data["auth"].(map[string]any); ok {
+		auth["required"] = false
+	}
+	api.WriteJSON(w, http.StatusCreated, data, nil)
 }
 
 func (s *Server) handleNodeResolvePortalTarget(w http.ResponseWriter, r *http.Request) {
@@ -852,27 +866,30 @@ func (s *Server) handleNodeResolvePortalTarget(w http.ResponseWriter, r *http.Re
 	}
 	server, target, apiErr := s.resolveDownstreamTarget(r.Context(), n, req.ServerID, req.Slug, req.RequestedHost)
 	if apiErr != nil {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, strings.TrimSpace(req.ServerID), "portal.target.resolve_failure", map[string]any{
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetDownstreamServer, strings.TrimSpace(req.ServerID), "portal.target.resolve_failure", map[string]any{
 			"slug":           req.Slug,
 			"requested_host": req.RequestedHost,
+			"remote_ip":      req.RemoteIP,
 			"reason":         apiErr.Message,
 		})
 		api.WriteError(w, apiErr)
 		return
 	}
 	if apiErr := validateDownstreamProtocol(target, req.ProtocolVersion); apiErr != nil {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "portal.target.resolve_failure", map[string]any{
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "portal.target.resolve_failure", map[string]any{
 			"slug":             server.Slug,
 			"requested_host":   req.RequestedHost,
+			"remote_ip":        req.RemoteIP,
 			"protocol_version": req.ProtocolVersion,
 			"reason":           apiErr.Message,
 		})
 		api.WriteError(w, apiErr)
 		return
 	}
-	s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "portal.target.resolve", map[string]any{
+	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "portal.target.resolve", map[string]any{
 		"slug":           server.Slug,
 		"requested_host": req.RequestedHost,
+		"remote_ip":      req.RemoteIP,
 		"target_host":    target.TransferHost,
 		"target_port":    target.TransferPort,
 		"protocol":       req.ProtocolVersion,
@@ -902,28 +919,91 @@ func (s *Server) handleNodeCreateTransferGrant(w http.ResponseWriter, r *http.Re
 		api.WriteError(w, err)
 		return
 	}
+	s.writeNodeTransferGrant(w, r, n, req, nodeTransferGrantOptions{
+		CreateEvent: "transfer_grant.create",
+		RejectEvent: "transfer_grant.reject",
+	})
+}
+
+func (s *Server) handleNodeCreateDownstreamTransfer(w http.ResponseWriter, r *http.Request) {
+	n, nodeErr := s.requireNode(r)
+	if nodeErr != nil {
+		api.WriteError(w, nodeErr)
+		return
+	}
+	if !node.IsDownstreamVelocity(n.Mode) {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "node.downstream_required", "downstream transfer command requires a downstream node"))
+		return
+	}
+	var req createTransferGrantRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	s.writeNodeTransferGrant(w, r, n, req, nodeTransferGrantOptions{
+		CreateEvent:           "transfer_grant.command_create",
+		RejectEvent:           "transfer_grant.reject",
+		RequireExplicitTarget: true,
+		RejectSameServer:      true,
+		DirectCommand:         true,
+	})
+}
+
+type nodeTransferGrantOptions struct {
+	CreateEvent           string
+	RejectEvent           string
+	RequireExplicitTarget bool
+	RejectSameServer      bool
+	DirectCommand         bool
+}
+
+func (s *Server) writeNodeTransferGrant(w http.ResponseWriter, r *http.Request, n node.Node, req createTransferGrantRequest, opts nodeTransferGrantOptions) {
+	createEvent := strings.TrimSpace(opts.CreateEvent)
+	if createEvent == "" {
+		createEvent = "transfer_grant.create"
+	}
+	rejectEvent := strings.TrimSpace(opts.RejectEvent)
+	if rejectEvent == "" {
+		rejectEvent = "transfer_grant.reject"
+	}
+	if opts.RequireExplicitTarget && strings.TrimSpace(req.ServerID) == "" && strings.TrimSpace(req.Slug) == "" && strings.TrimSpace(req.RequestedHost) == "" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.target_required", "target downstream server is required"))
+		return
+	}
 	server, target, apiErr := s.resolveDownstreamTarget(r.Context(), n, req.ServerID, req.Slug, req.RequestedHost)
 	if apiErr != nil {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, strings.TrimSpace(req.ServerID), "transfer_grant.reject", map[string]any{
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetDownstreamServer, strings.TrimSpace(req.ServerID), rejectEvent, map[string]any{
 			"reason":         apiErr.Message,
 			"slug":           req.Slug,
 			"requested_host": req.RequestedHost,
+			"remote_ip":      req.RemoteIP,
 		})
 		api.WriteError(w, apiErr)
 		return
 	}
+	if opts.RejectSameServer && strings.TrimSpace(n.ServerID) != "" && server.ID == strings.TrimSpace(n.ServerID) {
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, rejectEvent, map[string]any{
+			"reason":    "same_downstream_server",
+			"server_id": server.ID,
+			"remote_ip": req.RemoteIP,
+		})
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "server.same_target", "target downstream server must be different from the current server"))
+		return
+	}
 	if target.Status != "active" && target.Status != "hidden" {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "transfer_grant.reject", map[string]any{
-			"reason": "server_unavailable",
-			"status": target.Status,
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, rejectEvent, map[string]any{
+			"reason":    "server_unavailable",
+			"status":    target.Status,
+			"remote_ip": req.RemoteIP,
 		})
 		api.WriteError(w, api.NewError(http.StatusForbidden, "server.unavailable", "downstream server is not active"))
 		return
 	}
 	if apiErr := validateDownstreamProtocol(target, req.ProtocolVersion); apiErr != nil {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "transfer_grant.reject", map[string]any{
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, rejectEvent, map[string]any{
 			"reason":           apiErr.Message,
 			"server_id":        server.ID,
+			"remote_ip":        req.RemoteIP,
 			"protocol_version": req.ProtocolVersion,
 		})
 		api.WriteError(w, apiErr)
@@ -931,30 +1011,33 @@ func (s *Server) handleNodeCreateTransferGrant(w http.ResponseWriter, r *http.Re
 	}
 	player, apiErr := s.playerFromTransferGrantRequest(r.Context(), req)
 	if apiErr != nil {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.PlayerID+req.Username), "transfer_grant.reject", map[string]any{
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.PlayerID+req.Username), rejectEvent, map[string]any{
 			"reason":    apiErr.Message,
 			"player_id": req.PlayerID,
 			"username":  req.Username,
 			"server_id": server.ID,
+			"remote_ip": req.RemoteIP,
 		})
 		api.WriteError(w, apiErr)
 		return
 	}
 	if player.Locked {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, rejectEvent, playerEventDetails(player, map[string]any{
 			"reason":    "account_locked",
 			"server_id": server.ID,
+			"remote_ip": req.RemoteIP,
 		}))
 		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.account_locked", "account is locked"))
 		return
 	}
 	if ban, banned := s.activeBanForPlayer(r.Context(), player); banned {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, rejectEvent, playerEventDetails(player, map[string]any{
 			"reason":     "banned",
 			"server_id":  server.ID,
 			"ban_id":     ban.ID,
 			"ban_scope":  ban.Scope,
 			"expires_at": ban.ExpiresAt,
+			"remote_ip":  req.RemoteIP,
 		}))
 		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.banned", ban.Reason))
 		return
@@ -966,10 +1049,11 @@ func (s *Server) handleNodeCreateTransferGrant(w http.ResponseWriter, r *http.Re
 			if err == nil {
 				passportID = passport.ID
 			}
-			s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
+			s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, rejectEvent, playerEventDetails(player, map[string]any{
 				"reason":      "server_hidden",
 				"server_id":   server.ID,
 				"passport_id": passportID,
+				"remote_ip":   req.RemoteIP,
 			}))
 			api.WriteError(w, api.NewError(http.StatusForbidden, "server.privileged_required", "privileged passport is required for this server"))
 			return
@@ -986,11 +1070,26 @@ func (s *Server) handleNodeCreateTransferGrant(w http.ResponseWriter, r *http.Re
 		ttlSeconds = 300
 	}
 	now := time.Now()
+	// Serialize the promote-to-primary + grant creation per passport so two
+	// concurrent sessions of the same passport selecting different profiles
+	// cannot interleave and leave the gate-resolved primary inconsistent with
+	// the grant that was just issued.
+	if strings.TrimSpace(req.PlayerID) != "" && !opts.DirectCommand {
+		if passport, err := s.store.GetPassportForProfile(r.Context(), player.ID); err == nil {
+			unlock := s.passportLocks.lock(passport.ID)
+			defer unlock()
+		}
+		s.promoteGrantProfilePrimary(r, n, player, req.RemoteIP)
+	}
+	source := portalGrantSource(n, req.Source)
+	if opts.DirectCommand {
+		source = downstreamCommandGrantSource(n, req.Source)
+	}
 	grant, rawToken, err := auth.NewTransferGrant(
 		player.ID,
 		server.ID,
 		n.ID,
-		portalGrantSource(n, req.Source),
+		source,
 		player.UUID.String(),
 		player.ProtocolName,
 		target.TransferHost,
@@ -1006,14 +1105,17 @@ func (s *Server) handleNodeCreateTransferGrant(w http.ResponseWriter, r *http.Re
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "transfer_grant.save_failed", "failed to save transfer grant"))
 		return
 	}
-	s.recordPlayerSeen(r, player, server.ID, now)
-	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.create", map[string]any{
+	s.recordPlayerSeenWithClientIP(r, player, server.ID, req.RemoteIP, now)
+	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, createEvent, map[string]any{
 		"server_id":     server.ID,
+		"source":        source,
+		"source_kind":   map[bool]string{true: "downstream_command", false: "portal"}[opts.DirectCommand],
 		"target_host":   target.TransferHost,
 		"target_port":   target.TransferPort,
 		"protocol":      req.ProtocolVersion,
 		"protocol_name": player.ProtocolName,
 		"expires_at":    grant.ExpiresAt,
+		"remote_ip":     req.RemoteIP,
 	})
 	api.WriteJSON(w, http.StatusCreated, map[string]any{
 		"grant":  transferGrantData(grant),
@@ -1089,11 +1191,12 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 	}
 	grant, err := s.store.ConsumeTransferGrant(r.Context(), tokenHash, server.ID, uuid, protocolName, n.ID, target.AllowedPortalSources, time.Now())
 	if err != nil {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "transfer_grant.reject", map[string]any{
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetDownstreamServer, server.ID, "transfer_grant.reject", map[string]any{
 			"reason":        err.Error(),
 			"protocol_name": protocolName,
 			"uuid":          uuid,
 			"source":        req.Source,
+			"remote_ip":     req.RemoteIP,
 		})
 		api.WriteError(w, api.NewError(http.StatusForbidden, "transfer_grant.invalid", err.Error()))
 		return
@@ -1108,12 +1211,13 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 		return
 	}
 	if ban, banned := s.activeBanForPlayer(r.Context(), player); banned {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
 			"reason":     "banned",
 			"server_id":  server.ID,
 			"ban_id":     ban.ID,
 			"ban_scope":  ban.Scope,
 			"expires_at": ban.ExpiresAt,
+			"remote_ip":  req.RemoteIP,
 		}))
 		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.banned", ban.Reason))
 		return
@@ -1125,15 +1229,20 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 	}
 	privilegedPassport := s.store.DownstreamServerHasPrivilegedPassport(r.Context(), server.ID, passport.ID)
 	if target.Status == "hidden" && !privilegedPassport {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
 			"reason":      "server_hidden",
 			"server_id":   server.ID,
 			"passport_id": passport.ID,
+			"remote_ip":   req.RemoteIP,
 		}))
 		api.WriteError(w, api.NewError(http.StatusForbidden, "server.privileged_required", "privileged passport is required for this server"))
 		return
 	}
 	now := time.Now()
+	remoteAddr := normalizeClientIPValue(req.RemoteIP)
+	if remoteAddr == "" {
+		remoteAddr = clientIP(r)
+	}
 	presence, err := s.store.UpsertPresence(r.Context(), store.PlayerPresence{
 		PassportID:   passport.ID,
 		ProfileID:    player.ID,
@@ -1141,27 +1250,29 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 		NodeID:       n.ID,
 		ProtocolName: protocolName,
 		UUID:         uuid,
-		RemoteAddr:   clientIP(r),
+		RemoteAddr:   remoteAddr,
 		ConnectedAt:  now,
 		LastSeenAt:   now,
 	})
 	if err != nil {
-		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "presence.reject", playerEventDetails(player, map[string]any{
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "presence.reject", playerEventDetails(player, map[string]any{
 			"reason":    "profile_already_online_on_server",
 			"server_id": server.ID,
 			"node_id":   n.ID,
+			"remote_ip": req.RemoteIP,
 		}))
 		api.WriteError(w, api.NewError(http.StatusConflict, "presence.profile_already_online", "profile is already online on this server"))
 		return
 	}
-	s.recordPlayerSeen(r, player, server.ID, now)
-	s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.consume", map[string]any{
+	s.recordPlayerSeenWithClientIP(r, player, server.ID, req.RemoteIP, now)
+	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.consume", map[string]any{
 		"server_id":     server.ID,
 		"protocol_name": protocolName,
 		"uuid":          uuid,
 		"source":        req.Source,
 		"portal_source": grant.PortalSource,
 		"presence_id":   presence.ID,
+		"remote_ip":     req.RemoteIP,
 	})
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"allowed":  true,
@@ -1582,6 +1693,20 @@ func portalGrantSource(n node.Node, requested string) string {
 	return strings.TrimSpace(n.ID)
 }
 
+func downstreamCommandGrantSource(n node.Node, requested string) string {
+	source := strings.TrimSpace(requested)
+	if source == "" {
+		source = strings.TrimSpace(n.ServerID)
+	}
+	if source == "" {
+		source = strings.TrimSpace(n.Name)
+	}
+	if source == "" {
+		source = strings.TrimSpace(n.ID)
+	}
+	return "downstream-command:" + source
+}
+
 func stringSliceFromAnyServer(value any) []string {
 	switch typed := value.(type) {
 	case []string:
@@ -1781,6 +1906,33 @@ func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]
 		base["transfer_cookie_key"] = settings.TransferCookieKey
 	}
 	return base
+}
+
+func (s *Server) nodeDownstreamServerChoices(ctx context.Context, n node.Node) []map[string]any {
+	if !node.IsDownstreamVelocity(n.Mode) {
+		return []map[string]any{}
+	}
+	current := strings.TrimSpace(n.ServerID)
+	servers := s.store.ListDownstreamServers(ctx)
+	sort.SliceStable(servers, func(i, j int) bool {
+		return strings.ToLower(servers[i].DisplayName) < strings.ToLower(servers[j].DisplayName)
+	})
+	out := make([]map[string]any, 0, len(servers))
+	for _, server := range servers {
+		if server.Status == "disabled" || strings.TrimSpace(server.ID) == current {
+			continue
+		}
+		target := store.DownstreamTargetFromServer(server)
+		out = append(out, map[string]any{
+			"id":            server.ID,
+			"slug":          server.Slug,
+			"display_name":  server.DisplayName,
+			"status":        server.Status,
+			"transfer_host": target.TransferHost,
+			"transfer_port": target.TransferPort,
+		})
+	}
+	return out
 }
 
 func mergeRuntimeConfig(base map[string]any, overrides map[string]any, allowed []string) {

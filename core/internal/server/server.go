@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/RoselleMC/authman/core/internal/api"
@@ -56,6 +57,29 @@ type Server struct {
 	mojangVerifier *mojang.SessionVerifier
 	webAuthn       *webauthn.WebAuthn
 	ipGeo          *ipGeoResolver
+	passportLocks  keyedMutex
+}
+
+// keyedMutex serializes work per string key (e.g. passport id) so concurrent
+// primary-profile promotions for the same passport cannot interleave.
+type keyedMutex struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+func (k *keyedMutex) lock(key string) func() {
+	k.mu.Lock()
+	if k.locks == nil {
+		k.locks = map[string]*sync.Mutex{}
+	}
+	m, ok := k.locks[key]
+	if !ok {
+		m = &sync.Mutex{}
+		k.locks[key] = m
+	}
+	k.mu.Unlock()
+	m.Lock()
+	return m.Unlock
 }
 
 func New(options Options) *Server {
@@ -344,9 +368,14 @@ func (s *Server) routes() {
 	s.coreMux.HandleFunc("PUT /api/admin/settings/ip-geo", s.handleAdminUpdateIPGeoSettings)
 	s.coreMux.HandleFunc("GET /api/admin/settings/branding", s.handleAdminBrandingSettings)
 	s.coreMux.HandleFunc("PUT /api/admin/settings/branding", s.handleAdminUpdateBrandingSettings)
+	s.coreMux.HandleFunc("GET /api/admin/settings/player-messages", s.handleAdminPlayerMessages)
+	s.coreMux.HandleFunc("PUT /api/admin/settings/player-messages", s.handleAdminUpdatePlayerMessages)
 	s.coreMux.HandleFunc("GET /api/admin/settings/smtp", s.handleAdminSMTPSettings)
 	s.coreMux.HandleFunc("PUT /api/admin/settings/smtp", s.handleAdminUpdateSMTPSettings)
 	s.coreMux.HandleFunc("POST /api/admin/settings/smtp/test", s.handleAdminSMTPTest)
+	s.coreMux.HandleFunc("POST /api/admin/settings/system/factory-reset", s.handleAdminSystemFactoryReset)
+	s.coreMux.HandleFunc("GET /api/admin/settings/security/password-recovery-key", s.handleAdminPasswordRecoveryKey)
+	s.coreMux.HandleFunc("POST /api/admin/settings/security/password-recovery-key/download", s.handleAdminDownloadPasswordRecoveryPrivateKey)
 	s.coreMux.HandleFunc("GET /api/admin/external-tokens", s.handleAdminExternalTokens)
 	s.coreMux.HandleFunc("POST /api/admin/external-tokens", s.handleAdminCreateExternalToken)
 	s.coreMux.HandleFunc("GET /api/admin/external-tokens/{id}", s.handleAdminExternalTokenDetail)
@@ -381,10 +410,12 @@ func (s *Server) routes() {
 	s.coreMux.HandleFunc("POST /api/node/limbo/sessions/verify", s.handleNodeVerifyLimboSession)
 	s.coreMux.HandleFunc("POST /api/node/players/resolve", s.handleNodeResolvePlayer)
 	s.coreMux.HandleFunc("POST /api/node/players/register-offline", s.handleNodeRegisterOfflinePlayer)
+	s.coreMux.HandleFunc("POST /api/node/profiles/create", s.handleNodeCreateProfile)
 	s.coreMux.HandleFunc("POST /api/node/players/authenticate", s.handleNodeAuthenticatePlayer)
 	s.coreMux.HandleFunc("POST /api/node/limbo/targets/resolve", s.handleNodeResolvePortalTarget)
 	s.coreMux.HandleFunc("GET /api/node/limbo/blueprints/{id}", s.handleNodeLimboBlueprint)
 	s.coreMux.HandleFunc("POST /api/node/limbo/transfer-grants", s.handleNodeCreateTransferGrant)
+	s.coreMux.HandleFunc("POST /api/node/downstream/transfers", s.handleNodeCreateDownstreamTransfer)
 	s.coreMux.HandleFunc("POST /api/node/downstream/transfer-grants/consume", s.handleNodeConsumeTransferGrant)
 	s.coreMux.HandleFunc("POST /api/node/presences/end", s.handleNodeEndPresence)
 	s.coreMux.HandleFunc("POST /api/node/bans/profile", s.handleNodeCreateProfileBan)

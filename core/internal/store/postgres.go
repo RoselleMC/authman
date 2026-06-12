@@ -27,8 +27,8 @@ type Postgres struct {
 	pool *pgxpool.Pool
 }
 
-const passportSelectColumns = "uuid, kind, uuid, username, username_normalized, raw_offline_name, status, skin_source, registration_server_id, last_seen_server_id, last_seen_at, last_seen_ip, last_seen_geo, created_at, updated_at"
-const profileSelectColumns = "uuid, uuid, protocol_name, normalized_name, display_name, status, skin_source, profile_properties, created_from_passport_id, last_seen_server_id, last_seen_at, last_seen_ip, last_seen_geo, created_at, updated_at"
+const passportSelectColumns = "uuid, kind, uuid, username, username_normalized, raw_offline_name, status, skin_source, registration_server_id, last_seen_server_id, last_seen_at, last_seen_ip, last_seen_geo, attributes, created_at, updated_at"
+const profileSelectColumns = "uuid, uuid, protocol_name, normalized_name, display_name, status, skin_source, profile_properties, created_from_passport_id, last_seen_server_id, last_seen_at, last_seen_ip, last_seen_geo, attributes, created_at, updated_at"
 const nodeSelectColumns = "id, server_id, mode, name, token_hash, token_fingerprint, instance_fingerprint, plugin_version, velocity_version, disabled, runtime_config, created_at, last_heartbeat_at"
 const limboBlueprintSelectColumns = "id, name, description, filename, content_type, size_bytes, sha256, schematic, preview, config, created_at, updated_at"
 const profileSkinSelectColumns = "profile_id, model, skin_png, skin_content_type, skin_sha256, COALESCE(cape_png, ''::bytea), COALESCE(cape_content_type, ''), COALESCE(cape_sha256, ''), COALESCE(elytra_png, ''::bytea), COALESCE(elytra_content_type, ''), COALESCE(elytra_sha256, ''), created_at, updated_at"
@@ -91,7 +91,7 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 	return err
 }
 
-func (p *Postgres) CreateOfflinePassportProfile(ctx context.Context, rawName string, protocolName string, passwordHash string) (identity.PassportProfile, error) {
+func (p *Postgres) CreateOfflinePassportProfile(ctx context.Context, rawName string, protocolName string, passwordHash string, encryptedPassword string, keyFingerprint string) (identity.PassportProfile, error) {
 	if strings.TrimSpace(protocolName) == "" {
 		protocolName = rawName
 	}
@@ -136,9 +136,9 @@ func (p *Postgres) CreateOfflinePassportProfile(ctx context.Context, rawName str
 		return identity.PassportProfile{}, err
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO offline_passport_credentials (passport_id, password_hash)
-		VALUES ($1, $2)
-	`, passport.ID, passwordHash); err != nil {
+		INSERT INTO offline_passport_credentials (passport_id, password_hash, encrypted_password, password_key_fingerprint)
+		VALUES ($1, $2, $3, $4)
+	`, passport.ID, passwordHash, encryptedPassword, keyFingerprint); err != nil {
 		return identity.PassportProfile{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -234,7 +234,7 @@ func (p *Postgres) UpsertPremiumPassportProfile(ctx context.Context, name string
 }
 
 func (p *Postgres) CreateOfflinePlayer(ctx context.Context, rawName string, passwordHash string) (identity.Player, error) {
-	pp, err := p.CreateOfflinePassportProfile(ctx, rawName, rawName, passwordHash)
+	pp, err := p.CreateOfflinePassportProfile(ctx, rawName, rawName, passwordHash, "", "")
 	if err == nil {
 		return identity.PlayerFromPassportProfileLink(pp), nil
 	}
@@ -967,7 +967,7 @@ func (p *Postgres) GetPassportCredential(ctx context.Context, username string) (
 		return identity.Passport{}, PassportCredential{}, err
 	}
 	credential, err := scanPassportCredentialRow(p.pool.QueryRow(ctx, `
-		SELECT passport_id, password_hash, updated_at, failed_attempts, locked_until
+		SELECT passport_id, password_hash, encrypted_password, password_key_fingerprint, updated_at, failed_attempts, locked_until
 		FROM offline_passport_credentials
 		WHERE passport_id = $1
 	`, passport.ID))
@@ -988,7 +988,7 @@ func (p *Postgres) RecordPassportLoginFailure(ctx context.Context, passportID st
 			END,
 			updated_at = now()
 		WHERE passport_id = $1
-		RETURNING passport_id, password_hash, updated_at, failed_attempts, locked_until
+		RETURNING passport_id, password_hash, encrypted_password, password_key_fingerprint, updated_at, failed_attempts, locked_until
 	`, passportID, now.UTC()))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PassportCredential{}, fmt.Errorf("passport credential not found: %w", ErrNotFound)
@@ -1055,16 +1055,18 @@ func (p *Postgres) RecordPlayerSeen(ctx context.Context, passportID string, prof
 	return tx.Commit(ctx)
 }
 
-func (p *Postgres) UpdatePassportPassword(ctx context.Context, passportID string, passwordHash string) error {
+func (p *Postgres) UpdatePassportPassword(ctx context.Context, passportID string, passwordHash string, encryptedPassword string, keyFingerprint string) error {
 	passportID = p.resolvePassportIDForCredential(ctx, passportID)
 	tag, err := p.pool.Exec(ctx, `
 		UPDATE offline_passport_credentials
 		SET password_hash = $2,
+			encrypted_password = $3,
+			password_key_fingerprint = $4,
 			failed_attempts = 0,
 			locked_until = NULL,
 			updated_at = now()
 		WHERE passport_id = $1
-	`, passportID, passwordHash)
+	`, passportID, passwordHash, encryptedPassword, keyFingerprint)
 	if err != nil {
 		return err
 	}
@@ -1072,6 +1074,67 @@ func (p *Postgres) UpdatePassportPassword(ctx context.Context, passportID string
 		return fmt.Errorf("passport credential not found: %w", ErrNotFound)
 	}
 	return nil
+}
+
+func (p *Postgres) SetPassportPasswordRecovery(ctx context.Context, passportID string, encryptedPassword string, keyFingerprint string) error {
+	passportID = p.resolvePassportIDForCredential(ctx, passportID)
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE offline_passport_credentials
+		SET encrypted_password = $2,
+			password_key_fingerprint = $3,
+			updated_at = now()
+		WHERE passport_id = $1
+	`, passportID, encryptedPassword, keyFingerprint)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("passport credential not found: %w", ErrNotFound)
+	}
+	return nil
+}
+
+func (p *Postgres) FactoryResetPlayerData(ctx context.Context) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	statements := []string{
+		`DELETE FROM web_sessions WHERE kind = 'player'`,
+		`DELETE FROM portal_login_links`,
+		`DELETE FROM transfer_grants`,
+		`DELETE FROM player_presences`,
+		`DELETE FROM node_actions WHERE passport_id <> '' OR profile_id <> '' OR presence_id <> ''`,
+		`DELETE FROM player_bans`,
+		`DELETE FROM extension_player_data`,
+		`DELETE FROM downstream_server_privileged_passports`,
+		`DELETE FROM passport_premium_textures`,
+		`DELETE FROM profile_skins`,
+		`DELETE FROM passport_skins`,
+		`DELETE FROM offline_passport_credentials`,
+		`DELETE FROM profile_passport_links`,
+		`DELETE FROM profiles`,
+		`DELETE FROM passports`,
+		`DELETE FROM audit_events
+		 WHERE actor_type IN ('player', 'node')
+		    OR target_type IN ('player', 'passport', 'profile', 'portal_session', 'extension_data')
+		    OR event_type LIKE 'offline.%'
+		    OR event_type LIKE 'passport.%'
+		    OR event_type LIKE 'profile.%'
+		    OR event_type LIKE 'presence.%'
+		    OR event_type LIKE 'transfer_grant.%'
+		    OR event_type LIKE 'limbo.%'
+		    OR event_type LIKE 'portal_link.%'
+		    OR event_type LIKE 'portal.target.%'
+		    OR event_type LIKE 'player.%'`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (p *Postgres) resolvePassportIDForCredential(ctx context.Context, id string) string {
@@ -1153,24 +1216,28 @@ func (p *Postgres) GetOfflineCredential(ctx context.Context, rawName string) (id
 		return identity.Player{}, OfflineCredential{}, err
 	}
 	return identity.PlayerFromPassportProfile(passport, profile), OfflineCredential{
-		PlayerID:          credential.PassportID,
-		PassportID:        credential.PassportID,
-		PasswordHash:      credential.PasswordHash,
-		PasswordUpdatedAt: credential.PasswordUpdatedAt,
-		FailedAttempts:    credential.FailedAttempts,
-		LockedUntil:       credential.LockedUntil,
+		PlayerID:               credential.PassportID,
+		PassportID:             credential.PassportID,
+		PasswordHash:           credential.PasswordHash,
+		EncryptedPassword:      credential.EncryptedPassword,
+		PasswordKeyFingerprint: credential.PasswordKeyFingerprint,
+		PasswordUpdatedAt:      credential.PasswordUpdatedAt,
+		FailedAttempts:         credential.FailedAttempts,
+		LockedUntil:            credential.LockedUntil,
 	}, nil
 }
 
 func (p *Postgres) RecordOfflineLoginFailure(ctx context.Context, playerID string, now time.Time) (OfflineCredential, error) {
 	credential, err := p.RecordPassportLoginFailure(ctx, playerID, now)
 	return OfflineCredential{
-		PlayerID:          credential.PassportID,
-		PassportID:        credential.PassportID,
-		PasswordHash:      credential.PasswordHash,
-		PasswordUpdatedAt: credential.PasswordUpdatedAt,
-		FailedAttempts:    credential.FailedAttempts,
-		LockedUntil:       credential.LockedUntil,
+		PlayerID:               credential.PassportID,
+		PassportID:             credential.PassportID,
+		PasswordHash:           credential.PasswordHash,
+		EncryptedPassword:      credential.EncryptedPassword,
+		PasswordKeyFingerprint: credential.PasswordKeyFingerprint,
+		PasswordUpdatedAt:      credential.PasswordUpdatedAt,
+		FailedAttempts:         credential.FailedAttempts,
+		LockedUntil:            credential.LockedUntil,
 	}, err
 }
 
@@ -1221,7 +1288,7 @@ func (p *Postgres) SetPlayerLocked(ctx context.Context, id string, locked bool) 
 	return identity.PlayerFromPassportProfile(passport, profile), nil
 }
 
-func (p *Postgres) UpdateOfflinePassword(ctx context.Context, id string, passwordHash string) error {
+func (p *Postgres) UpdateOfflinePassword(ctx context.Context, id string, passwordHash string, encryptedPassword string, keyFingerprint string) error {
 	if _, err := p.GetPassportByID(ctx, id); err != nil {
 		passport, profileErr := p.GetPassportForProfile(ctx, id)
 		if profileErr != nil {
@@ -1229,7 +1296,7 @@ func (p *Postgres) UpdateOfflinePassword(ctx context.Context, id string, passwor
 		}
 		id = passport.ID
 	}
-	return p.UpdatePassportPassword(ctx, id, passwordHash)
+	return p.UpdatePassportPassword(ctx, id, passwordHash, encryptedPassword, keyFingerprint)
 }
 
 func (p *Postgres) SaveSession(ctx context.Context, session auth.Session) error {
@@ -3187,6 +3254,7 @@ func scanPassportRow(row playerScanner) (identity.Passport, error) {
 	var lastSeenAt *time.Time
 	var lastSeenIP *string
 	var lastSeenGeoRaw []byte
+	var attributesRaw []byte
 	err := row.Scan(
 		&passport.ID,
 		&kind,
@@ -3201,6 +3269,7 @@ func scanPassportRow(row playerScanner) (identity.Passport, error) {
 		&lastSeenAt,
 		&lastSeenIP,
 		&lastSeenGeoRaw,
+		&attributesRaw,
 		&passport.CreatedAt,
 		&passport.UpdatedAt,
 	)
@@ -3234,6 +3303,7 @@ func scanPassportRow(row playerScanner) (identity.Passport, error) {
 	}
 	passport.LastSeenGeo = unmarshalIPGeo(lastSeenGeoRaw)
 	passport.LastSeenAt = lastSeenAt
+	passport.Attributes = unmarshalAttributes(attributesRaw)
 	return passport, nil
 }
 
@@ -3247,6 +3317,7 @@ func scanProfileRow(row playerScanner) (identity.Profile, error) {
 	var lastSeenAt *time.Time
 	var lastSeenIP *string
 	var lastSeenGeoRaw []byte
+	var attributesRaw []byte
 	err := row.Scan(
 		&profile.ID,
 		&uuidText,
@@ -3261,6 +3332,7 @@ func scanProfileRow(row playerScanner) (identity.Profile, error) {
 		&lastSeenAt,
 		&lastSeenIP,
 		&lastSeenGeoRaw,
+		&attributesRaw,
 		&profile.CreatedAt,
 		&profile.UpdatedAt,
 	)
@@ -3289,6 +3361,7 @@ func scanProfileRow(row playerScanner) (identity.Profile, error) {
 	}
 	profile.LastSeenGeo = unmarshalIPGeo(lastSeenGeoRaw)
 	profile.LastSeenAt = lastSeenAt
+	profile.Attributes = unmarshalAttributes(attributesRaw)
 	return profile, nil
 }
 
@@ -3349,11 +3422,22 @@ func unmarshalIPGeo(raw []byte) *identity.IPGeo {
 	return &geo
 }
 
+func unmarshalAttributes(raw []byte) map[string]any {
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	var attrs map[string]any
+	if err := json.Unmarshal(raw, &attrs); err != nil || attrs == nil {
+		return map[string]any{}
+	}
+	return attrs
+}
+
 func scanPassportCredentialRow(row playerScanner) (PassportCredential, error) {
 	var credential PassportCredential
 	var updatedAt *time.Time
 	var lockedUntil *time.Time
-	if err := row.Scan(&credential.PassportID, &credential.PasswordHash, &updatedAt, &credential.FailedAttempts, &lockedUntil); err != nil {
+	if err := row.Scan(&credential.PassportID, &credential.PasswordHash, &credential.EncryptedPassword, &credential.PasswordKeyFingerprint, &updatedAt, &credential.FailedAttempts, &lockedUntil); err != nil {
 		return PassportCredential{}, err
 	}
 	credential.PasswordUpdatedAt = updatedAt
@@ -3364,7 +3448,7 @@ func scanPassportCredentialRow(row playerScanner) (PassportCredential, error) {
 func scanOfflineCredentialRow(row playerScanner, credential *OfflineCredential) error {
 	var updatedAt time.Time
 	var lockedUntil *time.Time
-	if err := row.Scan(&credential.PlayerID, &credential.PasswordHash, &updatedAt, &credential.FailedAttempts, &lockedUntil); err != nil {
+	if err := row.Scan(&credential.PlayerID, &credential.PasswordHash, &credential.EncryptedPassword, &credential.PasswordKeyFingerprint, &updatedAt, &credential.FailedAttempts, &lockedUntil); err != nil {
 		return err
 	}
 	credential.PasswordUpdatedAt = &updatedAt
@@ -3854,6 +3938,7 @@ CREATE TABLE IF NOT EXISTS passports (
 	last_seen_at timestamptz,
 	last_seen_ip text,
 	last_seen_geo jsonb,
+	attributes jsonb NOT NULL DEFAULT '{}'::jsonb,
 	created_at timestamptz NOT NULL DEFAULT now(),
 	updated_at timestamptz NOT NULL DEFAULT now(),
 	CONSTRAINT offline_passport_has_raw_name CHECK (kind != 'offline' OR raw_offline_name IS NOT NULL),
@@ -3867,7 +3952,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS passports_offline_username_unique
 ALTER TABLE passports ADD COLUMN IF NOT EXISTS last_seen_ip text;
 ALTER TABLE passports ADD COLUMN IF NOT EXISTS last_seen_geo jsonb;
 ALTER TABLE passports ADD COLUMN IF NOT EXISTS skin_source text NOT NULL DEFAULT 'upstream';
+ALTER TABLE passports ADD COLUMN IF NOT EXISTS attributes jsonb NOT NULL DEFAULT '{}'::jsonb;
 UPDATE passports SET skin_source = 'upstream' WHERE skin_source IS NULL OR skin_source = '' OR skin_source IN ('mojang', 'default');
+CREATE INDEX IF NOT EXISTS passports_attributes_gin_idx ON passports USING gin (attributes);
 
 CREATE TABLE IF NOT EXISTS profiles (
 	uuid text PRIMARY KEY,
@@ -3882,6 +3969,7 @@ CREATE TABLE IF NOT EXISTS profiles (
 	last_seen_at timestamptz,
 	last_seen_ip text,
 	last_seen_geo jsonb,
+	attributes jsonb NOT NULL DEFAULT '{}'::jsonb,
 	created_at timestamptz NOT NULL DEFAULT now(),
 	updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -3900,6 +3988,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS profile_passport_links_primary_unique
 
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_seen_ip text;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_seen_geo jsonb;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS attributes jsonb NOT NULL DEFAULT '{}'::jsonb;
+CREATE INDEX IF NOT EXISTS profiles_attributes_gin_idx ON profiles USING gin (attributes);
 
 CREATE TABLE IF NOT EXISTS profile_skins (
 	profile_id text PRIMARY KEY REFERENCES profiles(uuid) ON DELETE CASCADE,
@@ -3940,11 +4030,16 @@ CREATE TABLE IF NOT EXISTS passport_skins (
 CREATE TABLE IF NOT EXISTS offline_passport_credentials (
 	passport_id text PRIMARY KEY REFERENCES passports(uuid) ON DELETE CASCADE,
 	password_hash text NOT NULL,
+	encrypted_password text NOT NULL DEFAULT '',
+	password_key_fingerprint text NOT NULL DEFAULT '',
 	failed_attempts integer NOT NULL DEFAULT 0,
 	locked_until timestamptz,
 	created_at timestamptz NOT NULL DEFAULT now(),
 	updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE offline_passport_credentials ADD COLUMN IF NOT EXISTS encrypted_password text NOT NULL DEFAULT '';
+ALTER TABLE offline_passport_credentials ADD COLUMN IF NOT EXISTS password_key_fingerprint text NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS web_sessions (
 	id text PRIMARY KEY,
@@ -4181,6 +4276,12 @@ CREATE TABLE IF NOT EXISTS mojang_routes (
 CREATE TABLE IF NOT EXISTS system_settings (
 	key text PRIMARY KEY,
 	value jsonb NOT NULL DEFAULT '{}'::jsonb,
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS passport_premium_textures (
+	passport_id text PRIMARY KEY REFERENCES passports(uuid) ON DELETE CASCADE,
+	properties jsonb NOT NULL DEFAULT '[]'::jsonb,
 	updated_at timestamptz NOT NULL DEFAULT now()
 );
 

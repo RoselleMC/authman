@@ -19,6 +19,8 @@ import { fetchPortalSettings, updatePortalSettings, type PortalSettings } from "
 const EMPTY: PortalSettings = {
   transfer_cookie_key: "authman:transfer_grant",
   fallback_server_id: "",
+  max_profiles_per_passport: 3,
+  auto_join_single_profile: false,
   available_servers: [],
 };
 
@@ -100,6 +102,29 @@ export function PortalSettingsPage({ embedded = false }: { embedded?: boolean } 
                 testId="portal-fallback-server"
               />
             </Field>
+            <Field label={t("admin.portal.field.maxProfiles")} hint={t("admin.portal.field.maxProfiles.hint")}>
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={16}
+                value={form.max_profiles_per_passport ?? 3}
+                onChange={(e) => patch("max_profiles_per_passport", Math.max(1, Math.min(16, Number(e.target.value) || 3)))}
+                data-testid="portal-max-profiles"
+              />
+            </Field>
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={Boolean(form.auto_join_single_profile)}
+                onChange={(e) => patch("auto_join_single_profile", e.currentTarget.checked)}
+                data-testid="portal-auto-join"
+              />
+              <span>
+                <strong>{t("admin.portal.field.autoJoinSingle")}</strong>
+                <small>{t("admin.portal.field.autoJoinSingle.hint")}</small>
+              </span>
+            </label>
             <div className="settings-note" data-testid="portal-protocol-requirement">
               <Icon name="info" size={14} />
               <span>{t("admin.portal.protocolRequirement")}</span>

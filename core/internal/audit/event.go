@@ -17,6 +17,8 @@ const (
 
 const (
 	TargetPlayer           TargetType = "player"
+	TargetPassport         TargetType = "passport"
+	TargetProfile          TargetType = "profile"
 	TargetNode             TargetType = "node"
 	TargetDownstreamServer TargetType = "downstream_server"
 	TargetMojangProxy      TargetType = "mojang_proxy"

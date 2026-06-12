@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -84,8 +85,10 @@ type downstreamServerPrivilegedPassportRequest struct {
 }
 
 type portalSettingsRequest struct {
-	TransferCookieKey string `json:"transfer_cookie_key"`
-	FallbackServerID  string `json:"fallback_server_id"`
+	TransferCookieKey      string `json:"transfer_cookie_key"`
+	FallbackServerID       string `json:"fallback_server_id"`
+	MaxProfilesPerPassport int    `json:"max_profiles_per_passport"`
+	AutoJoinSingleProfile  bool   `json:"auto_join_single_profile"`
 }
 
 type brandingSettingsRequest struct {
@@ -931,7 +934,12 @@ func (s *Server) handleAdminResetOfflinePassword(w http.ResponseWriter, r *http.
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "auth.password_policy_failed", "password does not satisfy policy"))
 		return
 	}
-	if err := s.store.UpdateOfflinePassword(r.Context(), player.ID, passwordHash); err != nil {
+	encryptedPassword, keyFingerprint, err := s.offlinePasswordCredential(r.Context(), req.Password)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "password_recovery.encrypt_failed", "failed to encrypt recoverable password"))
+		return
+	}
+	if err := s.store.UpdateOfflinePassword(r.Context(), player.ID, passwordHash, encryptedPassword, keyFingerprint); err != nil {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "auth.credential_not_found", "offline credential not found"))
 		return
 	}
@@ -2080,8 +2088,10 @@ func (s *Server) handleAdminUpdatePortalSettings(w http.ResponseWriter, r *http.
 		cookieKey = "authman:transfer_grant"
 	}
 	settings := portalSettings{
-		TransferCookieKey: cookieKey,
-		FallbackServerID:  normalizePortalFallbackServerID(req.FallbackServerID),
+		TransferCookieKey:      cookieKey,
+		FallbackServerID:       normalizePortalFallbackServerID(req.FallbackServerID),
+		MaxProfilesPerPassport: clampMaxProfiles(req.MaxProfilesPerPassport),
+		AutoJoinSingleProfile:  req.AutoJoinSingleProfile,
 	}
 	if settings.FallbackServerID != "" {
 		if _, err := s.store.GetDownstreamServer(r.Context(), settings.FallbackServerID); err != nil {
@@ -2098,20 +2108,37 @@ func (s *Server) handleAdminUpdatePortalSettings(w http.ResponseWriter, r *http.
 }
 
 type portalSettings struct {
-	TransferCookieKey string
-	FallbackServerID  string
+	TransferCookieKey      string
+	FallbackServerID       string
+	MaxProfilesPerPassport int
+	// AutoJoinSingleProfile skips the profile manager when a passport owns
+	// exactly one profile. Off by default: the manager is the standard flow.
+	AutoJoinSingleProfile bool
+}
+
+func clampMaxProfiles(value int) int {
+	if value < 1 {
+		return 3
+	}
+	if value > 16 {
+		return 16
+	}
+	return value
 }
 
 func (s *Server) portalSettings(ctx context.Context) portalSettings {
 	defaults := portalSettings{
-		TransferCookieKey: "authman:transfer_grant",
-		FallbackServerID:  "",
+		TransferCookieKey:      "authman:transfer_grant",
+		FallbackServerID:       "",
+		MaxProfilesPerPassport: 3,
 	}
 	raw, err := s.store.GetSystemSetting(ctx, "portal")
 	if err == nil {
 		return portalSettings{
-			TransferCookieKey: stringValue(raw["transfer_cookie_key"], defaults.TransferCookieKey),
-			FallbackServerID:  normalizePortalFallbackServerID(stringValue(raw["fallback_server_id"], defaults.FallbackServerID)),
+			TransferCookieKey:      stringValue(raw["transfer_cookie_key"], defaults.TransferCookieKey),
+			FallbackServerID:       normalizePortalFallbackServerID(stringValue(raw["fallback_server_id"], defaults.FallbackServerID)),
+			MaxProfilesPerPassport: clampMaxProfiles(intValue(raw["max_profiles_per_passport"], defaults.MaxProfilesPerPassport)),
+			AutoJoinSingleProfile:  boolValue(raw["auto_join_single_profile"], false),
 		}
 	}
 	return defaults
@@ -2127,8 +2154,10 @@ func normalizePortalFallbackServerID(value string) string {
 
 func portalSettingsMap(settings portalSettings) map[string]any {
 	return map[string]any{
-		"transfer_cookie_key": strings.TrimSpace(settings.TransferCookieKey),
-		"fallback_server_id":  strings.TrimSpace(settings.FallbackServerID),
+		"transfer_cookie_key":       strings.TrimSpace(settings.TransferCookieKey),
+		"fallback_server_id":        strings.TrimSpace(settings.FallbackServerID),
+		"max_profiles_per_passport": clampMaxProfiles(settings.MaxProfilesPerPassport),
+		"auto_join_single_profile":  settings.AutoJoinSingleProfile,
 	}
 }
 
@@ -2143,9 +2172,11 @@ func portalSettingsData(settings portalSettings, servers []store.DownstreamServe
 		})
 	}
 	return map[string]any{
-		"transfer_cookie_key": strings.TrimSpace(settings.TransferCookieKey),
-		"fallback_server_id":  strings.TrimSpace(settings.FallbackServerID),
-		"available_servers":   available,
+		"transfer_cookie_key":       strings.TrimSpace(settings.TransferCookieKey),
+		"fallback_server_id":        strings.TrimSpace(settings.FallbackServerID),
+		"max_profiles_per_passport": clampMaxProfiles(settings.MaxProfilesPerPassport),
+		"auto_join_single_profile":  settings.AutoJoinSingleProfile,
+		"available_servers":         available,
 	}
 }
 
@@ -3190,6 +3221,10 @@ func normalizeKickReason(reason string) string {
 }
 
 func (s *Server) audit(r *http.Request, actorType audit.ActorType, actorID string, target audit.TargetType, targetID string, eventType string, details map[string]any) {
+	s.auditWithClientIP(r, "", actorType, actorID, target, targetID, eventType, details)
+}
+
+func (s *Server) auditWithClientIP(r *http.Request, ipOverride string, actorType audit.ActorType, actorID string, target audit.TargetType, targetID string, eventType string, details map[string]any) {
 	if details == nil {
 		details = map[string]any{}
 	}
@@ -3208,7 +3243,11 @@ func (s *Server) audit(r *http.Request, actorType audit.ActorType, actorID strin
 		details["source"] = "core-http"
 	}
 	if _, ok := details["client_ip"]; !ok {
-		details["client_ip"] = clientIP(r)
+		if ip := normalizeClientIPValue(ipOverride); ip != "" {
+			details["client_ip"] = ip
+		} else {
+			details["client_ip"] = clientIP(r)
+		}
 	}
 	if _, ok := details["client_geo"]; !ok {
 		if ip := detailText(details["client_ip"]); ip != "" {
@@ -3240,8 +3279,26 @@ func clientIP(r *http.Request) string {
 	return strings.TrimSpace(r.RemoteAddr)
 }
 
+func normalizeClientIPValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	}
+	return strings.Trim(strings.TrimSpace(value), "[]")
+}
+
 func (s *Server) requestIPGeo(r *http.Request) (string, *identity.IPGeo) {
-	ip := clientIP(r)
+	return s.requestIPGeoWithClientIP(r, "")
+}
+
+func (s *Server) requestIPGeoWithClientIP(r *http.Request, ipOverride string) (string, *identity.IPGeo) {
+	ip := normalizeClientIPValue(ipOverride)
+	if ip == "" {
+		ip = clientIP(r)
+	}
 	return ip, s.lookupIPGeo(r.Context(), ip)
 }
 

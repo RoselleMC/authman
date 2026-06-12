@@ -21,8 +21,6 @@ import {
   PageHeader,
   PageShell,
   PasswordInput,
-  PlaceholderCard,
-  PlaceholderGrid,
   Select,
   SettingsStack,
   Tabs,
@@ -55,9 +53,12 @@ import {
   fetchExternalAPITokens,
   fetchIPGeoSettings,
   fetchMojangSettings,
+  fetchPasswordRecoveryKeyStatus,
   fetchSMTPSettings,
   fetchSystemSummary,
+  downloadPasswordRecoveryPrivateKey,
   registerAdminPasskey,
+  factoryResetSystem,
   revokeExternalAPIToken,
   sendSMTPTest,
   startAdminTOTP,
@@ -80,6 +81,7 @@ import {
   type IPGeoSettings,
   type ListFilters,
   type MojangRuntimeSettings,
+  type PasswordRecoveryKeyStatus,
   type RouteChoice,
   type SMTPSettings,
 } from "../api/admin";
@@ -88,6 +90,7 @@ import { useSession } from "../auth/SessionContext";
 type SettingsSection = "account" | "admins" | "roles" | "external-api" | "mojang" | "geo" | "smtp" | "system" | "security";
 
 const SECTIONS: SettingsSection[] = ["account", "admins", "roles", "external-api", "mojang", "geo", "smtp", "system", "security"];
+const SYSTEM_FACTORY_RESET_CONFIRM = "RESET AUTHMAN";
 
 function roleTone(role: string): "info" | "success" | "neutral" {
   if (role === "owner") return "info";
@@ -1835,6 +1838,8 @@ function SystemPanel() {
   const toast = useToast();
   const qc = useQueryClient();
   const [brand, setBrand] = useState<BrandingSettings | null>(null);
+  const [factoryResetOpen, setFactoryResetOpen] = useState(false);
+  const [factoryResetConfirm, setFactoryResetConfirm] = useState("");
 
   useEffect(() => {
     if (brandQ.data) setBrand(brandQ.data);
@@ -1846,6 +1851,17 @@ function SystemPanel() {
       setBrand(next);
       toast.push({ tone: "success", title: t("common.saved") });
       void qc.invalidateQueries({ queryKey: ["settings.branding"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const factoryReset = useMutation({
+    mutationFn: () => factoryResetSystem(factoryResetConfirm),
+    onSuccess: () => {
+      setFactoryResetOpen(false);
+      setFactoryResetConfirm("");
+      toast.push({ tone: "success", title: t("admin.settings.system.factoryReset.done") });
+      void qc.invalidateQueries({ queryKey: ["admin.system"] });
+      void qc.invalidateQueries({ queryKey: ["settings.passwordRecoveryKey"] });
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -1883,22 +1899,120 @@ function SystemPanel() {
           <SystemSummaryGrid raw={sysQ.data} />
         )}
       </Card>
+      <Card
+        title={t("admin.settings.system.factoryReset")}
+        actions={
+          <Button icon="alert" variant="danger" onClick={() => setFactoryResetOpen(true)} data-testid="system-factory-reset-open">
+            {t("admin.settings.system.factoryReset")}
+          </Button>
+        }
+      >
+        <p className="card-copy">{t("admin.settings.system.factoryReset.desc")}</p>
+        <Alert tone="warning">{t("admin.settings.system.factoryReset.warning")}</Alert>
+      </Card>
+      <Dialog
+        open={factoryResetOpen}
+        onClose={() => {
+          if (!factoryReset.isPending) setFactoryResetOpen(false);
+        }}
+        icon="alert"
+        iconTone="danger"
+        title={t("admin.settings.system.factoryReset")}
+        desc={t("admin.settings.system.factoryReset.dialog")}
+        footer={
+          <>
+            <Button variant="ghost" disabled={factoryReset.isPending} onClick={() => setFactoryResetOpen(false)}>{t("common.cancel")}</Button>
+            <Button
+              variant="danger"
+              loading={factoryReset.isPending}
+              disabled={factoryResetConfirm !== SYSTEM_FACTORY_RESET_CONFIRM}
+              onClick={() => factoryReset.mutate()}
+              data-testid="system-factory-reset-confirm"
+            >
+              {t("common.confirm")}
+            </Button>
+          </>
+        }
+        testId="system-factory-reset-dialog"
+      >
+        <Field label={t("admin.settings.system.factoryReset.confirm")} hint={`${t("admin.settings.system.factoryReset.confirmHint")} ${SYSTEM_FACTORY_RESET_CONFIRM}`}>
+          <Input value={factoryResetConfirm} onChange={(e) => setFactoryResetConfirm(e.target.value)} autoComplete="off" />
+        </Field>
+      </Dialog>
     </SettingsStack>
   );
 }
 
 function SecurityPanel() {
   const { t } = useI18n();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const keyQ = useQuery({ queryKey: ["settings.passwordRecoveryKey"], queryFn: fetchPasswordRecoveryKeyStatus });
+  const downloadKey = useMutation({
+    mutationFn: downloadPasswordRecoveryPrivateKey,
+    onSuccess: (data) => {
+      downloadTextFile(data.filename || "authman-password-recovery.pem", data.private_key_pem, "application/x-pem-file");
+      toast.push({ tone: "success", title: t("admin.settings.passwordRecovery.downloaded") });
+      void qc.invalidateQueries({ queryKey: ["settings.passwordRecoveryKey"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const status = keyQ.data;
   return (
-    <PlaceholderGrid>
-      <PlaceholderCard
-        icon="key"
-        title={t("admin.settings.2fa")}
-        desc={t("admin.settings.2fa.accountHint")}
-        testId="placeholder-2fa"
-      />
-    </PlaceholderGrid>
+    <SettingsStack>
+      <Card
+        title={t("admin.settings.passwordRecovery")}
+        actions={
+          status?.private_key_available ? (
+            <Button icon="download" variant="primary" loading={downloadKey.isPending} onClick={() => downloadKey.mutate()} data-testid="password-recovery-download">
+              {t("admin.settings.passwordRecovery.download")}
+            </Button>
+          ) : null
+        }
+      >
+        {keyQ.error ? (
+          <ErrorState error={keyQ.error} onRetry={() => keyQ.refetch()} />
+        ) : keyQ.isLoading || !status ? (
+          <LoadingState />
+        ) : (
+          <PasswordRecoveryKeyDetails status={status} />
+        )}
+      </Card>
+    </SettingsStack>
   );
+}
+
+function PasswordRecoveryKeyDetails({ status }: { status: PasswordRecoveryKeyStatus }) {
+  const { t } = useI18n();
+  return (
+    <div className="settings-stack-compact">
+      <p className="card-copy">{t("admin.settings.passwordRecovery.desc")}</p>
+      {status.private_key_available ? (
+        <Alert tone="warning">{t("admin.settings.passwordRecovery.privateAvailable")}</Alert>
+      ) : (
+        <Alert tone="info">{t("admin.settings.passwordRecovery.privateDestroyed")}</Alert>
+      )}
+      <ConfigGrid testId="password-recovery-key-status">
+        <ConfigRow k={t("admin.settings.passwordRecovery.algorithm")} v={status.algorithm || "—"} mono />
+        <ConfigRow k={t("admin.settings.passwordRecovery.size")} v={status.size_bits ? `${status.size_bits}` : "—"} />
+        <ConfigRow k={t("admin.settings.passwordRecovery.fingerprint")} v={status.fingerprint || "—"} mono />
+        <ConfigRow k={t("admin.settings.passwordRecovery.createdAt")} v={formatAbsTime(status.created_at)} />
+        <ConfigRow k={t("admin.settings.passwordRecovery.downloadedAt")} v={status.downloaded_at ? formatAbsTime(status.downloaded_at) : t("admin.settings.passwordRecovery.notDownloaded")} />
+      </ConfigGrid>
+    </div>
+  );
+}
+
+function downloadTextFile(filename: string, content: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function SystemSummaryGrid({ raw }: { raw: unknown }) {

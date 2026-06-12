@@ -38,17 +38,16 @@ services:
     build:
       context: ..
       dockerfile: authman/limbo/Dockerfile
+    network_mode: host
     environment:
-      AUTHMAN_CORE_URL: "http://authman:8081"
+      AUTHMAN_CORE_URL: "${AUTHMAN_LIMBO_CORE_URL:-http://127.0.0.1:18081}"
       AUTHMAN_NODE_TOKEN: "${AUTHMAN_LIMBO_NODE_TOKEN:-authman-node-change-me}"
       AUTHMAN_NODE_NAME: "limbo-portal"
-      AUTHMAN_LIMBO_LISTEN: ":25565"
+      AUTHMAN_LIMBO_LISTEN: "${AUTHMAN_LIMBO_LISTEN:-:25665}"
       AUTHMAN_LIMBO_DEFAULT_HOST: "default"
       AUTHMAN_LIMBO_LOGIN_MODE: "${AUTHMAN_LIMBO_LOGIN_MODE:-hybrid}"
       AUTHMAN_LIMBO_ONLINE_SERVER_ID: "${AUTHMAN_LIMBO_ONLINE_SERVER_ID:-authman-limbo}"
       AUTHMAN_LIMBO_LOG_LEVEL: "${AUTHMAN_LIMBO_LOG_LEVEL:-info}"
-    ports:
-      - "25665:25565"
     depends_on:
       - authman
 

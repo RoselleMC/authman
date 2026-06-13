@@ -1903,8 +1903,14 @@ func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]
 		base["transfer_cookie_key"] = settings.TransferCookieKey
 	}
 	base["proxy_protocol_enabled"] = false
+	base["proxy_protocol_restrict_trusted_proxies"] = false
+	base["proxy_protocol_trusted_proxies"] = ""
+	base["proxy_protocol_header_timeout_millis"] = 5000
 	mergeRuntimeConfig(base, n.RuntimeConfig, []string{
 		"proxy_protocol_enabled",
+		"proxy_protocol_restrict_trusted_proxies",
+		"proxy_protocol_trusted_proxies",
+		"proxy_protocol_header_timeout_millis",
 	})
 	return base
 }

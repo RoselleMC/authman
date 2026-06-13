@@ -267,10 +267,14 @@ func (p *portal) runServerLoop(ctx context.Context, router limbo.Router) error {
 func (p *portal) newServer(router limbo.Router) (*limbgo.Server, error) {
 	proxyProtocol := p.proxyProtocolConfig()
 	if proxyProtocol.Enabled {
-		if len(proxyProtocol.TrustedProxies) == 0 {
+		trustedMode := strings.Join(proxyProtocol.TrustedProxies, ",")
+		if !proxyProtocol.RestrictTrustedProxies {
+			trustedMode = "all"
 			p.logger.Warn("PROXY protocol mode enabled without trusted proxy restrictions")
+		} else if trustedMode == "" {
+			trustedMode = "none"
 		}
-		p.logger.Info("PROXY protocol mode enabled", "required", proxyProtocol.Required, "trusted_proxies", strings.Join(proxyProtocol.TrustedProxies, ","))
+		p.logger.Info("PROXY protocol mode enabled", "required", proxyProtocol.Required, "restrict_trusted_proxies", proxyProtocol.RestrictTrustedProxies, "trusted_proxies", trustedMode)
 	}
 	return limbgo.NewServer(limbgo.Config{
 		Addr:           p.cfg.Listen,
@@ -318,7 +322,7 @@ func (p *portal) heartbeat(ctx context.Context) error {
 }
 
 func (p *portal) applyHeartbeat(res heartbeatResponse) {
-	proxyBefore := p.proxyProtocolEnabled()
+	proxyBefore := p.proxyProtocolFingerprint()
 	p.msgMu.Lock()
 	p.nodeID = res.Node.ID
 	p.runtime = res.RuntimeConfig
@@ -326,7 +330,7 @@ func (p *portal) applyHeartbeat(res heartbeatResponse) {
 	p.messages = res.PlayerMessages.Messages
 	p.dialogs = res.PlayerMessages.Dialogs
 	p.msgMu.Unlock()
-	proxyAfter := p.proxyProtocolEnabled()
+	proxyAfter := p.proxyProtocolFingerprint()
 	if proxyBefore != proxyAfter {
 		p.requestServerRestart("proxy_protocol_mode_changed")
 	}
@@ -438,14 +442,50 @@ func (p *portal) proxyProtocolEnabled() bool {
 	return boolFromMap(p.runtime, "proxy_protocol_enabled", false)
 }
 
+func (p *portal) proxyProtocolRestrictTrustedProxies() bool {
+	p.msgMu.RLock()
+	defer p.msgMu.RUnlock()
+	return boolFromMap(p.runtime, "proxy_protocol_restrict_trusted_proxies", false)
+}
+
+func (p *portal) proxyProtocolTrustedProxies() []string {
+	if !p.proxyProtocolRestrictTrustedProxies() {
+		return nil
+	}
+	p.msgMu.RLock()
+	value, ok := p.runtime["proxy_protocol_trusted_proxies"]
+	p.msgMu.RUnlock()
+	if !ok {
+		return nil
+	}
+	text, _ := value.(string)
+	return splitCSV(text)
+}
+
+func (p *portal) proxyProtocolHeaderTimeout() time.Duration {
+	p.msgMu.RLock()
+	defer p.msgMu.RUnlock()
+	if _, ok := p.runtime["proxy_protocol_header_timeout_millis"]; ok {
+		return time.Duration(intFromMap(p.runtime, "proxy_protocol_header_timeout_millis")) * time.Millisecond
+	}
+	return time.Duration(p.cfg.ProxyTimeoutMS) * time.Millisecond
+}
+
 func (p *portal) proxyProtocolConfig() limbgo.ProxyProtocolConfig {
 	enabled := p.proxyProtocolEnabled()
+	restrictTrustedProxies := p.proxyProtocolRestrictTrustedProxies()
 	return limbgo.ProxyProtocolConfig{
-		Enabled:           enabled,
-		Required:          enabled,
-		TrustedProxies:    splitCSV(p.cfg.ProxyTrusted),
-		ReadHeaderTimeout: time.Duration(p.cfg.ProxyTimeoutMS) * time.Millisecond,
+		Enabled:                enabled,
+		Required:               enabled,
+		TrustedProxies:         p.proxyProtocolTrustedProxies(),
+		RestrictTrustedProxies: restrictTrustedProxies,
+		ReadHeaderTimeout:      p.proxyProtocolHeaderTimeout(),
 	}
+}
+
+func (p *portal) proxyProtocolFingerprint() string {
+	cfg := p.proxyProtocolConfig()
+	return fmt.Sprintf("%t|%t|%t|%s|%s", cfg.Enabled, cfg.Required, cfg.RestrictTrustedProxies, strings.Join(cfg.TrustedProxies, ","), cfg.ReadHeaderTimeout)
 }
 
 func (p *portal) requestServerRestart(reason string) {

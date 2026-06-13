@@ -35,6 +35,9 @@ interface FormState {
   server_id: string;
   heartbeat_interval_seconds: string;
   proxy_protocol_enabled: boolean;
+  proxy_protocol_restrict_trusted_proxies: boolean;
+  proxy_protocol_trusted_proxies: string;
+  proxy_protocol_header_timeout_millis: string;
   resolve_raw_offline_names: boolean;
   transfer_cookie_key: string;
   downstream_initial_server: string;
@@ -61,6 +64,9 @@ function toForm(n: SafeVelocityNode): FormState {
     server_id: text(cfg.server_id, n.server_id || ""),
     heartbeat_interval_seconds: numberText(cfg.heartbeat_interval_seconds, 60),
     proxy_protocol_enabled: boolValue(cfg.proxy_protocol_enabled, false),
+    proxy_protocol_restrict_trusted_proxies: boolValue(cfg.proxy_protocol_restrict_trusted_proxies, false),
+    proxy_protocol_trusted_proxies: text(cfg.proxy_protocol_trusted_proxies),
+    proxy_protocol_header_timeout_millis: numberText(cfg.proxy_protocol_header_timeout_millis, 5000),
     resolve_raw_offline_names: boolValue(cfg.resolve_raw_offline_names, true),
     transfer_cookie_key: text(cfg.transfer_cookie_key, "authman:transfer_grant"),
     downstream_initial_server: text(cfg.downstream_initial_server, text(cfg.gate_initial_server)),
@@ -85,6 +91,9 @@ function toRuntime(form: FormState): Record<string, unknown> {
 function toLimboRuntime(form: FormState): Record<string, unknown> {
   return {
     proxy_protocol_enabled: form.proxy_protocol_enabled,
+    proxy_protocol_restrict_trusted_proxies: form.proxy_protocol_restrict_trusted_proxies,
+    proxy_protocol_trusted_proxies: form.proxy_protocol_trusted_proxies.trim(),
+    proxy_protocol_header_timeout_millis: Number(form.proxy_protocol_header_timeout_millis) || 5000,
   };
 }
 
@@ -272,9 +281,48 @@ export function NodeDetailPage() {
                   <small>{t("admin.nodes.detail.field.proxyProtocol.hint")}</small>
                 </span>
               </label>
+              <label className="toggle-row" style={{ marginBottom: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={form.proxy_protocol_restrict_trusted_proxies}
+                  onChange={(e) => patch("proxy_protocol_restrict_trusted_proxies", e.target.checked)}
+                  disabled={!form.proxy_protocol_enabled}
+                  data-testid="node-limbo-proxy-restrict"
+                />
+                <span>
+                  <strong>{t("admin.nodes.detail.field.proxyRestrict")}</strong>
+                  <small>{t("admin.nodes.detail.field.proxyRestrict.hint")}</small>
+                </span>
+              </label>
+              <div className="settings-form-grid settings-form-grid--single">
+                <Field label={t("admin.nodes.detail.field.proxyTrusted")} hint={t("admin.nodes.detail.field.proxyTrusted.hint")}>
+                  <Input
+                    value={form.proxy_protocol_trusted_proxies}
+                    onChange={(e) => patch("proxy_protocol_trusted_proxies", e.target.value)}
+                    placeholder="127.0.0.1,172.20.0.0/16"
+                    mono
+                    data-testid="node-limbo-proxy-trusted"
+                  />
+                </Field>
+                <Field label={t("admin.nodes.detail.field.proxyHeaderTimeout")} hint={t("admin.nodes.detail.field.proxyHeaderTimeout.hint")}>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={form.proxy_protocol_header_timeout_millis}
+                    onChange={(e) => patch("proxy_protocol_header_timeout_millis", e.target.value)}
+                    data-testid="node-limbo-proxy-timeout"
+                  />
+                </Field>
+              </div>
               <ConfigGrid testId="node-portal-runtime">
                 <ConfigRow k={t("admin.portal.field.cookie")} v={text(cfg.transfer_cookie_key, "authman:transfer_grant")} mono />
                 <ConfigRow k={t("admin.nodes.detail.field.proxyProtocol.current")} v={boolValue(cfg.proxy_protocol_enabled, false) ? t("status.enabled") : t("status.disabled")} />
+                <ConfigRow k={t("admin.nodes.detail.field.proxyRestrict.current")} v={boolValue(cfg.proxy_protocol_restrict_trusted_proxies, false) ? t("status.enabled") : t("status.disabled")} />
+                <ConfigRow
+                  k={t("admin.nodes.detail.field.proxyTrusted.current")}
+                  v={boolValue(cfg.proxy_protocol_restrict_trusted_proxies, false) ? text(cfg.proxy_protocol_trusted_proxies, "—") || "—" : t("admin.nodes.detail.field.proxyTrusted.all")}
+                  mono
+                />
                 <ConfigRow k={t("admin.portal.field.protocol")} v={t("admin.portal.protocolRange")} />
               </ConfigGrid>
             </Card>

@@ -84,7 +84,31 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
   }
 
   return {
-    data: (envelope?.data ?? null) as T,
+    data: normalizeApiRelativeUrls(envelope?.data ?? null) as T,
     meta: envelope?.meta ?? null,
   };
+}
+
+function normalizeApiRelativeUrls(value: unknown): unknown {
+  if (typeof value === "string") {
+    return normalizeApiRelativeUrl(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeApiRelativeUrls(item));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      out[key] = normalizeApiRelativeUrls(item);
+    }
+    return out;
+  }
+  return value;
+}
+
+function normalizeApiRelativeUrl(value: string): string {
+  if (!value.startsWith("/api/")) return value;
+  const cfg = getRuntimeConfig();
+  if (cfg.apiBase === "/api") return value;
+  return `${cfg.apiBase}${value.slice("/api".length)}`;
 }

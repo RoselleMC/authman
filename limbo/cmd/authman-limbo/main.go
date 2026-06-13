@@ -176,15 +176,15 @@ func main() {
 		fatal(err)
 	}
 	router := limbo.Router{
-		MOTD:              motd,
-		VersionName:       "Authman Limbo",
-		MaxPlayers:        1000,
-		StatusProvider:    limbgo.StatusProviderFunc(p.status),
-		StatusRateLimiter: limbgo.NewRateLimiter(limbgo.RateLimitConfig{Requests: 60, Window: time.Second}),
-		LoginMode:         p.loginMode(),
-		LoginPolicy:       limbgo.LoginPolicyFunc(p.resolveLoginMode),
-		SessionVerifier:   limbgo.SessionVerifierFunc(p.verifySession),
-		OnlineServerID:    cfg.OnlineServerID,
+		MOTD:                motd,
+		VersionName:         "Authman Limbo",
+		MaxPlayers:          1000,
+		StatusProvider:      limbgo.StatusProviderFunc(p.status),
+		StatusRateLimiter:   limbgo.NewRateLimiter(limbgo.RateLimitConfig{Requests: 60, Window: time.Second}),
+		LoginMode:           p.loginMode(),
+		LoginDecisionPolicy: limbgo.LoginPolicyV2Func(p.resolveLoginDecision),
+		SessionVerifier:     limbgo.SessionVerifierFunc(p.verifySession),
+		OnlineServerID:      cfg.OnlineServerID,
 		ProtocolPolicy: limbgo.ProtocolPolicyFunc(func(_ context.Context, req limbgo.ProtocolRequest) error {
 			if req.ProtocolVersion >= minDialogProtocol {
 				return nil
@@ -573,10 +573,10 @@ func (p *portal) loginMode() limbgo.LoginMode {
 	}
 }
 
-func (p *portal) resolveLoginMode(ctx context.Context, req limbgo.LoginRequest) (limbgo.LoginMode, error) {
+func (p *portal) resolveLoginDecision(ctx context.Context, req limbgo.LoginRequest) (limbgo.LoginDecision, error) {
 	configured := p.loginMode()
 	if configured != limbgo.LoginModeHybrid {
-		return configured, nil
+		return limbgo.LoginDecision{Mode: configured}, nil
 	}
 	logger := p.logger
 	if logger == nil {
@@ -588,12 +588,12 @@ func (p *portal) resolveLoginMode(ctx context.Context, req limbgo.LoginRequest) 
 		switch mode {
 		case limbgo.LoginModeOnline, limbgo.LoginModeOffline, limbgo.LoginModeHybrid:
 			logger.Info("limbo login policy selected mode", "player", req.Username, "claimed_uuid", req.ClaimedUUID, "mode", mode, "reason", policy.Reason)
-			return mode, nil
+			return limbgo.LoginDecision{Mode: mode}, nil
 		default:
-			return "", fmt.Errorf("core returned unsupported login policy mode %q", policy.LoginMode)
+			return limbgo.LoginDecision{}, fmt.Errorf("core returned unsupported login policy mode %q", policy.LoginMode)
 		}
 	}
-	return "", err
+	return limbgo.LoginDecision{}, err
 }
 
 func (p *portal) verifySession(ctx context.Context, proof limbgo.SessionProof) (limbgo.VerifiedProfile, error) {

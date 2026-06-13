@@ -47,6 +47,7 @@ func playerEventDetails(player identity.Player, extra map[string]any) map[string
 
 func (s *Server) enqueueDisconnectActions(ctx context.Context, presences []store.PlayerPresence, reason string, now time.Time) int {
 	count := 0
+	changedNodes := map[string]struct{}{}
 	for _, presence := range presences {
 		if strings.TrimSpace(presence.NodeID) == "" {
 			continue
@@ -66,7 +67,11 @@ func (s *Server) enqueueDisconnectActions(ctx context.Context, presences []store
 		})
 		if err == nil {
 			count++
+			changedNodes[presence.NodeID] = struct{}{}
 		}
+	}
+	for nodeID := range changedNodes {
+		s.pushNodeIDSync(ctx, nodeID, "node_action.enqueue")
 	}
 	return count
 }

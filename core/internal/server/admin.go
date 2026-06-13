@@ -326,6 +326,11 @@ type updatePassportRequest struct {
 	Status string `json:"status"`
 }
 
+type createOfflinePassportRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 type updateProfileRequest struct {
 	Status string `json:"status"`
 }
@@ -365,6 +370,46 @@ func (s *Server) handleAdminPassports(w http.ResponseWriter, r *http.Request) {
 		data = append(data, row)
 	}
 	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), total, params))
+}
+
+func (s *Server) handleAdminCreateOfflinePassport(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	var req createOfflinePassportRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	username := strings.TrimSpace(req.Username)
+	if username == "" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "passport.username_required", "username is required"))
+		return
+	}
+	passwordHash, err := auth.HashPassword(req.Password, s.passwordParams)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "auth.password_policy_failed", "password does not satisfy policy"))
+		return
+	}
+	encryptedPassword, keyFingerprint, err := s.offlinePasswordCredential(r.Context(), req.Password)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "password_recovery.encrypt_failed", "failed to encrypt recoverable password"))
+		return
+	}
+	passport, err := s.store.CreateOfflinePassport(r.Context(), username, passwordHash, encryptedPassword, keyFingerprint)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "passport.create_failed", err.Error()))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, passport.ID, "passport.create.offline", map[string]any{
+		"username":    passport.Username,
+		"passport_id": passport.ID,
+	})
+	row := passportRowData(passport, s.store.ListProfilesForPassport(r.Context(), passport.ID), s.store.ListPassportPresences(r.Context(), passport.ID))
+	s.enrichPassportRow(r.Context(), row, passport, time.Now())
+	api.WriteJSON(w, http.StatusCreated, row, nil)
 }
 
 func (s *Server) handleAdminPassportDetail(w http.ResponseWriter, r *http.Request) {
@@ -1850,6 +1895,7 @@ func (s *Server) handleAdminCreateDownstreamServer(w http.ResponseWriter, r *htt
 		return
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, server.ID, "server.upsert", map[string]any{"slug": server.Slug})
+	s.pushAllNodeSync(r.Context(), "server.upsert")
 	api.WriteJSON(w, http.StatusCreated, downstreamServerData(server), nil)
 }
 
@@ -1881,6 +1927,7 @@ func (s *Server) handleAdminUpdateDownstreamServer(w http.ResponseWriter, r *htt
 		return
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, server.ID, "server.upsert", map[string]any{"slug": server.Slug})
+	s.pushAllNodeSync(r.Context(), "server.upsert")
 	api.WriteJSON(w, http.StatusOK, downstreamServerData(server), nil)
 }
 
@@ -1917,6 +1964,7 @@ func (s *Server) handleAdminUploadDownstreamServerIcon(w http.ResponseWriter, r 
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, server.ID, "server.icon.update", map[string]any{
 		"slug": server.Slug,
 	})
+	s.pushAllNodeSync(r.Context(), "server.icon.update")
 	api.WriteJSON(w, http.StatusOK, downstreamServerData(server), nil)
 }
 
@@ -1944,6 +1992,7 @@ func (s *Server) handleAdminDeleteDownstreamServerIcon(w http.ResponseWriter, r 
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, server.ID, "server.icon.delete", map[string]any{
 		"slug": server.Slug,
 	})
+	s.pushAllNodeSync(r.Context(), "server.icon.delete")
 	api.WriteJSON(w, http.StatusOK, downstreamServerData(server), nil)
 }
 
@@ -2012,6 +2061,7 @@ func (s *Server) handleAdminAddDownstreamServerPrivilegedPassport(w http.Respons
 		"passport_id": allow.PassportID,
 		"username":    allow.Passport.Username,
 	})
+	s.pushAllNodeSync(r.Context(), "server.privileged_passport.add")
 	item := downstreamServerPrivilegedPassportData(allow, s.store.ListProfilesForPassport(r.Context(), allow.Passport.ID), s.store.ListPassportPresences(r.Context(), allow.Passport.ID))
 	s.enrichPassportRow(r.Context(), item, allow.Passport, time.Now())
 	api.WriteJSON(w, http.StatusCreated, item, nil)
@@ -2036,6 +2086,7 @@ func (s *Server) handleAdminRemoveDownstreamServerPrivilegedPassport(w http.Resp
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, serverID, "server.privileged_passport.remove", map[string]any{
 		"passport_id": passportID,
 	})
+	s.pushAllNodeSync(r.Context(), "server.privileged_passport.remove")
 	api.WriteJSON(w, http.StatusOK, map[string]any{"ok": true}, nil)
 }
 
@@ -2060,6 +2111,7 @@ func (s *Server) handleAdminDeleteDownstreamServer(w http.ResponseWriter, r *htt
 		_ = s.store.SetSystemSetting(r.Context(), "portal", portalSettingsMap(settings))
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, id, "server.delete", nil)
+	s.pushAllNodeSync(r.Context(), "server.delete")
 	api.WriteJSON(w, http.StatusOK, map[string]any{"ok": true}, nil)
 }
 
@@ -2104,6 +2156,7 @@ func (s *Server) handleAdminUpdatePortalSettings(w http.ResponseWriter, r *http.
 		return
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, "portal-settings", "portal_settings.update", portalSettingsMap(settings))
+	s.pushAllNodeSync(r.Context(), "portal_settings.update")
 	api.WriteJSON(w, http.StatusOK, portalSettingsData(settings, s.store.ListDownstreamServers(r.Context())), nil)
 }
 

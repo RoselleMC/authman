@@ -134,6 +134,7 @@ func (s *Server) handleAdminUploadLimboBlueprint(w http.ResponseWriter, r *http.
 		return
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, blueprint.ID, "limbo_blueprint.upload", map[string]any{"name": blueprint.Name, "sha256": blueprint.SHA256})
+	s.pushAllNodeSync(r.Context(), "limbo_blueprint.upload")
 	api.WriteJSON(w, http.StatusCreated, limboBlueprintData(blueprint, false), nil)
 }
 
@@ -171,6 +172,7 @@ func (s *Server) handleAdminUpdateLimboBlueprint(w http.ResponseWriter, r *http.
 		return
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, blueprint.ID, "limbo_blueprint.update", map[string]any{"name": blueprint.Name})
+	s.pushAllNodeSync(r.Context(), "limbo_blueprint.update")
 	api.WriteJSON(w, http.StatusOK, limboBlueprintData(blueprint, false), nil)
 }
 
@@ -186,6 +188,7 @@ func (s *Server) handleAdminDeleteLimboBlueprint(w http.ResponseWriter, r *http.
 		return
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, id, "limbo_blueprint.delete", nil)
+	s.pushAllNodeSync(r.Context(), "limbo_blueprint.delete")
 	api.WriteJSON(w, http.StatusOK, map[string]any{"ok": true}, nil)
 }
 

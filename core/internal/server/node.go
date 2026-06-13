@@ -227,6 +227,7 @@ func (s *Server) handleAdminUpdateNode(w http.ResponseWriter, r *http.Request) {
 		"name": n.Name,
 		"kind": node.NormalizeKind(n.Mode),
 	})
+	s.pushNodeSync(r.Context(), n, "node.update")
 	api.WriteJSON(w, http.StatusOK, s.nodeData(r.Context(), n), nil)
 }
 
@@ -242,6 +243,7 @@ func (s *Server) handleAdminRotateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetNode, node.ID, "node.rotate_token", nil)
+	s.pushNodeSync(r.Context(), node, "node.rotate_token")
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"node":              s.nodeData(r.Context(), node),
 		"token":             token,
@@ -286,6 +288,7 @@ func (s *Server) handleAdminDeleteNode(w http.ResponseWriter, r *http.Request) {
 		"name":                 target.Name,
 		"instance_fingerprint": target.InstanceFingerprint,
 	})
+	s.pushNodeRevoked(id)
 	api.WriteJSON(w, http.StatusOK, map[string]any{"ok": true}, nil)
 }
 
@@ -315,13 +318,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 			api.WriteError(w, api.NewError(http.StatusForbidden, "node.revoked", err.Error()))
 			return
 		}
-		api.WriteJSON(w, http.StatusOK, map[string]any{
-			"node":               s.nodeData(r.Context(), node),
-			"runtime_config":     s.nodeRuntimeConfig(r.Context(), node),
-			"player_messages":    s.playerMessagesPayload(r.Context(), node.Mode),
-			"actions":            nodeActionRows(s.store.ListPendingNodeActions(r.Context(), node.ID, time.Now(), 50)),
-			"downstream_servers": s.nodeDownstreamServerChoices(r.Context(), node),
-		}, nil)
+		api.WriteJSON(w, http.StatusOK, s.nodeSyncPayload(r.Context(), node), nil)
 		return
 	}
 	node, err := s.nodes.Heartbeat(r.Context(), token, time.Now())
@@ -329,13 +326,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "node.unauthorized", "invalid node token"))
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, map[string]any{
-		"node":               s.nodeData(r.Context(), node),
-		"runtime_config":     s.nodeRuntimeConfig(r.Context(), node),
-		"player_messages":    s.playerMessagesPayload(r.Context(), node.Mode),
-		"actions":            nodeActionRows(s.store.ListPendingNodeActions(r.Context(), node.ID, time.Now(), 50)),
-		"downstream_servers": s.nodeDownstreamServerChoices(r.Context(), node),
-	}, nil)
+	api.WriteJSON(w, http.StatusOK, s.nodeSyncPayload(r.Context(), node), nil)
 }
 
 func (s *Server) handleNodeAckActions(w http.ResponseWriter, r *http.Request) {
@@ -350,6 +341,7 @@ func (s *Server) handleNodeAckActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acked := s.store.AckNodeActions(r.Context(), n.ID, req.IDs, time.Now())
+	s.pushNodeSync(r.Context(), n, "node_action.ack")
 	api.WriteJSON(w, http.StatusOK, map[string]any{"acked": acked}, nil)
 }
 
@@ -1858,17 +1850,22 @@ func (s *Server) nodeData(ctx context.Context, n node.Node) map[string]any {
 
 func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]any {
 	kind := node.NormalizeKind(n.Mode)
+	communication := s.nodeCommunicationSettings(ctx)
 	base := map[string]any{
-		"node_name":                  strings.TrimSpace(n.Name),
-		"server_id":                  strings.TrimSpace(n.ServerID),
-		"heartbeat_interval_seconds": 60,
-		"resolve_raw_offline_names":  true,
-		"max_password_attempts":      3,
-		"chat_cooldown_millis":       150,
-		"auth_timeout_seconds":       90,
-		"completion_delay_seconds":   3,
-		"transfer_cookie_key":        "authman:transfer_grant",
-		"email_verification_mode":    "disabled",
+		"node_name":                       strings.TrimSpace(n.Name),
+		"server_id":                       strings.TrimSpace(n.ServerID),
+		"heartbeat_interval_seconds":      communication.HeartbeatIntervalSeconds,
+		"websocket_enabled":               communication.WebSocketEnabled,
+		"websocket_reconnect_min_seconds": communication.WebSocketReconnectMinSeconds,
+		"websocket_reconnect_max_seconds": communication.WebSocketReconnectMaxSeconds,
+		"websocket_ping_interval_seconds": communication.WebSocketPingIntervalSeconds,
+		"resolve_raw_offline_names":       true,
+		"max_password_attempts":           3,
+		"chat_cooldown_millis":            150,
+		"auth_timeout_seconds":            90,
+		"completion_delay_seconds":        3,
+		"transfer_cookie_key":             "authman:transfer_grant",
+		"email_verification_mode":         "disabled",
 	}
 	if kind == "downstream_velocity" {
 		base["downstream_initial_server"] = ""

@@ -1,9 +1,9 @@
-package mc.roselle.authman.command
+package com.iroselle.authman.command
 
 import com.velocitypowered.api.command.CommandSource
 import com.velocitypowered.api.command.SimpleCommand
 import com.velocitypowered.api.proxy.Player
-import mc.roselle.authman.AuthmanPlugin
+import com.iroselle.authman.AuthmanPlugin
 import net.kyori.adventure.text.Component
 import org.slf4j.Logger
 

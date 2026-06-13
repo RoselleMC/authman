@@ -58,6 +58,7 @@ type Server struct {
 	webAuthn       *webauthn.WebAuthn
 	ipGeo          *ipGeoResolver
 	passportLocks  keyedMutex
+	nodeEvents     *nodeEventHub
 }
 
 // keyedMutex serializes work per string key (e.g. passport id) so concurrent
@@ -98,6 +99,7 @@ func New(options Options) *Server {
 		passwordParams: options.PasswordParams,
 		mojangVerifier: newMojangVerifier(options.Config),
 		ipGeo:          newIPGeoResolver(),
+		nodeEvents:     newNodeEventHub(),
 	}
 	s.webAuthn = newWebAuthn(options.Config, logger)
 	if s.store == nil {
@@ -286,6 +288,7 @@ func (s *Server) routes() {
 	s.coreMux.HandleFunc("POST /api/admin/session/logout", s.handleAdminLogout)
 	s.coreMux.HandleFunc("GET /api/admin/overview", s.handleAdminOverview)
 	s.coreMux.HandleFunc("GET /api/admin/passports", s.handleAdminPassports)
+	s.coreMux.HandleFunc("POST /api/admin/passports", s.handleAdminCreateOfflinePassport)
 	s.coreMux.HandleFunc("GET /api/admin/passports/{id}", s.handleAdminPassportDetail)
 	s.coreMux.HandleFunc("PATCH /api/admin/passports/{id}", s.handleAdminUpdatePassport)
 	s.coreMux.HandleFunc("POST /api/admin/passports/{id}/skin", s.handleAdminUploadPassportSkin)
@@ -366,6 +369,8 @@ func (s *Server) routes() {
 	s.coreMux.HandleFunc("PUT /api/admin/settings/mojang", s.handleAdminUpdateMojangSettings)
 	s.coreMux.HandleFunc("GET /api/admin/settings/ip-geo", s.handleAdminIPGeoSettings)
 	s.coreMux.HandleFunc("PUT /api/admin/settings/ip-geo", s.handleAdminUpdateIPGeoSettings)
+	s.coreMux.HandleFunc("GET /api/admin/settings/communication", s.handleAdminNodeCommunicationSettings)
+	s.coreMux.HandleFunc("PUT /api/admin/settings/communication", s.handleAdminUpdateNodeCommunicationSettings)
 	s.coreMux.HandleFunc("GET /api/admin/settings/branding", s.handleAdminBrandingSettings)
 	s.coreMux.HandleFunc("PUT /api/admin/settings/branding", s.handleAdminUpdateBrandingSettings)
 	s.coreMux.HandleFunc("GET /api/admin/settings/player-messages", s.handleAdminPlayerMessages)
@@ -404,6 +409,7 @@ func (s *Server) routes() {
 	s.coreMux.HandleFunc("PUT /api/admin/roles/{id}", s.handleAdminUpdateRole)
 	s.coreMux.HandleFunc("DELETE /api/admin/roles/{id}", s.handleAdminDeleteRole)
 	s.coreMux.HandleFunc("GET /api/admin/system/summary", s.handleAdminSystemSummary)
+	s.coreMux.HandleFunc("GET /api/node/events", s.handleNodeEvents)
 	s.coreMux.HandleFunc("POST /api/node/heartbeat", s.handleNodeHeartbeat)
 	s.coreMux.HandleFunc("POST /api/node/actions/ack", s.handleNodeAckActions)
 	s.coreMux.HandleFunc("POST /api/node/limbo/login-policy", s.handleNodeResolveLimboLoginPolicy)

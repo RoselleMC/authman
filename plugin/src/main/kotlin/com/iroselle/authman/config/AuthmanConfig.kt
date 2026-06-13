@@ -1,4 +1,4 @@
-package mc.roselle.authman.config
+package com.iroselle.authman.config
 
 import org.spongepowered.configurate.objectmapping.ConfigSerializable
 import org.spongepowered.configurate.objectmapping.meta.Setting
@@ -47,6 +47,15 @@ class AuthmanConfig {
 
     val downstreamValidationTimeoutSeconds: Long
         get() = runtime.downstreamValidationTimeoutSeconds.coerceAtLeast(3)
+
+    val websocketEnabled: Boolean
+        get() = runtime.websocketEnabled
+
+    val websocketReconnectMinSeconds: Long
+        get() = runtime.websocketReconnectMinSeconds.coerceAtLeast(1)
+
+    val websocketReconnectMaxSeconds: Long
+        get() = runtime.websocketReconnectMaxSeconds.coerceAtLeast(websocketReconnectMinSeconds)
 
     val runtime: RuntimeConfig
         get() = runtimeRef.get()
@@ -114,14 +123,22 @@ data class RuntimeConfig(
     val downstreamInitialServer: String = "",
     val downstreamHoldingServer: String = "",
     val downstreamValidationTimeoutSeconds: Long = 10,
+    val websocketEnabled: Boolean = true,
+    val websocketReconnectMinSeconds: Long = 2,
+    val websocketReconnectMaxSeconds: Long = 60,
+    val websocketPingIntervalSeconds: Long = 25,
 ) {
     fun normalized(): RuntimeConfig {
+        val reconnectMin = websocketReconnectMinSeconds.coerceIn(1, 300)
         return copy(
             nodeName = nodeName.trim().ifEmpty { "downstream" },
             serverId = serverId.trim().ifEmpty { "default" },
             heartbeatIntervalSeconds = heartbeatIntervalSeconds.coerceAtLeast(10),
             transferCookieKey = transferCookieKey.trim().ifEmpty { "authman:transfer_grant" },
             downstreamValidationTimeoutSeconds = downstreamValidationTimeoutSeconds.coerceAtLeast(3),
+            websocketReconnectMinSeconds = reconnectMin,
+            websocketReconnectMaxSeconds = websocketReconnectMaxSeconds.coerceAtLeast(reconnectMin),
+            websocketPingIntervalSeconds = websocketPingIntervalSeconds.coerceAtLeast(5),
         )
     }
 }

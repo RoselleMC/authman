@@ -181,6 +181,7 @@ func (s *Server) handleAdminUpdatePlayerMessages(w http.ResponseWriter, r *http.
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, "player-messages", "player_messages.update", map[string]any{
 		"overridden": changed,
 	})
+	s.pushAllNodeSync(r.Context(), "player_messages.update")
 	api.WriteJSON(w, http.StatusOK, playerMessagesData(state), nil)
 }
 

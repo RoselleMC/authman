@@ -42,6 +42,7 @@ export function CoreShell() {
   const { t } = useI18n();
   const { user, hasPermission, logout } = useSession();
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -56,6 +57,19 @@ export function CoreShell() {
     document.title = title === titleSuffix ? titleSuffix : `${title} · ${titleSuffix}`;
   }, [title, titleSuffix]);
 
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return undefined;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMobileNavOpen(false);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [mobileNavOpen]);
+
   async function handleLogout() {
     try {
       await logout();
@@ -65,6 +79,24 @@ export function CoreShell() {
     }
   }
 
+  const navLinks = (variant: "sidebar" | "mobile") =>
+    items.map((item) => (
+      <NavLink
+        key={item.to}
+        to={item.to}
+        end={item.to === "/"}
+        data-testid={variant === "sidebar" ? `nav-${item.key.split(".").pop()}` : `mobile-nav-${item.key.split(".").pop()}`}
+        className={({ isActive }) => cx(variant === "sidebar" ? "nav-item" : "mobile-nav-item", isActive && "is-active")}
+        title={variant === "sidebar" && collapsed ? t(item.key) : undefined}
+        onClick={() => {
+          if (variant === "mobile") setMobileNavOpen(false);
+        }}
+      >
+        <Icon name={item.icon} size={variant === "sidebar" ? 18 : 20} />
+        {variant === "sidebar" && collapsed ? null : <span>{t(item.key)}</span>}
+      </NavLink>
+    ));
+
   return (
     <div className={cx("admin-shell", collapsed && "is-collapsed")}>
       <aside className="sidebar" data-testid="admin-sidebar">
@@ -72,19 +104,7 @@ export function CoreShell() {
           {collapsed ? <BrandMark markOnly name={brandName} /> : <BrandMark name={brandName} sub={coreLabel} />}
         </div>
         <nav className="sidebar-nav">
-          {items.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === "/"}
-              data-testid={`nav-${item.key.split(".").pop()}`}
-              className={({ isActive }) => cx("nav-item", isActive && "is-active")}
-              title={collapsed ? t(item.key) : undefined}
-            >
-              <Icon name={item.icon} size={18} />
-              {collapsed ? null : <span>{t(item.key)}</span>}
-            </NavLink>
-          ))}
+          {navLinks("sidebar")}
         </nav>
         <div className="sidebar-foot">
           <button
@@ -100,6 +120,16 @@ export function CoreShell() {
       </aside>
       <div className="admin-main">
         <header className="topbar">
+          <button
+            type="button"
+            className="mobile-brand-button"
+            aria-label={t("nav.admin.openMobile")}
+            aria-expanded={mobileNavOpen}
+            onClick={() => setMobileNavOpen(true)}
+            data-testid="mobile-nav-open"
+          >
+            <BrandMark markOnly name={brandName} />
+          </button>
           <div className="topbar-title">
             <h1>{title}</h1>
           </div>
@@ -125,6 +155,23 @@ export function CoreShell() {
           <Outlet />
         </main>
       </div>
+      {mobileNavOpen ? (
+        <div className="mobile-nav-overlay" role="dialog" aria-modal="true" aria-label={t("nav.admin.mobileMenu")} data-testid="mobile-nav-overlay">
+          <div className="mobile-nav-head">
+            <BrandMark name={brandName} sub={coreLabel} />
+            <button type="button" className="mobile-nav-close" aria-label={t("common.close")} onClick={() => setMobileNavOpen(false)} data-testid="mobile-nav-close">
+              <Icon name="close" size={18} />
+            </button>
+          </div>
+          <nav className="mobile-nav-list">
+            {navLinks("mobile")}
+          </nav>
+          <div className="mobile-nav-bottom">
+            <LocaleSelect />
+            <ThemeToggle />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

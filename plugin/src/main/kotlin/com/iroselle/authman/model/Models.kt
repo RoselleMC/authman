@@ -1,4 +1,4 @@
-package mc.roselle.authman.model
+package com.iroselle.authman.model
 
 import com.velocitypowered.api.util.GameProfile
 import java.util.UUID

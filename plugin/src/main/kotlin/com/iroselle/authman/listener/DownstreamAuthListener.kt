@@ -1,4 +1,4 @@
-package mc.roselle.authman.listener
+package com.iroselle.authman.listener
 
 import com.velocitypowered.api.event.Subscribe
 import com.velocitypowered.api.event.connection.DisconnectEvent
@@ -12,13 +12,13 @@ import com.velocitypowered.api.event.player.ServerConnectedEvent
 import com.velocitypowered.api.event.player.ServerPreConnectEvent
 import com.velocitypowered.api.proxy.Player
 import com.velocitypowered.api.proxy.ProxyServer
-import mc.roselle.authman.AuthmanPlugin
-import mc.roselle.authman.api.AuthmanClient
-import mc.roselle.authman.api.AuthmanHttpException
-import mc.roselle.authman.config.AuthmanConfig
-import mc.roselle.authman.message.AuthmanMessages
-import mc.roselle.authman.model.DownstreamResourcePack
-import mc.roselle.authman.model.DownstreamTarget
+import com.iroselle.authman.AuthmanPlugin
+import com.iroselle.authman.api.AuthmanClient
+import com.iroselle.authman.api.AuthmanHttpException
+import com.iroselle.authman.config.AuthmanConfig
+import com.iroselle.authman.message.AuthmanMessages
+import com.iroselle.authman.model.DownstreamResourcePack
+import com.iroselle.authman.model.DownstreamTarget
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.text.Component
 import org.slf4j.Logger

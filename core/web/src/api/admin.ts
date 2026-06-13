@@ -303,6 +303,11 @@ export async function fetchPassports(filters: IdentityListFilters, signal?: Abor
   return listResult(res.data, res.meta);
 }
 
+export async function createOfflinePassport(input: { username: string; password: string }): Promise<PassportRow> {
+  const res = await apiFetch<PassportRow>("/admin/passports", { method: "POST", body: input });
+  return res.data;
+}
+
 export async function fetchPassport(id: string): Promise<PassportDetail> {
   const res = await apiFetch<PassportDetail>(`/admin/passports/${encodeURIComponent(id)}`);
   return res.data;
@@ -732,6 +737,24 @@ export async function fetchIPGeoSettings(): Promise<IPGeoSettings> {
 export async function updateIPGeoSettings(input: IPGeoSettings): Promise<IPGeoSettings> {
   const { available_routes: _availableRoutes, ...body } = input;
   const res = await apiFetch<IPGeoSettings>("/admin/settings/ip-geo", { method: "PUT", body });
+  return res.data;
+}
+
+export interface NodeCommunicationSettings {
+  websocket_enabled: boolean;
+  heartbeat_interval_seconds: number;
+  websocket_reconnect_min_seconds: number;
+  websocket_reconnect_max_seconds: number;
+  websocket_ping_interval_seconds: number;
+}
+
+export async function fetchNodeCommunicationSettings(): Promise<NodeCommunicationSettings> {
+  const res = await apiFetch<NodeCommunicationSettings>("/admin/settings/communication");
+  return res.data;
+}
+
+export async function updateNodeCommunicationSettings(input: NodeCommunicationSettings): Promise<NodeCommunicationSettings> {
+  const res = await apiFetch<NodeCommunicationSettings>("/admin/settings/communication", { method: "PUT", body: input });
   return res.data;
 }
 

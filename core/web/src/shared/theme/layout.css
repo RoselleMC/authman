@@ -53,6 +53,8 @@
 
 .admin-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .topbar { flex-shrink: 0; height: 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
+.mobile-brand-button { display: none; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--color-text); cursor: pointer; }
+.mobile-brand-button:hover { background: var(--color-surface-muted); }
 .topbar-title h1 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
 .topbar-actions { display: flex; align-items: center; gap: 12px; }
 .env-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 540; color: var(--color-text-muted); background: var(--color-surface-muted); border: 1px solid var(--color-border); padding: 4px 10px; border-radius: 999px; }
@@ -85,6 +87,7 @@
 .account-menu__action--neutral:hover { background: var(--color-surface-muted); }
 .account-menu__action--neutral .account-menu__badge { margin: 0 0 0 auto; }
 .admin-content { flex: 1; min-height: 0; overflow: auto; padding: 28px 32px; }
+.mobile-nav-overlay { display: none; }
 
 /* ---------- Pages ---------- */
 .page { max-width: 1180px; margin: 0 auto; }
@@ -298,15 +301,46 @@
   .admin-content { padding: 20px 16px; }
 }
 @media (max-width: 620px) {
+  .admin-shell,
+  .admin-shell.is-collapsed { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
   .pnav-links { display: none; }
   .defrow { grid-template-columns: 120px 1fr; gap: 12px; }
   .chrome-tag { display: none; }
   .env-badge { display: none; }
-  .topbar { padding: 0 12px; }
+  .topbar { padding: 0 10px 0 12px; gap: 10px; }
+  .mobile-brand-button { display: inline-flex; }
   .topbar-title { display: none; }
-  .topbar-actions { min-width: 0; width: 100%; justify-content: flex-end; gap: 8px; }
-  .account-menu { padding-left: 8px; }
-  .account-menu__name { max-width: 72px; }
-  .account-menu__secondary { max-width: 82px; }
+  .topbar-actions { min-width: 0; width: auto; margin-left: auto; justify-content: flex-end; gap: 8px; }
+  .topbar-actions > .pref-select { display: none; }
+  .topbar .account-menu { padding-left: 0; border-left: 0; }
+  .topbar .account-menu__trigger { width: 40px; height: 40px; justify-content: center; gap: 0; padding: 0; border-radius: var(--radius-md); }
+  .topbar .account-menu__trigger:hover,
+  .topbar .account-menu__trigger.is-open { background: var(--color-surface-muted); }
+  .topbar .account-menu__summary,
+  .topbar .account-menu__trigger > svg { display: none !important; }
+  .topbar .account-menu__avatar { width: 32px; height: 32px; }
   .account-menu__panel { width: min(292px, calc(100vw - 24px)); }
+  .admin-content { padding: 18px 12px 28px; }
+  .mobile-nav-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 140;
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface);
+    color: var(--color-text);
+    padding: max(14px, env(safe-area-inset-top)) 16px max(18px, env(safe-area-inset-bottom));
+    overflow-y: auto;
+  }
+  .mobile-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 2px 0 16px; border-bottom: 1px solid var(--color-border); }
+  .mobile-nav-close { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--radius-md); background: var(--color-surface-muted); color: var(--color-text); cursor: pointer; }
+  .mobile-nav-close:hover { background: var(--color-surface-hover); }
+  .mobile-nav-list { display: flex; flex-direction: column; gap: 4px; padding: 16px 0; }
+  .mobile-nav-item { display: flex; align-items: center; gap: 12px; min-height: 46px; padding: 0 12px; border-radius: var(--radius-md); color: var(--color-text-muted); text-decoration: none; font-size: 15px; font-weight: 560; }
+  .mobile-nav-item:hover { background: var(--color-surface-muted); color: var(--color-text); }
+  .mobile-nav-item.is-active { background: var(--color-primary-soft); color: var(--color-primary); }
+  .mobile-nav-bottom { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--color-border); display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .mobile-nav-bottom .pref-select { width: 100%; }
+  .mobile-nav-bottom .pref-select__trigger { width: 100%; justify-content: space-between; }
 }

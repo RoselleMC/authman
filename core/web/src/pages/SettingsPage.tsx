@@ -53,6 +53,7 @@ import {
   fetchExternalAPITokens,
   fetchIPGeoSettings,
   fetchMojangSettings,
+  fetchNodeCommunicationSettings,
   fetchPasswordRecoveryKeyStatus,
   fetchSMTPSettings,
   fetchSystemSummary,
@@ -72,6 +73,7 @@ import {
   updateExternalAPIToken,
   updateIPGeoSettings,
   updateMojangSettings,
+  updateNodeCommunicationSettings,
   updateSMTPSettings,
   type AdminAccountSecurity,
   type AdminPermission,
@@ -81,15 +83,16 @@ import {
   type IPGeoSettings,
   type ListFilters,
   type MojangRuntimeSettings,
+  type NodeCommunicationSettings,
   type PasswordRecoveryKeyStatus,
   type RouteChoice,
   type SMTPSettings,
 } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 
-type SettingsSection = "account" | "admins" | "roles" | "external-api" | "mojang" | "geo" | "smtp" | "system" | "security";
+type SettingsSection = "account" | "admins" | "roles" | "external-api" | "mojang" | "geo" | "communication" | "smtp" | "system" | "security";
 
-const SECTIONS: SettingsSection[] = ["account", "admins", "roles", "external-api", "mojang", "geo", "smtp", "system", "security"];
+const SECTIONS: SettingsSection[] = ["account", "admins", "roles", "external-api", "mojang", "geo", "communication", "smtp", "system", "security"];
 const SYSTEM_FACTORY_RESET_CONFIRM = "RESET AUTHMAN";
 
 function roleTone(role: string): "info" | "success" | "neutral" {
@@ -125,6 +128,7 @@ export function SettingsPage() {
           { value: "external-api", label: t("admin.settings.externalApi"), icon: "key" },
           { value: "mojang", label: t("admin.settings.mojang"), icon: "activity" },
           { value: "geo", label: t("admin.settings.geo"), icon: "globe" },
+          { value: "communication", label: t("admin.settings.communication"), icon: "link" },
           { value: "smtp", label: t("admin.settings.smtp"), icon: "mail" },
           { value: "system", label: t("admin.settings.system"), icon: "database" },
           { value: "security", label: t("admin.settings.security"), icon: "key" },
@@ -137,6 +141,7 @@ export function SettingsPage() {
         {current === "external-api" ? <ExternalAPITokensPanel /> : null}
         {current === "mojang" ? <MojangSettingsPanel /> : null}
         {current === "geo" ? <IPGeoSettingsPanel /> : null}
+        {current === "communication" ? <CommunicationSettingsPanel /> : null}
         {current === "smtp" ? <SMTPSettingsPanel /> : null}
         {current === "system" ? <SystemPanel /> : null}
         {current === "security" ? <SecurityPanel /> : null}
@@ -1673,6 +1678,103 @@ function IPGeoSettingsPanel() {
           selected={form.enabled_route_ids}
           onChange={(enabled_route_ids) => setForm({ ...form, enabled_route_ids })}
         />
+      </Card>
+    </SettingsStack>
+  );
+}
+
+function CommunicationSettingsPanel() {
+  const { t } = useI18n();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["settings.communication"], queryFn: fetchNodeCommunicationSettings });
+  const [form, setForm] = useState<NodeCommunicationSettings | null>(null);
+
+  useEffect(() => {
+    if (q.data) setForm(q.data);
+  }, [q.data]);
+
+  const save = useMutation({
+    mutationFn: () => updateNodeCommunicationSettings(form!),
+    onSuccess: (next) => {
+      setForm(next);
+      toast.push({ tone: "success", title: t("admin.settings.communication.saved") });
+      void qc.invalidateQueries({ queryKey: ["settings.communication"] });
+      void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
+      void qc.invalidateQueries({ queryKey: ["admin.loginPortals"] });
+      void qc.invalidateQueries({ queryKey: ["admin.downstreamNodes"] });
+    },
+  });
+
+  function patch<K extends keyof NodeCommunicationSettings>(key: K, value: NodeCommunicationSettings[K]) {
+    if (!form) return;
+    setForm({ ...form, [key]: value });
+  }
+
+  if (q.error) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
+  if (q.isLoading || !form) return <LoadingState />;
+
+  return (
+    <SettingsStack>
+      <Card
+        title={t("admin.settings.communication")}
+        actions={<Button variant="primary" icon="check" loading={save.isPending} onClick={() => save.mutate()}>{t("common.save")}</Button>}
+      >
+        <p className="section-copy">{t("admin.settings.communication.desc")}</p>
+        <div className="settings-form-grid">
+          <Field label={t("admin.settings.communication.websocket")}>
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={form.websocket_enabled}
+                onChange={(e) => patch("websocket_enabled", e.target.checked)}
+                data-testid="communication-websocket-enabled"
+              />
+              <span>{form.websocket_enabled ? t("status.enabled") : t("status.disabled")}</span>
+            </label>
+          </Field>
+          <Field label={t("admin.settings.communication.heartbeat")} hint={t("admin.settings.communication.heartbeat.hint")}>
+            <Input
+              type="number"
+              min={10}
+              max={600}
+              value={form.heartbeat_interval_seconds}
+              onChange={(e) => patch("heartbeat_interval_seconds", Number(e.target.value) || 60)}
+              data-testid="communication-heartbeat"
+            />
+          </Field>
+          <Field label={t("admin.settings.communication.reconnectMin")} hint={t("admin.settings.communication.reconnect.hint")}>
+            <Input
+              type="number"
+              min={1}
+              max={300}
+              value={form.websocket_reconnect_min_seconds}
+              onChange={(e) => patch("websocket_reconnect_min_seconds", Number(e.target.value) || 2)}
+              data-testid="communication-reconnect-min"
+            />
+          </Field>
+          <Field label={t("admin.settings.communication.reconnectMax")}>
+            <Input
+              type="number"
+              min={1}
+              max={900}
+              value={form.websocket_reconnect_max_seconds}
+              onChange={(e) => patch("websocket_reconnect_max_seconds", Number(e.target.value) || 60)}
+              data-testid="communication-reconnect-max"
+            />
+          </Field>
+          <Field label={t("admin.settings.communication.ping")} hint={t("admin.settings.communication.ping.hint")}>
+            <Input
+              type="number"
+              min={5}
+              max={300}
+              value={form.websocket_ping_interval_seconds}
+              onChange={(e) => patch("websocket_ping_interval_seconds", Number(e.target.value) || 25)}
+              data-testid="communication-ping"
+            />
+          </Field>
+        </div>
+        <Alert tone="info">{t("admin.settings.communication.fallback")}</Alert>
       </Card>
     </SettingsStack>
   );

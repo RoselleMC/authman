@@ -9,8 +9,10 @@ import {
   Dialog,
   EmptyState,
   ErrorState,
+  Field,
   Icon,
   IPLocation,
+  Input,
   PageHeader,
   PageShell,
   StatusBadge,
@@ -22,7 +24,7 @@ import {
   navigateWithBack,
   type ListColumn,
 } from "@authman/shared";
-import { createPassportBan, fetchPassports, revokeBan, updatePassportStatus, type IdentityListFilters, type PassportRow } from "../api/admin";
+import { createOfflinePassport, createPassportBan, fetchPassports, revokeBan, updatePassportStatus, type IdentityListFilters, type PassportRow } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 import { BanDurationFields, BanStateCell, LockUntilCell, durationSeconds, isValidDuration, type DurationUnit } from "../components/PlayerStateCells";
 
@@ -35,6 +37,9 @@ export function PassportsPage() {
   const location = useLocation();
   const toast = useToast();
   const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [bulkBanRows, setBulkBanRows] = useState<PassportRow[]>([]);
   const [banReason, setBanReason] = useState("");
   const [banDurationValue, setBanDurationValue] = useState("1");
@@ -55,6 +60,18 @@ export function PassportsPage() {
     return next;
   }, [list.state]);
   const q = useQuery({ queryKey: ["admin.passports", filters], queryFn: ({ signal }) => fetchPassports(filters, signal) });
+  const createMut = useMutation({
+    mutationFn: () => createOfflinePassport({ username: username.trim(), password }),
+    onSuccess: (passport) => {
+      toast.push({ tone: "success", title: t("admin.passports.created") });
+      setOpen(false);
+      setUsername("");
+      setPassword("");
+      void qc.invalidateQueries({ queryKey: ["admin.passports"] });
+      navigateWithBack(navigate, `/passports/${passport.id}`, location);
+    },
+    onError: (err) => toast.danger(err instanceof Error ? err.message : t("common.unknown")),
+  });
   const statusMut = useMutation({
     mutationFn: async ({ rows, status }: { rows: PassportRow[]; status: PassportRow["status"] }) => {
       await Promise.all(rows.map((row) => updatePassportStatus(row.id, status)));
@@ -161,7 +178,11 @@ export function PassportsPage() {
 
   return (
     <PageShell>
-      <PageHeader title={t("admin.passports.heading")} desc={t("admin.passports.desc")} />
+      <PageHeader
+        title={t("admin.passports.heading")}
+        desc={t("admin.passports.desc")}
+        action={<Button icon="plus" onClick={() => setOpen(true)}>{t("admin.passports.create")}</Button>}
+      />
       {q.error ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : null}
       <Card noBody className="table-card">
         <AdvancedList
@@ -188,6 +209,27 @@ export function PassportsPage() {
           testId="passports"
         />
       </Card>
+      <Dialog
+        open={open}
+        onClose={() => !createMut.isPending && setOpen(false)}
+        icon="plus"
+        title={t("admin.passports.create")}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setOpen(false)}>{t("common.cancel")}</Button>
+            <Button variant="primary" loading={createMut.isPending} disabled={!username.trim() || password.length < 8} onClick={() => createMut.mutate()}>{t("common.confirm")}</Button>
+          </>
+        }
+      >
+        <div className="form-grid">
+          <Field label={t("admin.passports.createUsername")} hint={t("admin.passports.createHint")}>
+            <Input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" />
+          </Field>
+          <Field label={t("admin.passports.createPassword")} hint={t("admin.passports.passwordHint")}>
+            <Input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="new-password" />
+          </Field>
+        </div>
+      </Dialog>
       <Dialog
         open={bulkBanRows.length > 0}
         onClose={() => !banMut.isPending && setBulkBanRows([])}

@@ -1,4 +1,4 @@
-package mc.roselle.authman.message
+package com.iroselle.authman.message
 
 import java.util.concurrent.atomic.AtomicReference
 import net.kyori.adventure.text.Component

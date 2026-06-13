@@ -3,7 +3,7 @@ plugins {
     id("com.gradleup.shadow") version "8.3.6"
 }
 
-group = "mc.roselle.authman"
+group = "com.iroselle.authman"
 version = "0.1.0-dev"
 
 dependencies {
@@ -25,10 +25,10 @@ tasks {
     shadowJar {
         archiveBaseName.set("authman")
         archiveClassifier.set("")
-        relocate("com.google.gson", "mc.roselle.authman.libs.gson")
-        relocate("org.spongepowered.configurate", "mc.roselle.authman.libs.configurate")
-        relocate("org.yaml.snakeyaml", "mc.roselle.authman.libs.snakeyaml")
-        relocate("io.leangen.geantyref", "mc.roselle.authman.libs.geantyref")
+        relocate("com.google.gson", "com.iroselle.authman.libs.gson")
+        relocate("org.spongepowered.configurate", "com.iroselle.authman.libs.configurate")
+        relocate("org.yaml.snakeyaml", "com.iroselle.authman.libs.snakeyaml")
+        relocate("io.leangen.geantyref", "com.iroselle.authman.libs.geantyref")
         minimize()
     }
     build {

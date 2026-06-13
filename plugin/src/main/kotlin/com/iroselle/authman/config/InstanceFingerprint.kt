@@ -1,4 +1,4 @@
-package mc.roselle.authman.config
+package com.iroselle.authman.config
 
 import java.nio.file.Files
 import java.nio.file.Path

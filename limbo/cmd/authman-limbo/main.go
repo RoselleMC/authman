@@ -30,6 +30,7 @@ import (
 	"github.com/RoselleMC/limbgo/protocol/limbo"
 	"github.com/RoselleMC/limbgo/world/schematic"
 	"go.minekube.com/common/minecraft/component"
+	"golang.org/x/net/websocket"
 )
 
 const version = "0.1.0-dev"
@@ -204,6 +205,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go p.heartbeatLoop(ctx)
+	go p.eventLoop(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -242,16 +244,12 @@ func loadWorld(cfg config) (limbgo.World, limbgo.SpawnTarget, error) {
 }
 
 func (p *portal) heartbeatLoop(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
 	for {
-		select {
-		case <-ctx.Done():
+		if err := p.heartbeat(ctx); err != nil {
+			p.logger.Warn("Authman heartbeat failed", "err", err)
+		}
+		if !sleepContext(ctx, p.heartbeatInterval()) {
 			return
-		case <-ticker.C:
-			if err := p.heartbeat(ctx); err != nil {
-				p.logger.Warn("Authman heartbeat failed", "err", err)
-			}
 		}
 	}
 }
@@ -261,6 +259,11 @@ func (p *portal) heartbeat(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	p.applyHeartbeat(res)
+	return nil
+}
+
+func (p *portal) applyHeartbeat(res heartbeatResponse) {
 	p.msgMu.Lock()
 	p.nodeID = res.Node.ID
 	p.runtime = res.RuntimeConfig
@@ -268,7 +271,106 @@ func (p *portal) heartbeat(ctx context.Context) error {
 	p.messages = res.PlayerMessages.Messages
 	p.dialogs = res.PlayerMessages.Dialogs
 	p.msgMu.Unlock()
-	return nil
+}
+
+func (p *portal) eventLoop(ctx context.Context) {
+	for {
+		if !p.websocketEnabled() {
+			if !sleepContext(ctx, p.heartbeatInterval()) {
+				return
+			}
+			continue
+		}
+		if err := p.runEventStream(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			p.logger.Warn("Authman node event stream disconnected", "err", err)
+		}
+		wait := p.websocketReconnectMin()
+		for {
+			if !sleepContext(ctx, wait) {
+				return
+			}
+			if !p.websocketEnabled() {
+				break
+			}
+			if err := p.runEventStream(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				p.logger.Warn("Authman node event stream disconnected", "err", err)
+				wait = minDuration(wait*2, p.websocketReconnectMax())
+				continue
+			}
+			wait = p.websocketReconnectMin()
+			break
+		}
+	}
+}
+
+func (p *portal) runEventStream(ctx context.Context) error {
+	p.logger.Info("connecting Authman node event stream")
+	ws, err := p.client.eventStream(ctx)
+	if err != nil {
+		return err
+	}
+	defer ws.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		var event nodeEvent
+		if err := websocket.JSON.Receive(ws, &event); err != nil {
+			return err
+		}
+		switch event.Type {
+		case "sync":
+			p.applyHeartbeat(event.Data)
+		case "revoked":
+			p.logger.Warn("Authman node token revoked; portal locked")
+			p.setLocked(true)
+			return errors.New("node token revoked")
+		case "ping":
+			continue
+		case "error":
+			return fmt.Errorf("Authman node event error: %s", event.Error.Message)
+		default:
+			p.logger.Debug("ignored Authman node event", "type", event.Type)
+		}
+	}
+}
+
+func (p *portal) heartbeatInterval() time.Duration {
+	p.msgMu.RLock()
+	defer p.msgMu.RUnlock()
+	seconds := clampInt(intFromMap(p.runtime, "heartbeat_interval_seconds"), 5, 3600)
+	if seconds == 0 {
+		seconds = 60
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func (p *portal) websocketEnabled() bool {
+	p.msgMu.RLock()
+	defer p.msgMu.RUnlock()
+	return boolFromMap(p.runtime, "websocket_enabled", true)
+}
+
+func (p *portal) websocketReconnectMin() time.Duration {
+	p.msgMu.RLock()
+	defer p.msgMu.RUnlock()
+	seconds := clampInt(intFromMap(p.runtime, "websocket_reconnect_min_seconds"), 1, 600)
+	if seconds == 0 {
+		seconds = 2
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func (p *portal) websocketReconnectMax() time.Duration {
+	p.msgMu.RLock()
+	defer p.msgMu.RUnlock()
+	seconds := clampInt(intFromMap(p.runtime, "websocket_reconnect_max_seconds"), 1, 3600)
+	if seconds == 0 {
+		seconds = 60
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func (p *portal) isLocked() bool {
@@ -1338,6 +1440,15 @@ type heartbeatResponse struct {
 	} `json:"player_messages"`
 }
 
+type nodeEvent struct {
+	Type  string            `json:"type"`
+	Data  heartbeatResponse `json:"data"`
+	Error struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
 type profileSummary struct {
 	ID           string `json:"id"`
 	UUID         string `json:"uuid"`
@@ -1430,6 +1541,16 @@ func (c *coreClient) heartbeat(ctx context.Context) (heartbeatResponse, error) {
 		"instance_fingerprint": instanceFingerprint(c.cfg),
 		"plugin_version":       version,
 	})
+}
+
+func (c *coreClient) eventStream(ctx context.Context) (*websocket.Conn, error) {
+	config, err := websocket.NewConfig(coreWebSocketURL(c.cfg.CoreURL, "/api/node/events"), strings.TrimRight(strings.TrimSpace(c.cfg.CoreURL), "/"))
+	if err != nil {
+		return nil, err
+	}
+	config.Header.Set("Authorization", "Bearer "+c.cfg.NodeToken)
+	config.Header.Set("X-Authman-Instance", instanceFingerprint(c.cfg))
+	return config.DialContext(ctx)
 }
 
 func (c *coreClient) verifySession(ctx context.Context, proof limbgo.SessionProof) (limbgo.VerifiedProfile, error) {
@@ -1619,9 +1740,95 @@ func coreURL(base string, path string) string {
 	return strings.TrimRight(strings.TrimSpace(base), "/") + "/" + strings.TrimLeft(path, "/")
 }
 
+func coreWebSocketURL(base string, path string) string {
+	raw := coreURL(base, path)
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	switch parsed.Scheme {
+	case "https":
+		parsed.Scheme = "wss"
+	case "http", "":
+		parsed.Scheme = "ws"
+	}
+	return parsed.String()
+}
+
 func instanceFingerprint(cfg config) string {
 	seed := cfg.NodeName + "|" + cfg.Listen + "|" + cfg.CoreURL
 	return "limbo-" + strconv.FormatUint(fnv64(seed), 16)
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func intFromMap(values map[string]any, key string) int {
+	if values == nil {
+		return 0
+	}
+	switch value := values[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	case json.Number:
+		n, _ := value.Int64()
+		return int(n)
+	case string:
+		n, _ := strconv.Atoi(strings.TrimSpace(value))
+		return n
+	default:
+		return 0
+	}
+}
+
+func boolFromMap(values map[string]any, key string, fallback bool) bool {
+	if values == nil {
+		return fallback
+	}
+	switch value := values[key].(type) {
+	case bool:
+		return value
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err == nil {
+			return parsed
+		}
+		return fallback
+	default:
+		return fallback
+	}
+}
+
+func clampInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 func fnv64(text string) uint64 {

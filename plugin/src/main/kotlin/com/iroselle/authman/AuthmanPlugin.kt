@@ -1,18 +1,19 @@
-package mc.roselle.authman
+package com.iroselle.authman
 
 import com.google.inject.Inject
 import com.velocitypowered.api.event.Subscribe
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent
+import com.velocitypowered.api.event.proxy.ProxyShutdownEvent
 import com.velocitypowered.api.plugin.Plugin
 import com.velocitypowered.api.proxy.ProxyServer
-import mc.roselle.authman.api.AuthmanClient
-import mc.roselle.authman.command.AuthmanCommand
-import mc.roselle.authman.config.AuthmanConfig
-import mc.roselle.authman.config.InstanceFingerprint
-import mc.roselle.authman.listener.DownstreamAuthListener
-import mc.roselle.authman.message.AuthmanMessages
-import mc.roselle.authman.model.DownstreamServerOption
-import mc.roselle.authman.model.NodeAction
+import com.iroselle.authman.api.AuthmanClient
+import com.iroselle.authman.command.AuthmanCommand
+import com.iroselle.authman.config.AuthmanConfig
+import com.iroselle.authman.config.InstanceFingerprint
+import com.iroselle.authman.listener.DownstreamAuthListener
+import com.iroselle.authman.message.AuthmanMessages
+import com.iroselle.authman.model.DownstreamServerOption
+import com.iroselle.authman.model.NodeAction
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
@@ -22,6 +23,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlin.math.min
 
 @Plugin(
     id = "authman",
@@ -43,6 +45,10 @@ class AuthmanPlugin @Inject constructor(
     private var coreAccessRevoked: Boolean = false
     @Volatile
     private var downstreamTransferTargets: List<DownstreamServerOption> = emptyList()
+    @Volatile
+    private var eventLoopRunning: Boolean = false
+    @Volatile
+    private var heartbeatLoopRunning: Boolean = false
 
     @Subscribe
     fun onProxyInitialize(event: ProxyInitializeEvent) {
@@ -66,9 +72,14 @@ class AuthmanPlugin @Inject constructor(
             instanceFingerprint,
         )
         sendHeartbeat()
-        server.scheduler.buildTask(this, Runnable { sendHeartbeat() })
-            .repeat(config.heartbeatIntervalSeconds, TimeUnit.SECONDS)
-            .schedule()
+        startHeartbeatLoop()
+        startEventLoop()
+    }
+
+    @Subscribe
+    fun onProxyShutdown(event: ProxyShutdownEvent) {
+        eventLoopRunning = false
+        heartbeatLoopRunning = false
     }
 
     fun reconnectNow(): Boolean = sendHeartbeat()
@@ -91,27 +102,91 @@ class AuthmanPlugin @Inject constructor(
                 }
                 return false
             }
-            response.runtime?.let {
-                config.applyRuntime(it)
-            }
-            downstreamTransferTargets = response.downstreamServers
-            messages.apply(response.playerMessages)
-            val acked = executeNodeActions(response.actions)
-            if (acked.isNotEmpty()) {
-                try {
-                    client.ackActions(acked)
-                } catch (ex: Exception) {
-                    logger.warn("Failed to ACK Authman node actions {}", acked, ex)
-                }
-            }
-            if (coreAccessRevoked) {
-                logger.info("Authman Core access restored after successful heartbeat")
-            }
-            coreAccessRevoked = false
+            applySync(response, "heartbeat")
             return true
         } catch (ex: Exception) {
             logger.warn("Authman heartbeat failed", ex)
             return false
+        }
+    }
+
+    private fun applySync(response: com.iroselle.authman.api.HeartbeatResult, source: String) {
+        response.runtime?.let {
+            config.applyRuntime(it)
+        }
+        downstreamTransferTargets = response.downstreamServers
+        messages.apply(response.playerMessages)
+        val acked = executeNodeActions(response.actions)
+        if (acked.isNotEmpty()) {
+            try {
+                client.ackActions(acked)
+            } catch (ex: Exception) {
+                logger.warn("Failed to ACK Authman node actions {}", acked, ex)
+            }
+        }
+        if (coreAccessRevoked) {
+            logger.info("Authman Core access restored through {}", source)
+        }
+        coreAccessRevoked = false
+    }
+
+    private fun startHeartbeatLoop() {
+        if (heartbeatLoopRunning) {
+            return
+        }
+        heartbeatLoopRunning = true
+        val thread = Thread {
+            while (heartbeatLoopRunning) {
+                sleepQuietly(config.heartbeatIntervalSeconds)
+                if (heartbeatLoopRunning) {
+                    sendHeartbeat()
+                }
+            }
+        }
+        thread.name = "authman-heartbeat"
+        thread.isDaemon = true
+        thread.start()
+    }
+
+    private fun startEventLoop() {
+        if (eventLoopRunning) {
+            return
+        }
+        eventLoopRunning = true
+        val thread = Thread {
+            var delaySeconds = config.websocketReconnectMinSeconds
+            while (eventLoopRunning) {
+                if (!config.websocketEnabled) {
+                    sleepQuietly(config.heartbeatIntervalSeconds)
+                    delaySeconds = config.websocketReconnectMinSeconds
+                    continue
+                }
+                try {
+                    logger.info("Connecting Authman node event stream")
+                    client.connectEvents(
+                        onSync = { applySync(it, "websocket") },
+                        onRevoked = { lockFromCore("Core revoked this node token") },
+                    ).join()
+                    delaySeconds = config.websocketReconnectMinSeconds
+                } catch (ex: Exception) {
+                    if (eventLoopRunning && config.websocketEnabled) {
+                        logger.warn("Authman node event stream disconnected; REST heartbeat remains active", ex)
+                    }
+                }
+                sleepQuietly(delaySeconds)
+                delaySeconds = min(config.websocketReconnectMaxSeconds, (delaySeconds * 2).coerceAtLeast(config.websocketReconnectMinSeconds))
+            }
+        }
+        thread.name = "authman-node-events"
+        thread.isDaemon = true
+        thread.start()
+    }
+
+    private fun sleepQuietly(seconds: Long) {
+        try {
+            Thread.sleep(seconds.coerceAtLeast(1) * 1000L)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
     }
 

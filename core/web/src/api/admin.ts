@@ -471,6 +471,7 @@ export interface PortalRuntimeConfig {
   node_name?: string;
   server_id?: string;
   heartbeat_interval_seconds?: number;
+  proxy_protocol_enabled?: boolean;
   resolve_raw_offline_names?: boolean;
   max_password_attempts?: number;
   chat_cooldown_millis?: number;

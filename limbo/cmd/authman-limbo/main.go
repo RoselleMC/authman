@@ -51,6 +51,8 @@ type config struct {
 	LoginMode      string
 	OnlineServerID string
 	LogLevel       string
+	ProxyTrusted   string
+	ProxyTimeoutMS int64
 }
 
 type portal struct {
@@ -71,6 +73,7 @@ type portal struct {
 	targetNames   map[string]string
 	authMu        sync.Mutex
 	authed        map[limbgo.PlayerSession]authedSession
+	restartCh     chan string
 }
 
 // authedSession remembers that THIS connection already proved its passport so
@@ -134,6 +137,8 @@ func main() {
 	flag.StringVar(&cfg.LoginMode, "login-mode", getenv("AUTHMAN_LIMBO_LOGIN_MODE", "hybrid"), "limbo login mode: hybrid, offline, or online")
 	flag.StringVar(&cfg.OnlineServerID, "online-server-id", getenv("AUTHMAN_LIMBO_ONLINE_SERVER_ID", "authman-limbo"), "serverId challenge used for online-mode session verification")
 	flag.StringVar(&cfg.LogLevel, "log-level", getenv("AUTHMAN_LIMBO_LOG_LEVEL", "info"), "log level: debug, info, warn, or error")
+	flag.StringVar(&cfg.ProxyTrusted, "proxy-trusted-proxies", getenv("AUTHMAN_LIMBO_PROXY_TRUSTED_PROXIES", ""), "comma-separated trusted PROXY protocol upstream IPs or CIDRs")
+	flag.Int64Var(&cfg.ProxyTimeoutMS, "proxy-header-timeout-millis", getenvInt64("AUTHMAN_LIMBO_PROXY_HEADER_TIMEOUT_MILLIS", 5000), "PROXY protocol header read timeout in milliseconds")
 	flag.Parse()
 
 	if err := validateConfig(cfg); err != nil {
@@ -164,6 +169,7 @@ func main() {
 		logger.Warn("initial Authman heartbeat failed; portal starts locked", "err", err)
 		p.setLocked(true)
 	}
+	p.restartCh = make(chan string, 1)
 
 	motd, err := limbgo.ParseMiniMessage("<green>Authman</green> <gray>login portal</gray>")
 	if err != nil {
@@ -187,41 +193,13 @@ func main() {
 			return limbgo.RejectProtocol(p.message("limbo.kick.client_too_old", map[string]string{"player": ""}))
 		}),
 	}
-	server, err := limbgo.NewServer(limbgo.Config{
-		Addr:           cfg.Listen,
-		ProtocolRouter: router,
-		JoinResolver:   limbgo.JoinResolverFunc(p.resolveJoin),
-		Events: limbgo.PlayerEventHandlerFuncs{
-			Join:        p.handleJoin,
-			DialogClick: p.handleDialogClick,
-			Chat:        p.handleChat,
-		},
-		Logger: logger,
-	})
-	if err != nil {
-		fatal(err)
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go p.heartbeatLoop(ctx)
 	go p.eventLoop(ctx)
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.ListenAndServe(ctx)
-	}()
-	select {
-	case err := <-errCh:
-		if err != nil {
-			fatal(err)
-		}
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			fatal(err)
-		}
+	if err := p.runServerLoop(ctx, router); err != nil {
+		fatal(err)
 	}
 }
 
@@ -241,6 +219,82 @@ func loadWorld(cfg config) (limbgo.World, limbgo.SpawnTarget, error) {
 		Position: limbgo.Vec3{X: 0, Y: 65, Z: 0},
 		GameMode: limbgo.GameModeAdventure,
 	}, nil
+}
+
+func (p *portal) runServerLoop(ctx context.Context, router limbo.Router) error {
+	for {
+		server, err := p.newServer(router)
+		if err != nil {
+			return err
+		}
+		errCh := make(chan error, 1)
+		serverCtx, cancelServer := context.WithCancel(ctx)
+		go func() {
+			errCh <- server.ListenAndServe(serverCtx)
+		}()
+
+		select {
+		case err := <-errCh:
+			cancelServer()
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		case reason := <-p.restartCh:
+			p.logger.Info("restarting Authman limbo listener", "reason", reason)
+			cancelServer()
+			shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, net.ErrClosed) {
+				p.logger.Warn("Authman limbo listener shutdown failed", "err", err)
+			}
+			cancelShutdown()
+			if err := waitServerExit(errCh, 5*time.Second); err != nil {
+				p.logger.Warn("Authman limbo listener did not stop cleanly", "err", err)
+			}
+		case <-ctx.Done():
+			cancelServer()
+			shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, net.ErrClosed) {
+				p.logger.Warn("Authman limbo listener shutdown failed", "err", err)
+			}
+			cancelShutdown()
+			_ = waitServerExit(errCh, 5*time.Second)
+			return nil
+		}
+	}
+}
+
+func (p *portal) newServer(router limbo.Router) (*limbgo.Server, error) {
+	proxyProtocol := p.proxyProtocolConfig()
+	if proxyProtocol.Enabled {
+		if len(proxyProtocol.TrustedProxies) == 0 {
+			p.logger.Warn("PROXY protocol mode enabled without trusted proxy restrictions")
+		}
+		p.logger.Info("PROXY protocol mode enabled", "required", proxyProtocol.Required, "trusted_proxies", strings.Join(proxyProtocol.TrustedProxies, ","))
+	}
+	return limbgo.NewServer(limbgo.Config{
+		Addr:           p.cfg.Listen,
+		ProtocolRouter: router,
+		JoinResolver:   limbgo.JoinResolverFunc(p.resolveJoin),
+		Events: limbgo.PlayerEventHandlerFuncs{
+			Join:        p.handleJoin,
+			DialogClick: p.handleDialogClick,
+			Chat:        p.handleChat,
+		},
+		ProxyProtocol: proxyProtocol,
+		Logger:        p.logger,
+	})
+}
+
+func waitServerExit(errCh <-chan error, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-errCh:
+		return err
+	case <-timer.C:
+		return errors.New("timeout waiting for limbo listener shutdown")
+	}
 }
 
 func (p *portal) heartbeatLoop(ctx context.Context) {
@@ -264,6 +318,7 @@ func (p *portal) heartbeat(ctx context.Context) error {
 }
 
 func (p *portal) applyHeartbeat(res heartbeatResponse) {
+	proxyBefore := p.proxyProtocolEnabled()
 	p.msgMu.Lock()
 	p.nodeID = res.Node.ID
 	p.runtime = res.RuntimeConfig
@@ -271,6 +326,10 @@ func (p *portal) applyHeartbeat(res heartbeatResponse) {
 	p.messages = res.PlayerMessages.Messages
 	p.dialogs = res.PlayerMessages.Dialogs
 	p.msgMu.Unlock()
+	proxyAfter := p.proxyProtocolEnabled()
+	if proxyBefore != proxyAfter {
+		p.requestServerRestart("proxy_protocol_mode_changed")
+	}
 }
 
 func (p *portal) eventLoop(ctx context.Context) {
@@ -371,6 +430,33 @@ func (p *portal) websocketReconnectMax() time.Duration {
 		seconds = 60
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func (p *portal) proxyProtocolEnabled() bool {
+	p.msgMu.RLock()
+	defer p.msgMu.RUnlock()
+	return boolFromMap(p.runtime, "proxy_protocol_enabled", false)
+}
+
+func (p *portal) proxyProtocolConfig() limbgo.ProxyProtocolConfig {
+	enabled := p.proxyProtocolEnabled()
+	return limbgo.ProxyProtocolConfig{
+		Enabled:           enabled,
+		Required:          enabled,
+		TrustedProxies:    splitCSV(p.cfg.ProxyTrusted),
+		ReadHeaderTimeout: time.Duration(p.cfg.ProxyTimeoutMS) * time.Millisecond,
+	}
+}
+
+func (p *portal) requestServerRestart(reason string) {
+	if p.restartCh == nil {
+		return
+	}
+	select {
+	case p.restartCh <- reason:
+	default:
+		p.logger.Info("Authman limbo listener restart already pending", "reason", reason)
+	}
 }
 
 func (p *portal) isLocked() bool {
@@ -1209,6 +1295,33 @@ func getenv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func getenvInt64(key string, fallback int64) int64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func splitCSV(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		clean := strings.TrimSpace(part)
+		if clean != "" {
+			out = append(out, clean)
+		}
+	}
+	return out
 }
 
 func parseLogLevel(value string) slog.Level {

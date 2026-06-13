@@ -1902,6 +1902,10 @@ func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]
 	if settings.TransferCookieKey != "" {
 		base["transfer_cookie_key"] = settings.TransferCookieKey
 	}
+	base["proxy_protocol_enabled"] = false
+	mergeRuntimeConfig(base, n.RuntimeConfig, []string{
+		"proxy_protocol_enabled",
+	})
 	return base
 }
 

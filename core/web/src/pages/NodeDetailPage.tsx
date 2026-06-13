@@ -34,6 +34,7 @@ interface FormState {
   name: string;
   server_id: string;
   heartbeat_interval_seconds: string;
+  proxy_protocol_enabled: boolean;
   resolve_raw_offline_names: boolean;
   transfer_cookie_key: string;
   downstream_initial_server: string;
@@ -59,6 +60,7 @@ function toForm(n: SafeVelocityNode): FormState {
     name: n.name,
     server_id: text(cfg.server_id, n.server_id || ""),
     heartbeat_interval_seconds: numberText(cfg.heartbeat_interval_seconds, 60),
+    proxy_protocol_enabled: boolValue(cfg.proxy_protocol_enabled, false),
     resolve_raw_offline_names: boolValue(cfg.resolve_raw_offline_names, true),
     transfer_cookie_key: text(cfg.transfer_cookie_key, "authman:transfer_grant"),
     downstream_initial_server: text(cfg.downstream_initial_server, text(cfg.gate_initial_server)),
@@ -77,6 +79,12 @@ function toRuntime(form: FormState): Record<string, unknown> {
     downstream_initial_server: form.downstream_initial_server.trim(),
     downstream_holding_server: form.downstream_holding_server.trim(),
     downstream_validation_timeout_seconds: Number(form.downstream_validation_timeout_seconds) || 10,
+  };
+}
+
+function toLimboRuntime(form: FormState): Record<string, unknown> {
+  return {
+    proxy_protocol_enabled: form.proxy_protocol_enabled,
   };
 }
 
@@ -114,7 +122,11 @@ export function NodeDetailPage() {
   }, [initial]);
 
   const save = useMutation({
-    mutationFn: (current: FormState) => updateNode(id, { name: current.name.trim(), runtime_config: node?.kind === "downstream_velocity" ? toRuntime(current) : {} }),
+    mutationFn: (current: FormState) =>
+      updateNode(id, {
+        name: current.name.trim(),
+        runtime_config: node?.kind === "downstream_velocity" ? toRuntime(current) : toLimboRuntime(current),
+      }),
     onSuccess: (saved) => {
       const next = coerceVelocityNode(saved);
       setForm(toForm(next));
@@ -246,10 +258,23 @@ export function NodeDetailPage() {
           ) : (
             <Card title={t("admin.nodes.detail.limboRuntime")}>
               <p className="card-foot-note" style={{ marginTop: 0 }}>
-                <Icon name="info" size={13} /> {t("admin.nodes.detail.portalGlobal")}
+                <Icon name="info" size={13} /> {t("admin.nodes.detail.portalRuntime")}
               </p>
+              <label className="toggle-row" style={{ marginBottom: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={form.proxy_protocol_enabled}
+                  onChange={(e) => patch("proxy_protocol_enabled", e.target.checked)}
+                  data-testid="node-limbo-proxy-protocol"
+                />
+                <span>
+                  <strong>{t("admin.nodes.detail.field.proxyProtocol")}</strong>
+                  <small>{t("admin.nodes.detail.field.proxyProtocol.hint")}</small>
+                </span>
+              </label>
               <ConfigGrid testId="node-portal-runtime">
                 <ConfigRow k={t("admin.portal.field.cookie")} v={text(cfg.transfer_cookie_key, "authman:transfer_grant")} mono />
+                <ConfigRow k={t("admin.nodes.detail.field.proxyProtocol.current")} v={boolValue(cfg.proxy_protocol_enabled, false) ? t("status.enabled") : t("status.disabled")} />
                 <ConfigRow k={t("admin.portal.field.protocol")} v={t("admin.portal.protocolRange")} />
               </ConfigGrid>
             </Card>

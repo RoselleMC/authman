@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"errors"
 	"net"
@@ -599,7 +600,11 @@ func (s *Server) handleNodeResolveLimboLoginPolicy(w http.ResponseWriter, r *htt
 			writePolicy("hybrid", "premium_claim_uuid_match", &profile)
 			return
 		}
-		writePolicy("offline", "premium_claim_uuid_mismatch", &profile)
+		if sameOfflineLoginUUID(req.ClaimedUUID, username) {
+			writePolicy("offline", "offline_claim_uuid_match", &profile)
+			return
+		}
+		writePolicy("hybrid", "premium_claim_uuid_unrecognized", &profile)
 		return
 	}
 	if errors.Is(err, yggdrasil.ErrProfileNotFound) {
@@ -633,6 +638,23 @@ func sameProfileUUID(left string, right string) bool {
 	leftUUID, leftErr := identity.ParseUUID(left)
 	rightUUID, rightErr := identity.ParseUUID(right)
 	return leftErr == nil && rightErr == nil && leftUUID == rightUUID
+}
+
+func sameOfflineLoginUUID(claimed string, username string) bool {
+	claimedUUID, err := identity.ParseUUID(claimed)
+	if err != nil {
+		return false
+	}
+	return claimedUUID == vanillaOfflineLoginUUID(username)
+}
+
+func vanillaOfflineLoginUUID(username string) identity.UUID {
+	sum := md5.Sum([]byte("OfflinePlayer:" + username))
+	var out identity.UUID
+	copy(out[:], sum[:])
+	out[6] = (out[6] & 0x0f) | 0x30
+	out[8] = (out[8] & 0x3f) | 0x80
+	return out
 }
 
 func dashedProfileUUID(value string) string {

@@ -56,24 +56,26 @@ type config struct {
 }
 
 type portal struct {
-	cfg           config
-	client        *coreClient
-	nodeID        string
-	locked        bool
-	runtime       map[string]any
-	logger        *slog.Logger
-	fallbackWorld limbgo.World
-	fallbackSpawn limbgo.SpawnTarget
-	worldsMu      sync.RWMutex
-	worlds        map[string]cachedWorld
-	msgMu         sync.RWMutex
-	messages      map[string]string
-	dialogs       map[string]playermsg.DialogDoc
-	targetsMu     sync.RWMutex
-	targetNames   map[string]string
-	authMu        sync.Mutex
-	authed        map[limbgo.PlayerSession]authedSession
-	restartCh     chan string
+	cfg            config
+	client         *coreClient
+	nodeID         string
+	locked         bool
+	runtime        map[string]any
+	logger         *slog.Logger
+	fallbackWorld  limbgo.World
+	fallbackSpawn  limbgo.SpawnTarget
+	worldsMu       sync.RWMutex
+	worlds         map[string]cachedWorld
+	msgMu          sync.RWMutex
+	messages       map[string]string
+	dialogs        map[string]playermsg.DialogDoc
+	targetsMu      sync.RWMutex
+	targetNames    map[string]string
+	targetMessages map[string]playerMessagesPayload
+	authMu         sync.Mutex
+	authed         map[limbgo.PlayerSession]authedSession
+	verifiedJoins  map[string][]verifiedJoinState
+	restartCh      chan string
 }
 
 // authedSession remembers that THIS connection already proved its passport so
@@ -87,6 +89,12 @@ type authedSession struct {
 	passportID string
 	username   string
 	expires    time.Time
+}
+
+type verifiedJoinState struct {
+	passportID          string
+	passportPreexisting bool
+	expires             time.Time
 }
 
 func (p *portal) markAuthed(session limbgo.PlayerSession, passportID, username string) {
@@ -116,6 +124,64 @@ func (p *portal) clearAuthed(session limbgo.PlayerSession) {
 	p.authMu.Lock()
 	defer p.authMu.Unlock()
 	delete(p.authed, session)
+}
+
+func verifiedJoinKey(uuid, remoteIP, host string) string {
+	return strings.ToLower(strings.TrimSpace(uuid)) + "|" + strings.TrimSpace(remoteIP) + "|" + targetHostKey(host)
+}
+
+func (p *portal) cleanupVerifiedJoinsLocked(now time.Time) {
+	for key, queue := range p.verifiedJoins {
+		kept := queue[:0]
+		for _, st := range queue {
+			if now.Before(st.expires) {
+				kept = append(kept, st)
+			}
+		}
+		if len(kept) == 0 {
+			delete(p.verifiedJoins, key)
+			continue
+		}
+		p.verifiedJoins[key] = kept
+	}
+}
+
+func (p *portal) rememberVerifiedJoin(profile limbgo.VerifiedProfile, proof limbgo.SessionProof, passportID string, passportPreexisting bool) {
+	key := verifiedJoinKey(profile.UUID, proof.RemoteIP, proof.RequestedHost)
+	if strings.TrimSpace(profile.UUID) == "" || strings.TrimSpace(key) == "||" {
+		return
+	}
+	p.authMu.Lock()
+	defer p.authMu.Unlock()
+	now := time.Now()
+	p.cleanupVerifiedJoinsLocked(now)
+	p.verifiedJoins[key] = append(p.verifiedJoins[key], verifiedJoinState{
+		passportID:          strings.TrimSpace(passportID),
+		passportPreexisting: passportPreexisting,
+		expires:             now.Add(2 * time.Minute),
+	})
+}
+
+func (p *portal) consumeVerifiedJoin(player limbgo.Player) (verifiedJoinState, bool) {
+	key := verifiedJoinKey(player.UUID, remoteIP(player.RemoteAddr), player.RequestedHost)
+	if strings.TrimSpace(player.UUID) == "" || strings.TrimSpace(key) == "||" {
+		return verifiedJoinState{}, false
+	}
+	p.authMu.Lock()
+	defer p.authMu.Unlock()
+	now := time.Now()
+	p.cleanupVerifiedJoinsLocked(now)
+	queue := p.verifiedJoins[key]
+	if len(queue) == 0 {
+		return verifiedJoinState{}, false
+	}
+	st := queue[0]
+	if len(queue) == 1 {
+		delete(p.verifiedJoins, key)
+	} else {
+		p.verifiedJoins[key] = append([]verifiedJoinState(nil), queue[1:]...)
+	}
+	return st, true
 }
 
 type cachedWorld struct {
@@ -153,17 +219,19 @@ func main() {
 		fatal(err)
 	}
 	p := &portal{
-		cfg:           cfg,
-		client:        newCoreClient(cfg),
-		runtime:       map[string]any{},
-		logger:        logger,
-		fallbackWorld: world,
-		fallbackSpawn: spawn,
-		worlds:        map[string]cachedWorld{},
-		authed:        map[limbgo.PlayerSession]authedSession{},
-		messages:      map[string]string{},
-		dialogs:       map[string]playermsg.DialogDoc{},
-		targetNames:   map[string]string{},
+		cfg:            cfg,
+		client:         newCoreClient(cfg),
+		runtime:        map[string]any{},
+		logger:         logger,
+		fallbackWorld:  world,
+		fallbackSpawn:  spawn,
+		worlds:         map[string]cachedWorld{},
+		authed:         map[limbgo.PlayerSession]authedSession{},
+		verifiedJoins:  map[string][]verifiedJoinState{},
+		messages:       map[string]string{},
+		dialogs:        map[string]playermsg.DialogDoc{},
+		targetNames:    map[string]string{},
+		targetMessages: map[string]playerMessagesPayload{},
 	}
 	if err := p.heartbeat(context.Background()); err != nil {
 		logger.Warn("initial Authman heartbeat failed; portal starts locked", "err", err)
@@ -323,12 +391,20 @@ func (p *portal) heartbeat(ctx context.Context) error {
 
 func (p *portal) applyHeartbeat(res heartbeatResponse) {
 	proxyBefore := p.proxyProtocolFingerprint()
+	messages := res.PlayerMessages.Messages
+	if messages == nil {
+		messages = map[string]string{}
+	}
+	dialogs := res.PlayerMessages.Dialogs
+	if dialogs == nil {
+		dialogs = map[string]playermsg.DialogDoc{}
+	}
 	p.msgMu.Lock()
 	p.nodeID = res.Node.ID
 	p.runtime = res.RuntimeConfig
 	p.locked = false
-	p.messages = res.PlayerMessages.Messages
-	p.dialogs = res.PlayerMessages.Dialogs
+	p.messages = messages
+	p.dialogs = dialogs
 	p.msgMu.Unlock()
 	proxyAfter := p.proxyProtocolFingerprint()
 	if proxyBefore != proxyAfter {
@@ -511,6 +587,26 @@ func (p *portal) setLocked(locked bool) {
 	p.msgMu.Unlock()
 }
 
+func targetHostKey(host string) string {
+	return canonicalRequestedHost(host)
+}
+
+func canonicalRequestedHost(value string) string {
+	host := strings.ToLower(strings.TrimSpace(value))
+	if host == "" {
+		return ""
+	}
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+	host = strings.Trim(host, "[]")
+	return strings.TrimSuffix(host, ".")
+}
+
+func (messages playerMessagesPayload) hasData() bool {
+	return len(messages.Messages) > 0 || len(messages.Dialogs) > 0
+}
+
 // rawMessage returns the effective MiniMessage source for a message key,
 // preferring the Core-delivered value and falling back to built-in defaults.
 func (p *portal) rawMessage(key string) string {
@@ -523,9 +619,28 @@ func (p *portal) rawMessage(key string) string {
 	return playermsg.Defaults("")[key]
 }
 
+func (p *portal) rawMessageForHost(host string, key string) string {
+	if bundle, ok := p.targetMessageBundle(host); ok {
+		if value := strings.TrimSpace(bundle.Messages[key]); value != "" {
+			return value
+		}
+	}
+	return p.rawMessage(key)
+}
+
+func (p *portal) rawMessageForSession(session limbgo.PlayerSession, key string) string {
+	player := session.Player()
+	host := requestedHost(player.RequestedHost, p.cfg.DefaultHost)
+	return p.rawMessageForHost(host, key)
+}
+
 // message renders a configured message into a component with sanitized vars.
 func (p *portal) message(key string, vars map[string]string) component.Component {
 	return playermsg.RenderComponent(p.rawMessage(key), vars)
+}
+
+func (p *portal) messageForSession(session limbgo.PlayerSession, key string, vars map[string]string) component.Component {
+	return playermsg.RenderComponent(p.rawMessageForSession(session, key), vars)
 }
 
 // dialogDoc returns the effective dialog document for a screen.
@@ -539,25 +654,74 @@ func (p *portal) dialogDoc(screen string) playermsg.DialogDoc {
 	return playermsg.DefaultDialog(screen)
 }
 
+func (p *portal) dialogDocForHost(host string, screen string) playermsg.DialogDoc {
+	if bundle, ok := p.targetMessageBundle(host); ok {
+		if doc, ok := bundle.Dialogs[screen]; ok && strings.TrimSpace(doc.Title) != "" {
+			return doc
+		}
+	}
+	return p.dialogDoc(screen)
+}
+
+func (p *portal) dialogDocForSession(session limbgo.PlayerSession, screen string) playermsg.DialogDoc {
+	player := session.Player()
+	host := requestedHost(player.RequestedHost, p.cfg.DefaultHost)
+	return p.dialogDocForHost(host, screen)
+}
+
 // rememberTarget caches the downstream display name per requested host so
-// message placeholders can use {server} without extra Core round-trips.
-func (p *portal) rememberTarget(host string, target downstreamTarget) {
+// message placeholders and player-visible messages can use the resolved
+// downstream server without extra Core round-trips.
+func (p *portal) rememberTarget(host string, target downstreamTarget, messages playerMessagesPayload) {
 	name := strings.TrimSpace(target.DisplayName)
 	if name == "" {
 		name = strings.TrimSpace(target.ServerID)
 	}
-	if name == "" {
+	key := targetHostKey(host)
+	if key == "" {
 		return
 	}
 	p.targetsMu.Lock()
-	p.targetNames[strings.ToLower(strings.TrimSpace(host))] = name
+	if name != "" {
+		p.targetNames[key] = name
+	}
+	if messages.hasData() {
+		p.targetMessages[key] = messages
+	} else {
+		delete(p.targetMessages, key)
+	}
 	p.targetsMu.Unlock()
 }
 
 func (p *portal) targetName(host string) string {
 	p.targetsMu.RLock()
 	defer p.targetsMu.RUnlock()
-	return p.targetNames[strings.ToLower(strings.TrimSpace(host))]
+	return p.targetNames[targetHostKey(host)]
+}
+
+func (p *portal) targetMessageBundle(host string) (playerMessagesPayload, bool) {
+	p.targetsMu.RLock()
+	defer p.targetsMu.RUnlock()
+	bundle, ok := p.targetMessages[targetHostKey(host)]
+	if !ok || !bundle.hasData() {
+		return playerMessagesPayload{}, false
+	}
+	return bundle, true
+}
+
+func (p *portal) ensureSessionTarget(ctx context.Context, session limbgo.PlayerSession) {
+	player := session.Player()
+	host := requestedHost(player.RequestedHost, p.cfg.DefaultHost)
+	if host == "" {
+		return
+	}
+	resolved, err := p.client.resolveTarget(ctx, host, player.ProtocolVersion, remoteIP(player.RemoteAddr))
+	if err != nil {
+		p.logger.Warn("failed to resolve limbo target for session display", append(playerLogAttrs(player), "host", host, "err", err)...)
+		return
+	}
+	p.rememberTarget(host, resolved.Target, resolved.PlayerMessages)
+	p.logger.Debug("resolved limbo target for session display", append(playerLogAttrs(player), "host", host, "server_id", resolved.Target.ServerID)...)
 }
 
 func (p *portal) loginMode() limbgo.LoginMode {
@@ -573,41 +737,183 @@ func (p *portal) loginMode() limbgo.LoginMode {
 	}
 }
 
+func loginRequestLogAttrs(req limbgo.LoginRequest) []any {
+	return []any{
+		"player", req.Username,
+		"claimed_uuid", req.ClaimedUUID,
+		"remote_ip", remoteIP(req.RemoteAddr),
+		"requested_host", req.RequestedHost,
+		"protocol", req.ProtocolVersion,
+	}
+}
+
+func loginPolicyLogAttrs(policy loginPolicyResponse) []any {
+	attrs := []any{
+		"mode", policy.LoginMode,
+		"reason", policy.Reason,
+		"premium_profile_present", policy.PremiumProfile != nil,
+	}
+	if policy.PremiumProfile != nil {
+		attrs = append(attrs,
+			"premium_uuid", policy.PremiumProfile.UUID,
+			"premium_name", policy.PremiumProfile.Name,
+			"premium_source", policy.PremiumProfile.Source,
+			"premium_verified", policy.PremiumProfile.Verified,
+			"premium_properties", len(policy.PremiumProfile.Properties),
+		)
+	}
+	return attrs
+}
+
+func sessionProofLogAttrs(proof limbgo.SessionProof) []any {
+	return []any{
+		"player", proof.Username,
+		"server_id", proof.ServerID,
+		"remote_ip", proof.RemoteIP,
+		"requested_host", proof.RequestedHost,
+		"protocol", proof.ProtocolVersion,
+	}
+}
+
+func verifiedProfileLogAttrs(profile limbgo.VerifiedProfile) []any {
+	return []any{
+		"verified_uuid", profile.UUID,
+		"verified_name", profile.Name,
+		"verified_source", profile.Source,
+		"verified", profile.Verified,
+		"verified_properties", len(profile.Properties),
+	}
+}
+
+func playerLogAttrs(player limbgo.Player) []any {
+	return []any{
+		"player", player.Name,
+		"uuid", player.UUID,
+		"login_mode", player.LoginMode,
+		"auth_source", player.AuthSource,
+		"verified", player.Verified,
+		"remote_ip", remoteIP(player.RemoteAddr),
+		"requested_host", player.RequestedHost,
+		"protocol", player.ProtocolVersion,
+		"profile_properties", len(player.ProfileProperties),
+	}
+}
+
+func resolveResponseLogAttrs(resolved resolveResponse) []any {
+	attrs := []any{
+		"passport_id", resolved.Passport.ID,
+		"passport_username", resolved.Passport.Username,
+		"passport_kind", resolved.Passport.Kind,
+		"passport_locked", resolved.Passport.Locked,
+		"auth_required", resolved.Auth.Required,
+		"auth_kind", resolved.Auth.Kind,
+		"auth_locked", resolved.Auth.Locked,
+		"auth_remembered", resolved.Auth.Remembered,
+		"auth_remember_expires_at", resolved.Auth.RememberExpiresAt,
+		"auth_username", resolved.Auth.Username,
+		"profile_count", len(resolved.Profiles),
+	}
+	if resolved.Player != nil {
+		attrs = append(attrs,
+			"resolved_player_uuid", resolved.Player.UUID,
+			"resolved_player_kind", resolved.Player.Kind,
+			"resolved_protocol_name", resolved.Player.ProtocolName,
+		)
+	} else {
+		attrs = append(attrs, "resolved_player_present", false)
+	}
+	return attrs
+}
+
+func coreErrorLogAttrs(err error) []any {
+	attrs := []any{"err", err}
+	var coreErr coreAPIError
+	if errors.As(err, &coreErr) {
+		attrs = append(attrs,
+			"core_status", coreErr.Status,
+			"core_code", coreErr.Code,
+			"core_message", coreErr.Message,
+		)
+	}
+	return attrs
+}
+
+func (p *portal) logResolvePlayerFailure(message string, stage string, player limbgo.Player, err error, extra ...any) {
+	attrs := []any{"stage", stage}
+	attrs = append(attrs, playerLogAttrs(player)...)
+	attrs = append(attrs, coreErrorLogAttrs(err)...)
+	attrs = append(attrs, extra...)
+	p.logger.Warn(message, attrs...)
+}
+
+func (p *portal) logResolvePlayerSuccess(stage string, player limbgo.Player, resolved resolveResponse, extra ...any) {
+	attrs := []any{"stage", stage}
+	attrs = append(attrs, playerLogAttrs(player)...)
+	attrs = append(attrs, resolveResponseLogAttrs(resolved)...)
+	attrs = append(attrs, extra...)
+	p.logger.Info("limbo player resolve success", attrs...)
+}
+
 func (p *portal) resolveLoginDecision(ctx context.Context, req limbgo.LoginRequest) (limbgo.LoginDecision, error) {
 	configured := p.loginMode()
-	if configured != limbgo.LoginModeHybrid {
-		return limbgo.LoginDecision{Mode: configured}, nil
-	}
 	logger := p.logger
 	if logger == nil {
 		logger = slog.Default()
+	}
+	requestAttrs := append([]any{"configured_mode", configured}, loginRequestLogAttrs(req)...)
+	logger.Info("limbo login policy request", requestAttrs...)
+	if configured != limbgo.LoginModeHybrid {
+		attrs := append([]any{}, requestAttrs...)
+		attrs = append(attrs, "mode", configured, "reason", "configured_non_hybrid")
+		logger.Info("limbo login policy selected mode", attrs...)
+		return limbgo.LoginDecision{Mode: configured}, nil
 	}
 	policy, err := p.client.resolveLoginPolicy(ctx, req)
 	if err == nil {
 		mode := limbgo.LoginMode(policy.LoginMode)
 		switch mode {
 		case limbgo.LoginModeOnline, limbgo.LoginModeOffline, limbgo.LoginModeHybrid:
-			logger.Info("limbo login policy selected mode", "player", req.Username, "claimed_uuid", req.ClaimedUUID, "mode", mode, "reason", policy.Reason)
+			attrs := append([]any{}, requestAttrs...)
+			attrs = append(attrs, loginPolicyLogAttrs(policy)...)
+			logger.Info("limbo login policy selected mode", attrs...)
 			return limbgo.LoginDecision{Mode: mode}, nil
 		default:
 			return limbgo.LoginDecision{}, fmt.Errorf("core returned unsupported login policy mode %q", policy.LoginMode)
 		}
 	}
+	attrs := append([]any{}, requestAttrs...)
+	attrs = append(attrs, coreErrorLogAttrs(err)...)
+	logger.Warn("limbo login policy resolve failed", attrs...)
 	return limbgo.LoginDecision{}, err
 }
 
 func (p *portal) verifySession(ctx context.Context, proof limbgo.SessionProof) (limbgo.VerifiedProfile, error) {
-	profile, err := p.client.verifySession(ctx, proof)
+	requestAttrs := sessionProofLogAttrs(proof)
+	p.logger.Info("limbo session verify request", requestAttrs...)
+	verified, err := p.client.verifySession(ctx, proof)
 	if err != nil {
+		attrs := append([]any{}, requestAttrs...)
+		attrs = append(attrs, coreErrorLogAttrs(err)...)
 		var coreErr coreAPIError
 		if errors.As(err, &coreErr) && coreErr.Status == http.StatusUnauthorized && coreErr.Code == "session.verify_failed" {
+			p.logger.Warn("limbo session verify rejected by core", attrs...)
 			return limbgo.VerifiedProfile{}, fmt.Errorf("%w: %s", limbgo.ErrInvalidLogin, coreErr.Message)
 		}
+		p.logger.Warn("limbo session verify failed", attrs...)
 		return limbgo.VerifiedProfile{}, err
 	}
+	profile := verified.Profile
 	if profile.UUID == "" || profile.Name == "" {
+		attrs := append([]any{}, requestAttrs...)
+		attrs = append(attrs, verifiedProfileLogAttrs(profile)...)
+		p.logger.Warn("limbo session verify returned incomplete profile", attrs...)
 		return limbgo.VerifiedProfile{}, fmt.Errorf("%w: Authman returned an incomplete verified profile", limbgo.ErrInvalidLogin)
 	}
+	p.rememberVerifiedJoin(profile, proof, verified.PassportID, verified.PassportPreexisting)
+	attrs := append([]any{}, requestAttrs...)
+	attrs = append(attrs, verifiedProfileLogAttrs(profile)...)
+	attrs = append(attrs, "passport_id", verified.PassportID, "passport_preexisting", verified.PassportPreexisting)
+	p.logger.Info("limbo session verify success", attrs...)
 	return profile, nil
 }
 
@@ -618,7 +924,7 @@ func (p *portal) resolveJoin(ctx context.Context, player limbgo.Player) (limbgo.
 		p.logger.Warn("using fallback limbo world; target resolve failed", "host", host, "err", err)
 		return limbgo.JoinTarget{World: p.fallbackWorld, Spawn: p.fallbackSpawn}, nil
 	}
-	p.rememberTarget(host, resolved.Target)
+	p.rememberTarget(host, resolved.Target, resolved.PlayerMessages)
 	if resolved.LimboBlueprint == nil || strings.TrimSpace(resolved.LimboBlueprint.ID) == "" || resolved.LimboBlueprint.Missing {
 		return limbgo.JoinTarget{World: p.fallbackWorld, Spawn: p.fallbackSpawn}, nil
 	}
@@ -668,7 +974,7 @@ func (p *portal) status(ctx context.Context, req limbgo.StatusRequest) (limbgo.S
 	resolved, err := p.client.resolveTarget(ctx, host, 0, remoteIP(req.RemoteAddr))
 	var description component.Component = &component.Text{Content: "Authman login portal"}
 	if err == nil {
-		p.rememberTarget(host, resolved.Target)
+		p.rememberTarget(host, resolved.Target, resolved.PlayerMessages)
 	}
 	if err == nil && resolved.Target.MOTD != "" {
 		motd := limitMiniMessageLines(resolved.Target.MOTD, 2)
@@ -681,16 +987,25 @@ func (p *portal) status(ctx context.Context, req limbgo.StatusRequest) (limbgo.S
 		}
 	}
 	favicon := ""
+	onlinePlayers := 0
+	maxPlayers := 1000
 	if err == nil {
 		favicon = strings.TrimSpace(resolved.Target.ServerIcon)
+		onlinePlayers = resolved.Target.OnlinePlayers
+		if resolved.Target.MaxPlayers > 0 {
+			maxPlayers = resolved.Target.MaxPlayers
+		}
+		if maxPlayers < onlinePlayers {
+			maxPlayers = onlinePlayers
+		}
 	}
 	return limbgo.Status{
 		VersionName:         "Authman Limbo",
 		Protocol:            req.Protocol,
 		Description:         description,
 		Favicon:             favicon,
-		MaxPlayers:          1000,
-		OnlinePlayers:       0,
+		MaxPlayers:          maxPlayers,
+		OnlinePlayers:       onlinePlayers,
 		PreventsChatReports: limbgo.Bool(true),
 	}, nil
 }
@@ -707,9 +1022,10 @@ func limitMiniMessageLines(value string, maxLines int) string {
 }
 
 func (p *portal) handleJoin(ctx context.Context, session limbgo.PlayerSession, event *limbgo.JoinEvent) error {
-	p.logger.Info("limbo join event", "player", event.Player.Name, "protocol", event.Protocol)
+	attrs := append([]any{"event_protocol", event.Protocol}, playerLogAttrs(event.Player)...)
+	p.logger.Info("limbo join event", attrs...)
 	if p.isLocked() {
-		return session.SendMessage(ctx, p.message("limbo.error.portal_locked", p.sessionVars(session)))
+		return session.SendMessage(ctx, p.messageForSession(session, "limbo.error.portal_locked", p.sessionVars(session)))
 	}
 	return p.showLoginDialog(ctx, session)
 }
@@ -719,13 +1035,15 @@ func (p *portal) handleJoin(ctx context.Context, session limbgo.PlayerSession, e
 // bring the auth dialog back.
 func (p *portal) handleChat(ctx context.Context, session limbgo.PlayerSession, event *limbgo.ChatEvent) error {
 	if p.isLocked() {
-		return session.SendMessage(ctx, p.message("limbo.error.portal_locked", p.sessionVars(session)))
+		return session.SendMessage(ctx, p.messageForSession(session, "limbo.error.portal_locked", p.sessionVars(session)))
 	}
 	if _, ok := p.authedState(session); ok {
 		resolved, err := p.client.resolvePlayer(ctx, session.Player())
 		if err == nil {
+			p.logResolvePlayerSuccess("chat_authed", session.Player(), resolved, "decision", "route_profiles")
 			return p.routeProfiles(ctx, session, resolved)
 		}
+		p.logResolvePlayerFailure("limbo player resolve failed; returning to login dialog", "chat_authed", session.Player(), err, "decision", "show_login_dialog")
 	}
 	return p.showLoginDialog(ctx, session)
 }
@@ -742,7 +1060,7 @@ func (p *portal) handleDialogClick(ctx context.Context, session limbgo.PlayerSes
 		parsed, err := parseDialogStringPayload(event.Payload)
 		if err != nil {
 			p.logger.Warn("failed to parse dialog payload", "player", event.Player.Name, "err", err)
-			errorText := p.rawMessage("limbo.error.dialog_payload")
+			errorText := p.rawMessageForSession(session, "limbo.error.dialog_payload")
 			if event.ID == "authman:register_submit" {
 				return p.showRegisterDialogMessage(ctx, session, errorText)
 			}
@@ -752,20 +1070,20 @@ func (p *portal) handleDialogClick(ctx context.Context, session limbgo.PlayerSes
 	}
 	switch event.ID {
 	case "authman:register_submit":
-		doc := p.dialogDoc(playermsg.ScreenRegister)
+		doc := p.dialogDocForSession(session, playermsg.ScreenRegister)
 		return p.registerAndTransfer(ctx, session,
 			strings.TrimSpace(values[roleKeyOr(doc, playermsg.RolePassword, "password")]),
 			strings.TrimSpace(values[roleKeyOr(doc, playermsg.RoleConfirm, "confirm_password")]))
 	case "authman:profile_create_submit":
-		doc := p.dialogDoc(playermsg.ScreenProfileCreate)
+		doc := p.dialogDocForSession(session, playermsg.ScreenProfileCreate)
 		return p.handleProfileCreateSubmit(ctx, session, strings.TrimSpace(values[roleKeyOr(doc, playermsg.RoleProfileName, "profile_name")]))
 	case "authman:profile_select_submit":
-		doc := p.dialogDoc(playermsg.ScreenProfileSelect)
+		doc := p.dialogDocForSession(session, playermsg.ScreenProfileSelect)
 		return p.handleProfileSelectSubmit(ctx, session, strings.TrimSpace(values[roleKeyOr(doc, playermsg.RoleProfileChoice, "profile_choice")]))
 	case "authman:open_screen":
 		return p.handleOpenScreen(ctx, session, strings.TrimSpace(values["screen"]))
 	default:
-		doc := p.dialogDoc(playermsg.ScreenLogin)
+		doc := p.dialogDocForSession(session, playermsg.ScreenLogin)
 		return p.authenticateAndTransfer(ctx, session, strings.TrimSpace(values[roleKeyOr(doc, playermsg.RolePassword, "password")]))
 	}
 }
@@ -801,8 +1119,8 @@ type dialogExtras struct {
 // screen and runtime state into a limbgo dialog payload. Every element class
 // (body, inputs, buttons) honours the same visibility conditions; functional
 // behaviour comes from role bindings rather than fixed slots.
-func (p *portal) buildAuthDialog(screen string, st playermsg.DialogState, errorText string, vars map[string]string, extras *dialogExtras) dialog.Raw {
-	doc := p.dialogDoc(screen)
+func (p *portal) buildAuthDialog(session limbgo.PlayerSession, screen string, st playermsg.DialogState, errorText string, vars map[string]string, extras *dialogExtras) dialog.Raw {
+	doc := p.dialogDocForSession(session, screen)
 	render := func(text string) component.Component {
 		if strings.Contains(text, "{error}") {
 			text = playermsg.SubstituteRaw(text, map[string]string{"error": errorText})
@@ -963,22 +1281,53 @@ func (p *portal) showLoginDialog(ctx context.Context, session limbgo.PlayerSessi
 	return p.showLoginDialogMessage(ctx, session, "")
 }
 
+func shouldSkipLoginDialog(resolved resolveResponse, errorText string, premiumPassportPreexisting bool) (bool, string) {
+	if strings.TrimSpace(errorText) != "" || resolved.Auth.Required || resolved.Auth.Locked || strings.TrimSpace(resolved.Passport.ID) == "" {
+		return false, ""
+	}
+	if resolved.Auth.Remembered {
+		return true, "remembered_auth"
+	}
+	if premiumPassportPreexisting && resolved.Passport.Kind == "premium" && resolved.Auth.Kind == "premium" {
+		return true, "premium_passport_preexisting"
+	}
+	return false, ""
+}
+
 func (p *portal) showLoginDialogMessage(ctx context.Context, session limbgo.PlayerSession, errorText string) error {
+	p.ensureSessionTarget(ctx, session)
 	vars := p.sessionVars(session)
 	if !session.Capabilities().Dialog {
-		return session.Disconnect(ctx, p.message("limbo.kick.client_too_old", vars))
+		return session.Disconnect(ctx, p.messageForSession(session, "limbo.kick.client_too_old", vars))
 	}
-	resolved, err := p.client.resolvePlayer(ctx, session.Player())
+	player := session.Player()
+	resolved, err := p.client.resolvePlayer(ctx, player)
 	if err != nil {
 		var coreErr coreAPIError
-		if errors.As(err, &coreErr) && coreErr.Status == http.StatusNotFound && !session.Player().Verified {
+		if errors.As(err, &coreErr) && coreErr.Status == http.StatusNotFound && !player.Verified {
+			p.logResolvePlayerFailure("limbo player resolve returned not found; showing register dialog", "login_dialog", player, err, "decision", "show_register_dialog", "has_error", strings.TrimSpace(errorText) != "")
 			return p.showRegisterDialog(ctx, session)
 		}
-		return session.SendMessage(ctx, p.message("limbo.error.resolve_failed", vars))
+		p.logResolvePlayerFailure("limbo player resolve failed; showing resolve error", "login_dialog", player, err, "decision", "send_resolve_failed", "has_error", strings.TrimSpace(errorText) != "")
+		return session.SendMessage(ctx, p.messageForSession(session, "limbo.error.resolve_failed", vars))
 	}
-	return session.ShowDialog(ctx, p.buildAuthDialog(playermsg.ScreenLogin, playermsg.DialogState{
+	premiumPassportPreexisting := false
+	var verifiedJoinPassportID string
+	if player.Verified {
+		if verifiedJoin, ok := p.consumeVerifiedJoin(player); ok {
+			premiumPassportPreexisting = verifiedJoin.passportPreexisting
+			verifiedJoinPassportID = verifiedJoin.passportID
+		}
+	}
+	if skip, reason := shouldSkipLoginDialog(resolved, errorText, premiumPassportPreexisting); skip {
+		p.logResolvePlayerSuccess("login_dialog", player, resolved, "decision", "skip_login_dialog_"+reason, "verified_join_passport_id", verifiedJoinPassportID, "verified_join_preexisting", premiumPassportPreexisting)
+		p.markAuthed(session, resolved.Passport.ID, resolved.Auth.Username)
+		return p.routeProfiles(ctx, session, resolved)
+	}
+	p.logResolvePlayerSuccess("login_dialog", player, resolved, "decision", "show_login_dialog", "has_error", strings.TrimSpace(errorText) != "", "verified_join_passport_id", verifiedJoinPassportID, "verified_join_preexisting", premiumPassportPreexisting)
+	return session.ShowDialog(ctx, p.buildAuthDialog(session, playermsg.ScreenLogin, playermsg.DialogState{
 		AuthRequired: resolved.Auth.Required,
-		Verified:     session.Player().Verified,
+		Verified:     player.Verified,
 		HasError:     strings.TrimSpace(errorText) != "",
 	}, errorText, vars, nil))
 }
@@ -988,11 +1337,12 @@ func (p *portal) showRegisterDialog(ctx context.Context, session limbgo.PlayerSe
 }
 
 func (p *portal) showRegisterDialogMessage(ctx context.Context, session limbgo.PlayerSession, errorText string) error {
+	p.ensureSessionTarget(ctx, session)
 	vars := p.sessionVars(session)
 	if !session.Capabilities().Dialog {
-		return session.Disconnect(ctx, p.message("limbo.kick.client_too_old", vars))
+		return session.Disconnect(ctx, p.messageForSession(session, "limbo.kick.client_too_old", vars))
 	}
-	return session.ShowDialog(ctx, p.buildAuthDialog(playermsg.ScreenRegister, playermsg.DialogState{
+	return session.ShowDialog(ctx, p.buildAuthDialog(session, playermsg.ScreenRegister, playermsg.DialogState{
 		AuthRequired: true,
 		HasError:     strings.TrimSpace(errorText) != "",
 	}, errorText, vars, nil))
@@ -1002,17 +1352,32 @@ func (p *portal) authenticateAndTransfer(ctx context.Context, session limbgo.Pla
 	player := session.Player()
 	resolved, err := p.client.resolvePlayer(ctx, player)
 	if err != nil {
+		p.logResolvePlayerFailure("limbo player resolve failed during login submit", "login_submit", player, err, "decision", "show_resolve_failed")
 		// Re-present the dialog so wait_for_response clients are not stranded
 		// on the waiting screen; showLoginDialogMessage degrades to chat if
 		// resolve keeps failing.
-		return p.showLoginDialogMessage(ctx, session, p.rawMessage("limbo.error.resolve_failed"))
+		return p.showLoginDialogMessage(ctx, session, p.rawMessageForSession(session, "limbo.error.resolve_failed"))
 	}
+	p.logResolvePlayerSuccess("login_submit", player, resolved, "decision", "check_auth")
 	if resolved.Auth.Required {
 		if strings.TrimSpace(password) == "" {
-			return p.showLoginDialogMessage(ctx, session, p.rawMessage("limbo.error.password_required"))
+			p.logger.Info("limbo offline auth missing password", append(playerLogAttrs(player), "auth_username", resolved.Auth.Username, "passport_id", resolved.Passport.ID)...)
+			return p.showLoginDialogMessage(ctx, session, p.rawMessageForSession(session, "limbo.error.password_required"))
 		}
 		if err := p.client.authenticate(ctx, resolved.Auth.Username, password, remoteIP(player.RemoteAddr)); err != nil {
-			return p.showLoginDialogMessage(ctx, session, p.rawMessage("limbo.error.invalid_password"))
+			attrs := append(playerLogAttrs(player), "auth_username", resolved.Auth.Username, "passport_id", resolved.Passport.ID)
+			attrs = append(attrs, coreErrorLogAttrs(err)...)
+			p.logger.Warn("limbo offline auth failed", attrs...)
+			return p.showLoginDialogMessage(ctx, session, p.rawMessageForSession(session, "limbo.error.invalid_password"))
+		}
+		p.logger.Info("limbo offline auth success", append(playerLogAttrs(player), "auth_username", resolved.Auth.Username, "passport_id", resolved.Passport.ID)...)
+	} else if !resolved.Auth.Remembered && !resolved.Auth.Locked {
+		if err := p.client.rememberAuth(ctx, resolved.Passport.ID, remoteIP(player.RemoteAddr), "login_dialog_confirm"); err != nil {
+			attrs := append(playerLogAttrs(player), "auth_username", resolved.Auth.Username, "passport_id", resolved.Passport.ID)
+			attrs = append(attrs, coreErrorLogAttrs(err)...)
+			p.logger.Warn("limbo auth cache remember failed", attrs...)
+		} else {
+			p.logger.Info("limbo auth cache remembered", append(playerLogAttrs(player), "auth_username", resolved.Auth.Username, "passport_id", resolved.Passport.ID)...)
 		}
 	}
 	p.markAuthed(session, resolved.Passport.ID, resolved.Auth.Username)
@@ -1021,14 +1386,17 @@ func (p *portal) authenticateAndTransfer(ctx context.Context, session limbgo.Pla
 
 func (p *portal) registerAndTransfer(ctx context.Context, session limbgo.PlayerSession, password string, confirmPassword string) error {
 	if strings.TrimSpace(password) == "" || password != confirmPassword {
-		return p.showRegisterDialogMessage(ctx, session, p.rawMessage("limbo.error.passwords_mismatch"))
+		return p.showRegisterDialogMessage(ctx, session, p.rawMessageForSession(session, "limbo.error.passwords_mismatch"))
 	}
 	player := session.Player()
 	resolved, err := p.client.registerOffline(ctx, player.Name, password, player.RequestedHost, remoteIP(player.RemoteAddr))
 	if err != nil {
-		p.logger.Warn("offline registration failed", "player", session.Player().Name, "err", err)
-		return p.showRegisterDialogMessage(ctx, session, p.rawMessage("limbo.error.register_failed"))
+		attrs := playerLogAttrs(player)
+		attrs = append(attrs, coreErrorLogAttrs(err)...)
+		p.logger.Warn("offline registration failed", attrs...)
+		return p.showRegisterDialogMessage(ctx, session, p.rawMessageForSession(session, "limbo.error.register_failed"))
 	}
+	p.logResolvePlayerSuccess("register_submit", player, resolved, "decision", "route_profiles")
 	p.markAuthed(session, resolved.Passport.ID, resolved.Auth.Username)
 	return p.routeProfiles(ctx, session, resolved)
 }
@@ -1042,8 +1410,10 @@ func (p *portal) showAuthDialogError(ctx context.Context, session limbgo.PlayerS
 	case playermsg.ScreenProfileCreate, playermsg.ScreenProfileSelect:
 		resolved, err := p.client.resolvePlayer(ctx, session.Player())
 		if err != nil {
-			return p.showLoginDialogMessage(ctx, session, p.rawMessage("limbo.error.resolve_failed"))
+			p.logResolvePlayerFailure("limbo player resolve failed while showing auth dialog error", "auth_dialog_error", session.Player(), err, "screen", screen, "decision", "show_login_dialog")
+			return p.showLoginDialogMessage(ctx, session, p.rawMessageForSession(session, "limbo.error.resolve_failed"))
 		}
+		p.logResolvePlayerSuccess("auth_dialog_error", session.Player(), resolved, "screen", screen, "decision", "show_profile_dialog")
 		if screen == playermsg.ScreenProfileCreate {
 			return p.showProfileCreateDialog(ctx, session, resolved, errorText)
 		}
@@ -1054,14 +1424,13 @@ func (p *portal) showAuthDialogError(ctx context.Context, session limbgo.PlayerS
 }
 
 // routeProfiles is the post-auth hub: with no profiles the player first
-// creates one, otherwise the profile manager (selection dialog) is always
-// shown so the player explicitly picks the identity to join with. The
-// auto-join shortcut for single-profile passports is an opt-in setting.
+// creates one, exactly one profile transfers immediately, and multiple
+// profiles require an explicit manager selection.
 func (p *portal) routeProfiles(ctx context.Context, session limbgo.PlayerSession, resolved resolveResponse) error {
 	switch {
 	case len(resolved.Profiles) == 0:
 		return p.showProfileCreateDialog(ctx, session, resolved, "")
-	case len(resolved.Profiles) == 1 && resolved.ProfilePolicy.AutoJoinSingle:
+	case len(resolved.Profiles) == 1:
 		return p.transferProfile(ctx, session, playermsg.ScreenProfileSelect, resolved.Profiles[0])
 	default:
 		return p.showProfileSelectDialog(ctx, session, resolved, "")
@@ -1080,10 +1449,11 @@ func (p *portal) profileVars(session limbgo.PlayerSession, resolved resolveRespo
 }
 
 func (p *portal) showProfileCreateDialog(ctx context.Context, session limbgo.PlayerSession, resolved resolveResponse, errorText string) error {
+	p.ensureSessionTarget(ctx, session)
 	if !session.Capabilities().Dialog {
-		return session.Disconnect(ctx, p.message("limbo.kick.client_too_old", p.sessionVars(session)))
+		return session.Disconnect(ctx, p.messageForSession(session, "limbo.kick.client_too_old", p.sessionVars(session)))
 	}
-	return session.ShowDialog(ctx, p.buildAuthDialog(playermsg.ScreenProfileCreate, playermsg.DialogState{
+	return session.ShowDialog(ctx, p.buildAuthDialog(session, playermsg.ScreenProfileCreate, playermsg.DialogState{
 		AuthRequired: true,
 		HasError:     strings.TrimSpace(errorText) != "",
 	}, errorText, p.profileVars(session, resolved), &dialogExtras{
@@ -1094,10 +1464,11 @@ func (p *portal) showProfileCreateDialog(ctx context.Context, session limbgo.Pla
 }
 
 func (p *portal) showProfileSelectDialog(ctx context.Context, session limbgo.PlayerSession, resolved resolveResponse, errorText string) error {
+	p.ensureSessionTarget(ctx, session)
 	if !session.Capabilities().Dialog {
-		return session.Disconnect(ctx, p.message("limbo.kick.client_too_old", p.sessionVars(session)))
+		return session.Disconnect(ctx, p.messageForSession(session, "limbo.kick.client_too_old", p.sessionVars(session)))
 	}
-	return session.ShowDialog(ctx, p.buildAuthDialog(playermsg.ScreenProfileSelect, playermsg.DialogState{
+	return session.ShowDialog(ctx, p.buildAuthDialog(session, playermsg.ScreenProfileSelect, playermsg.DialogState{
 		AuthRequired: true,
 		HasError:     strings.TrimSpace(errorText) != "",
 	}, errorText, p.profileVars(session, resolved), &dialogExtras{
@@ -1111,19 +1482,20 @@ func (p *portal) showProfileSelectDialog(ctx context.Context, session limbgo.Pla
 func (p *portal) requireAuthedResolve(ctx context.Context, session limbgo.PlayerSession) (resolveResponse, authedSession, bool, error) {
 	st, ok := p.authedState(session)
 	if !ok {
-		p.logger.Warn("profile dialog submit without authed session", "player", session.Player().Name)
+		p.logger.Warn("profile dialog submit without authed session", append(playerLogAttrs(session.Player()), "decision", "show_login_dialog")...)
 		err := p.showLoginDialog(ctx, session)
 		return resolveResponse{}, authedSession{}, false, err
 	}
 	resolved, err := p.client.resolvePlayer(ctx, session.Player())
 	if err != nil {
-		p.logger.Warn("profile dialog resolve failed", "player", session.Player().Name, "err", err)
-		return resolveResponse{}, authedSession{}, false, p.showLoginDialogMessage(ctx, session, p.rawMessage("limbo.error.resolve_failed"))
+		p.logResolvePlayerFailure("profile dialog resolve failed", "profile_submit", session.Player(), err, "decision", "show_resolve_failed")
+		return resolveResponse{}, authedSession{}, false, p.showLoginDialogMessage(ctx, session, p.rawMessageForSession(session, "limbo.error.resolve_failed"))
 	}
+	p.logResolvePlayerSuccess("profile_submit", session.Player(), resolved, "decision", "continue_profile_action")
 	// Defend against any drift between the authenticated passport and the one
 	// a re-resolve by login name would return (offline/premium name collision).
 	if st.passportID != "" && resolved.Passport.ID != "" && st.passportID != resolved.Passport.ID {
-		p.logger.Warn("profile dialog passport drift", "player", session.Player().Name, "authed", st.passportID, "resolved", resolved.Passport.ID)
+		p.logger.Warn("profile dialog passport drift", append(playerLogAttrs(session.Player()), "authed_passport_id", st.passportID, "resolved_passport_id", resolved.Passport.ID, "decision", "clear_auth_and_show_login")...)
 		p.clearAuthed(session)
 		return resolveResponse{}, authedSession{}, false, p.showLoginDialog(ctx, session)
 	}
@@ -1149,15 +1521,13 @@ func (p *portal) handleProfileCreateSubmit(ctx context.Context, session limbgo.P
 				errorKey = "limbo.error.profile_limit_reached"
 			}
 		}
-		errorText := playermsg.Substitute(p.rawMessage(errorKey), p.profileVars(session, resolved))
+		errorText := playermsg.Substitute(p.rawMessageForSession(session, errorKey), p.profileVars(session, resolved))
 		return p.showProfileCreateDialog(ctx, session, resolved, errorText)
 	}
 	if created.Player == nil {
-		return p.showProfileCreateDialog(ctx, session, created, p.rawMessage("limbo.error.profile_create_failed"))
+		return p.showProfileCreateDialog(ctx, session, created, p.rawMessageForSession(session, "limbo.error.profile_create_failed"))
 	}
-	// Return to the profile manager so the player sees the new profile in the
-	// list and explicitly joins with it.
-	return p.showProfileSelectDialog(ctx, session, created, "")
+	return p.routeProfiles(ctx, session, created)
 }
 
 func (p *portal) handleProfileSelectSubmit(ctx context.Context, session limbgo.PlayerSession, choice string) error {
@@ -1170,7 +1540,7 @@ func (p *portal) handleProfileSelectSubmit(ctx context.Context, session limbgo.P
 			return p.transferProfile(ctx, session, playermsg.ScreenProfileSelect, profile)
 		}
 	}
-	return p.showProfileSelectDialog(ctx, session, resolved, p.rawMessage("limbo.error.profile_selection_invalid"))
+	return p.showProfileSelectDialog(ctx, session, resolved, p.rawMessageForSession(session, "limbo.error.profile_selection_invalid"))
 }
 
 func (p *portal) handleOpenScreen(ctx context.Context, session limbgo.PlayerSession, screen string) error {
@@ -1197,10 +1567,10 @@ func (p *portal) transferProfile(ctx context.Context, session limbgo.PlayerSessi
 	playerIP := remoteIP(player.RemoteAddr)
 	resolvedTarget, err := p.client.resolveTarget(ctx, host, player.ProtocolVersion, playerIP)
 	if err != nil {
-		return p.showAuthDialogError(ctx, session, screen, p.rawMessage("limbo.error.target_failed"))
+		return p.showAuthDialogError(ctx, session, screen, p.rawMessageForSession(session, "limbo.error.target_failed"))
 	}
 	target := resolvedTarget.Target
-	p.rememberTarget(host, target)
+	p.rememberTarget(host, target, resolvedTarget.PlayerMessages)
 	if name := strings.TrimSpace(target.DisplayName); name != "" {
 		vars["server"] = name
 	} else if target.ServerID != "" {
@@ -1208,23 +1578,23 @@ func (p *portal) transferProfile(ctx context.Context, session limbgo.PlayerSessi
 	}
 	grant, err := p.client.createGrant(ctx, profile.ID, profile.ProtocolName, target.ServerID, host, p.sourceID(), playerIP, player.ProtocolVersion)
 	if err != nil {
-		return p.showAuthDialogError(ctx, session, screen, p.rawMessage("limbo.error.grant_failed"))
+		return p.showAuthDialogError(ctx, session, screen, p.rawMessageForSession(session, "limbo.error.grant_failed"))
 	}
 	caps := session.Capabilities()
 	if !caps.StoreCookie || !caps.Transfer {
 		if caps.Disconnect {
-			return session.Disconnect(ctx, p.message("limbo.kick.transfer_unsupported", vars))
+			return session.Disconnect(ctx, p.messageForSession(session, "limbo.kick.transfer_unsupported", vars))
 		}
-		return session.SendMessage(ctx, p.message("limbo.kick.transfer_unsupported", vars))
+		return session.SendMessage(ctx, p.messageForSession(session, "limbo.kick.transfer_unsupported", vars))
 	}
 	_ = session.ClearDialog(ctx)
 	if caps.ActionBar {
-		_ = session.SendActionBar(ctx, p.message("limbo.success.actionbar", vars))
+		_ = session.SendActionBar(ctx, p.messageForSession(session, "limbo.success.actionbar", vars))
 	}
 	if caps.Title {
 		_ = session.ShowTitle(ctx, limbgo.Title{
-			Title:    p.message("limbo.success.title", vars),
-			Subtitle: p.message("limbo.success.subtitle", vars),
+			Title:    p.messageForSession(session, "limbo.success.title", vars),
+			Subtitle: p.messageForSession(session, "limbo.success.subtitle", vars),
 			Times:    limbgo.TitleTimesTicks(5, 30, 5),
 		})
 	}
@@ -1262,10 +1632,10 @@ func (p *portal) transferCookieKey() string {
 }
 
 func requestedHost(value, fallback string) string {
-	if host := strings.TrimSpace(value); host != "" {
+	if host := canonicalRequestedHost(value); host != "" {
 		return host
 	}
-	return strings.TrimSpace(fallback)
+	return canonicalRequestedHost(fallback)
 }
 
 func dimensionFromMap(config map[string]any) limbgo.Dimension {
@@ -1586,11 +1956,13 @@ type heartbeatResponse struct {
 	Node struct {
 		ID string `json:"id"`
 	} `json:"node"`
-	RuntimeConfig  map[string]any `json:"runtime_config"`
-	PlayerMessages struct {
-		Messages map[string]string              `json:"messages"`
-		Dialogs  map[string]playermsg.DialogDoc `json:"dialogs"`
-	} `json:"player_messages"`
+	RuntimeConfig  map[string]any        `json:"runtime_config"`
+	PlayerMessages playerMessagesPayload `json:"player_messages"`
+}
+
+type playerMessagesPayload struct {
+	Messages map[string]string              `json:"messages"`
+	Dialogs  map[string]playermsg.DialogDoc `json:"dialogs"`
 }
 
 type nodeEvent struct {
@@ -1630,8 +2002,12 @@ type resolveResponse struct {
 	Profiles      []profileSummary `json:"profiles"`
 	ProfilePolicy profilePolicy    `json:"profile_policy"`
 	Auth          struct {
-		Required bool   `json:"required"`
-		Username string `json:"username"`
+		Required          bool   `json:"required"`
+		Kind              string `json:"kind"`
+		Locked            bool   `json:"locked"`
+		Username          string `json:"username"`
+		Remembered        bool   `json:"remembered"`
+		RememberExpiresAt string `json:"remember_expires_at"`
 	} `json:"auth"`
 }
 
@@ -1639,12 +2015,20 @@ type verifySessionResponse struct {
 	Profile verifiedProfileData `json:"profile"`
 }
 
+type verifiedSessionResult struct {
+	Profile             limbgo.VerifiedProfile
+	PassportID          string
+	PassportPreexisting bool
+}
+
 type verifiedProfileData struct {
-	UUID       string                `json:"uuid"`
-	Name       string                `json:"name"`
-	Properties []profilePropertyData `json:"properties"`
-	Source     string                `json:"source"`
-	Verified   bool                  `json:"verified"`
+	UUID                string                `json:"uuid"`
+	Name                string                `json:"name"`
+	Properties          []profilePropertyData `json:"properties"`
+	Source              string                `json:"source"`
+	Verified            bool                  `json:"verified"`
+	PassportID          string                `json:"passport_id"`
+	PassportPreexisting bool                  `json:"passport_preexisting"`
 }
 
 type profilePropertyData struct {
@@ -1654,8 +2038,9 @@ type profilePropertyData struct {
 }
 
 type targetResponse struct {
-	Target         downstreamTarget    `json:"target"`
-	LimboBlueprint *limboBlueprintData `json:"limbo_blueprint"`
+	Target         downstreamTarget      `json:"target"`
+	LimboBlueprint *limboBlueprintData   `json:"limbo_blueprint"`
+	PlayerMessages playerMessagesPayload `json:"player_messages"`
 }
 
 type loginPolicyResponse struct {
@@ -1679,12 +2064,14 @@ type grantResponse struct {
 }
 
 type downstreamTarget struct {
-	ServerID     string `json:"server_id"`
-	DisplayName  string `json:"display_name"`
-	TransferHost string `json:"transfer_host"`
-	TransferPort int    `json:"transfer_port"`
-	MOTD         string `json:"motd"`
-	ServerIcon   string `json:"server_icon"`
+	ServerID      string `json:"server_id"`
+	DisplayName   string `json:"display_name"`
+	TransferHost  string `json:"transfer_host"`
+	TransferPort  int    `json:"transfer_port"`
+	MOTD          string `json:"motd"`
+	ServerIcon    string `json:"server_icon"`
+	OnlinePlayers int    `json:"online_players"`
+	MaxPlayers    int    `json:"max_players"`
 }
 
 func (c *coreClient) heartbeat(ctx context.Context) (heartbeatResponse, error) {
@@ -1706,7 +2093,7 @@ func (c *coreClient) eventStream(ctx context.Context) (*websocket.Conn, error) {
 	return config.DialContext(ctx)
 }
 
-func (c *coreClient) verifySession(ctx context.Context, proof limbgo.SessionProof) (limbgo.VerifiedProfile, error) {
+func (c *coreClient) verifySession(ctx context.Context, proof limbgo.SessionProof) (verifiedSessionResult, error) {
 	res, err := postJSON[verifySessionResponse](ctx, c, "/api/node/limbo/sessions/verify", map[string]any{
 		"username":         proof.Username,
 		"server_id":        proof.ServerID,
@@ -1715,14 +2102,18 @@ func (c *coreClient) verifySession(ctx context.Context, proof limbgo.SessionProo
 		"requested_host":   proof.RequestedHost,
 	})
 	if err != nil {
-		return limbgo.VerifiedProfile{}, err
+		return verifiedSessionResult{}, err
 	}
-	return limbgo.VerifiedProfile{
-		UUID:       res.Profile.UUID,
-		Name:       res.Profile.Name,
-		Properties: limbgoProfileProperties(res.Profile.Properties),
-		Source:     res.Profile.Source,
-		Verified:   res.Profile.Verified,
+	return verifiedSessionResult{
+		Profile: limbgo.VerifiedProfile{
+			UUID:       res.Profile.UUID,
+			Name:       res.Profile.Name,
+			Properties: limbgoProfileProperties(res.Profile.Properties),
+			Source:     res.Profile.Source,
+			Verified:   res.Profile.Verified,
+		},
+		PassportID:          res.Profile.PassportID,
+		PassportPreexisting: res.Profile.PassportPreexisting,
 	}, nil
 }
 
@@ -1750,6 +2141,15 @@ func (c *coreClient) resolveLoginPolicy(ctx context.Context, req limbgo.LoginReq
 
 func (c *coreClient) authenticate(ctx context.Context, username, password string, remoteIP string) error {
 	_, err := postJSON[map[string]any](ctx, c, "/api/node/players/authenticate", map[string]any{"username": username, "password": password, "remote_ip": remoteIP})
+	return err
+}
+
+func (c *coreClient) rememberAuth(ctx context.Context, passportID string, remoteIP string, reason string) error {
+	_, err := postJSON[map[string]any](ctx, c, "/api/node/players/remember-auth", map[string]any{
+		"passport_id": passportID,
+		"remote_ip":   remoteIP,
+		"reason":      reason,
+	})
 	return err
 }
 

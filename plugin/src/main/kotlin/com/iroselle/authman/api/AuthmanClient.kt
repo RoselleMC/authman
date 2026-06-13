@@ -9,9 +9,13 @@ import com.iroselle.authman.config.RuntimeConfig
 import com.iroselle.authman.model.DownstreamConsumeResult
 import com.iroselle.authman.model.DownstreamResourcePack
 import com.iroselle.authman.model.DownstreamServerOption
+import com.iroselle.authman.model.DownstreamStatusReport
 import com.iroselle.authman.model.DownstreamTarget
 import com.iroselle.authman.model.DownstreamTransferResult
 import com.iroselle.authman.model.NodeAction
+import com.iroselle.authman.model.NodeActionAck
+import com.iroselle.authman.model.NodePresenceCheckRequest
+import com.iroselle.authman.model.NodePresenceCheckResult
 import com.iroselle.authman.model.ResolvedPlayer
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -139,14 +143,35 @@ class AuthmanClient(
         createBan("/api/node/bans/passport", username, durationSeconds, reason)
     }
 
-    fun heartbeat(pluginVersion: String, velocityVersion: String): HeartbeatResult {
+    fun renameProfile(profileId: String, protocolName: String, remoteIp: String): String {
+        val response = post(
+            "/api/node/profiles/rename",
+            mapOf(
+                "profile_id" to profileId,
+                "protocol_name" to protocolName,
+                "remote_ip" to remoteIp,
+            ),
+        )
+        if (!response.ok) {
+            throw AuthmanHttpException("rename profile", response)
+        }
+        return response.jsonData().obj("profile").string("protocol_name")
+    }
+
+    fun heartbeat(pluginVersion: String, velocityVersion: String, status: DownstreamStatusReport): HeartbeatResult {
         val response = post(
             "/api/node/heartbeat",
             mapOf(
                 "kind" to "downstream_velocity",
+                "name" to config.nodeName,
+                "server_id" to config.serverId,
                 "instance_fingerprint" to instanceFingerprint,
                 "plugin_version" to pluginVersion,
                 "velocity_version" to velocityVersion,
+                "status" to mapOf(
+                    "online_players" to status.onlinePlayers,
+                    "max_players" to status.maxPlayers,
+                ),
             ),
             includeInstanceHeader = false,
         )
@@ -172,7 +197,11 @@ class AuthmanClient(
         )
     }
 
-    fun connectEvents(onSync: (HeartbeatResult) -> Unit, onRevoked: () -> Unit): CompletableFuture<Void> {
+    fun connectEvents(
+        onSync: (HeartbeatResult) -> Unit,
+        onRevoked: () -> Unit,
+        onPresenceCheck: (NodePresenceCheckRequest) -> NodePresenceCheckResult,
+    ): CompletableFuture<Void> {
         val done = CompletableFuture<Void>()
         val buffer = StringBuilder()
         httpClient.newWebSocketBuilder()
@@ -188,6 +217,10 @@ class AuthmanClient(
                             val root = gson.fromJson(message, JsonObject::class.java)
                             when (root.stringOr("type", "")) {
                                 "sync" -> onSync(parseSync(root.obj("data")))
+                                "presence_check" -> {
+                                    val result = onPresenceCheck(parsePresenceCheckRequest(root))
+                                    webSocket.sendText(gson.toJson(presenceCheckResponse(result)), true)
+                                }
                                 "revoked" -> {
                                     onRevoked()
                                     done.completeExceptionally(IllegalStateException("Authman node token was revoked"))
@@ -221,12 +254,32 @@ class AuthmanClient(
         return done
     }
 
-    fun ackActions(ids: List<String>) {
-        val clean = ids.map { it.trim() }.filter { it.isNotEmpty() }
+    fun ackActions(acks: List<NodeActionAck>) {
+        val clean = acks.filter { it.id.isNotBlank() }
         if (clean.isEmpty()) {
             return
         }
-        val response = post("/api/node/actions/ack", mapOf("ids" to clean))
+        val response = post(
+            "/api/node/actions/ack",
+            mapOf(
+                "ids" to clean.map { it.id.trim() },
+                "results" to clean.map { ack ->
+                    val row = mutableMapOf<String, Any?>(
+                        "id" to ack.id.trim(),
+                        "type" to ack.type,
+                        "presence_id" to ack.presenceId,
+                        "passport_id" to ack.passportId,
+                        "profile_id" to ack.profileId,
+                        "uuid" to ack.uuid,
+                        "protocol_name" to ack.protocolName,
+                    )
+                    if (ack.online != null) {
+                        row["online"] = ack.online
+                    }
+                    row
+                },
+            ),
+        )
         if (!response.ok && !response.isAccessRevoked()) {
             throw AuthmanHttpException("ack actions", response)
         }
@@ -332,6 +385,35 @@ private fun parseSync(data: JsonObject): HeartbeatResult {
         accessRevoked = false,
     )
 }
+
+private fun parsePresenceCheckRequest(root: JsonObject): NodePresenceCheckRequest {
+    val data = root.obj("data")
+    val requestId = root.stringOr("request_id", data.stringOr("request_id", ""))
+    return NodePresenceCheckRequest(
+        requestId = requestId,
+        presenceId = data.stringOr("presence_id", ""),
+        passportId = data.stringOr("passport_id", ""),
+        profileId = data.stringOr("profile_id", ""),
+        uuid = data.stringOr("uuid", ""),
+        protocolName = data.stringOr("protocol_name", ""),
+        reason = data.stringOr("reason", ""),
+    )
+}
+
+private fun presenceCheckResponse(result: NodePresenceCheckResult): Map<String, Any?> =
+    mapOf(
+        "type" to "presence_check_result",
+        "request_id" to result.requestId,
+        "data" to mapOf(
+            "request_id" to result.requestId,
+            "presence_id" to result.presenceId,
+            "passport_id" to result.passportId,
+            "profile_id" to result.profileId,
+            "uuid" to result.uuid,
+            "protocol_name" to result.protocolName,
+            "online" to result.online,
+        ),
+    )
 
 private fun parseNodeActions(element: JsonElement?): List<NodeAction> {
     if (element == null || element.isJsonNull || !element.isJsonArray) {

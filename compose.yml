@@ -3,6 +3,8 @@ services:
     build:
       context: ..
       dockerfile: authman/core/Dockerfile
+      args:
+        GOPROXY: "${GOPROXY:-https://proxy.golang.org,direct}"
     environment:
       AUTHMAN_HTTP_ADDR: ":8081"
       AUTHMAN_EXTERNAL_HTTP_ADDR: ":8080"
@@ -38,6 +40,8 @@ services:
     build:
       context: ..
       dockerfile: authman/limbo/Dockerfile
+      args:
+        GOPROXY: "${GOPROXY:-https://proxy.golang.org,direct}"
     network_mode: host
     environment:
       AUTHMAN_CORE_URL: "${AUTHMAN_LIMBO_CORE_URL:-http://127.0.0.1:18081}"

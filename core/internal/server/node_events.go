@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -129,6 +130,7 @@ func (s *Server) handleAdminUpdateNodeCommunicationSettings(w http.ResponseWrite
 type nodeEventHub struct {
 	mu      sync.Mutex
 	clients map[string]map[*nodeEventClient]struct{}
+	pending map[string]chan json.RawMessage
 }
 
 type nodeEventClient struct {
@@ -137,7 +139,10 @@ type nodeEventClient struct {
 }
 
 func newNodeEventHub() *nodeEventHub {
-	return &nodeEventHub{clients: map[string]map[*nodeEventClient]struct{}{}}
+	return &nodeEventHub{
+		clients: map[string]map[*nodeEventClient]struct{}{},
+		pending: map[string]chan json.RawMessage{},
+	}
 }
 
 func (h *nodeEventHub) register(nodeID string, client *nodeEventClient) func() {
@@ -172,6 +177,69 @@ func (h *nodeEventHub) broadcast(nodeID string, payload []byte) int {
 		}
 	}
 	return count
+}
+
+var errNodeEventNoLiveClient = errors.New("no live node websocket client")
+
+func nodeEventRequestKey(nodeID string, requestID string) string {
+	return nodeID + "\x00" + requestID
+}
+
+func (h *nodeEventHub) request(ctx context.Context, nodeID string, requestID string, payload []byte) (json.RawMessage, int, error) {
+	if nodeID == "" || requestID == "" {
+		return nil, 0, errNodeEventNoLiveClient
+	}
+	ch := make(chan json.RawMessage, 1)
+	key := nodeEventRequestKey(nodeID, requestID)
+	h.mu.Lock()
+	if h.pending == nil {
+		h.pending = map[string]chan json.RawMessage{}
+	}
+	h.pending[key] = ch
+	delivered := 0
+	for client := range h.clients[nodeID] {
+		select {
+		case client.send <- payload:
+			delivered++
+		default:
+		}
+	}
+	if delivered == 0 {
+		delete(h.pending, key)
+		h.mu.Unlock()
+		return nil, 0, errNodeEventNoLiveClient
+	}
+	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		delete(h.pending, key)
+		h.mu.Unlock()
+	}()
+	select {
+	case raw := <-ch:
+		return raw, delivered, nil
+	case <-ctx.Done():
+		return nil, delivered, ctx.Err()
+	}
+}
+
+func (h *nodeEventHub) resolve(nodeID string, requestID string, payload json.RawMessage) bool {
+	if nodeID == "" || requestID == "" {
+		return false
+	}
+	key := nodeEventRequestKey(nodeID, requestID)
+	h.mu.Lock()
+	ch := h.pending[key]
+	h.mu.Unlock()
+	if ch == nil {
+		return false
+	}
+	select {
+	case ch <- payload:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleNodeEvents(w http.ResponseWriter, r *http.Request) {
@@ -210,11 +278,12 @@ func (s *Server) serveNodeEvents(ws *websocket.Conn) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		var ignored string
 		for {
-			if err := websocket.Message.Receive(ws, &ignored); err != nil {
+			var message string
+			if err := websocket.Message.Receive(ws, &message); err != nil {
 				return
 			}
+			s.handleNodeEventClientMessage(n.ID, []byte(message))
 		}
 	}()
 	pingEvery := time.Duration(settings.WebSocketPingIntervalSeconds) * time.Second
@@ -241,6 +310,24 @@ func (s *Server) serveNodeEvents(ws *websocket.Conn) {
 			}
 		}
 	}
+}
+
+func (s *Server) handleNodeEventClientMessage(nodeID string, payload []byte) {
+	var message struct {
+		Type      string          `json:"type"`
+		RequestID string          `json:"request_id"`
+		Data      json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return
+	}
+	if message.Type != "presence_check_result" {
+		return
+	}
+	if len(message.Data) == 0 || string(message.Data) == "null" {
+		message.Data = payload
+	}
+	s.nodeEvents.resolve(nodeID, message.RequestID, message.Data)
 }
 
 func sendNodeEventError(ws *websocket.Conn, code string, message string) error {
@@ -272,32 +359,32 @@ func (s *Server) nodeSyncPayload(ctx context.Context, n node.Node) map[string]an
 	return map[string]any{
 		"node":               s.nodeData(ctx, n),
 		"runtime_config":     s.nodeRuntimeConfig(ctx, n),
-		"player_messages":    s.playerMessagesPayload(ctx, n.Mode),
+		"player_messages":    s.playerMessagesPayload(ctx, n),
 		"actions":            nodeActionRows(s.store.ListPendingNodeActions(ctx, n.ID, time.Now(), 50)),
 		"downstream_servers": s.nodeDownstreamServerChoices(ctx, n),
 	}
 }
 
-func (s *Server) pushNodeSync(ctx context.Context, n node.Node, reason string) {
+func (s *Server) pushNodeSync(ctx context.Context, n node.Node, reason string) int {
 	if s.nodeEvents == nil {
-		return
+		return 0
 	}
 	payload, err := s.nodeEventPayload(ctx, "sync", n, reason)
 	if err != nil {
-		return
+		return 0
 	}
-	s.nodeEvents.broadcast(n.ID, payload)
+	return s.nodeEvents.broadcast(n.ID, payload)
 }
 
-func (s *Server) pushNodeIDSync(ctx context.Context, nodeID string, reason string) {
+func (s *Server) pushNodeIDSync(ctx context.Context, nodeID string, reason string) int {
 	if nodeID == "" {
-		return
+		return 0
 	}
 	n, err := s.nodes.Get(ctx, nodeID)
 	if err != nil {
-		return
+		return 0
 	}
-	s.pushNodeSync(ctx, n, reason)
+	return s.pushNodeSync(ctx, n, reason)
 }
 
 func (s *Server) pushAllNodeSync(ctx context.Context, reason string) {

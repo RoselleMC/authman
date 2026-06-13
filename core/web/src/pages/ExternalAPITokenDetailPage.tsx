@@ -14,6 +14,7 @@ import {
   DetailAside,
   DetailBody,
   DetailGrid,
+  DetailIdentifier,
   DetailSummary,
   ErrorState,
   PageShell,
@@ -124,10 +125,7 @@ export function ExternalAPITokenDetailPage() {
             titleMeta={<ExternalTokenStatusBadge status={token.status} />}
             meta={<span className="muted-cell">{t("admin.settings.externalApi.detail.meta")}</span>}
           >
-            <div className="id-uuid">
-              <span className="id-uuid-label">{t("admin.settings.externalApi.col.name")}</span>
-              <strong className="mono">{token.token_fingerprint}</strong>
-            </div>
+            <DetailIdentifier label={t("admin.settings.externalApi.col.fingerprint")} value={token.token_fingerprint} />
           </DetailSummary>
           <DetailActions title={t("common.actions")}>
             <Button

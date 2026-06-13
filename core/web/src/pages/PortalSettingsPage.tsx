@@ -20,7 +20,7 @@ const EMPTY: PortalSettings = {
   transfer_cookie_key: "authman:transfer_grant",
   fallback_server_id: "",
   max_profiles_per_passport: 3,
-  auto_join_single_profile: false,
+  auto_auth_ttl_seconds: 12 * 60 * 60,
   available_servers: [],
 };
 
@@ -113,18 +113,24 @@ export function PortalSettingsPage({ embedded = false }: { embedded?: boolean } 
                 data-testid="portal-max-profiles"
               />
             </Field>
-            <label className="toggle-row">
+            <Field label={t("admin.portal.field.autoAuthTTL")} hint={t("admin.portal.field.autoAuthTTL.hint")}>
               <input
-                type="checkbox"
-                checked={Boolean(form.auto_join_single_profile)}
-                onChange={(e) => patch("auto_join_single_profile", e.currentTarget.checked)}
-                data-testid="portal-auto-join"
+                className="input"
+                type="number"
+                min={0}
+                max={168}
+                value={Math.round((form.auto_auth_ttl_seconds ?? EMPTY.auto_auth_ttl_seconds ?? 0) / 3600)}
+                onChange={(e) => patch("auto_auth_ttl_seconds", Math.max(0, Math.min(168, Number(e.target.value) || 0)) * 3600)}
+                data-testid="portal-auto-auth-ttl"
               />
+            </Field>
+            <div className="settings-note" data-testid="portal-single-profile-auto">
+              <Icon name="info" size={14} />
               <span>
-                <strong>{t("admin.portal.field.autoJoinSingle")}</strong>
-                <small>{t("admin.portal.field.autoJoinSingle.hint")}</small>
+                <strong>{t("admin.portal.field.singleProfileAuto")}</strong>
+                <small>{t("admin.portal.field.singleProfileAuto.hint")}</small>
               </span>
-            </label>
+            </div>
             <div className="settings-note" data-testid="portal-protocol-requirement">
               <Icon name="info" size={14} />
               <span>{t("admin.portal.protocolRequirement")}</span>

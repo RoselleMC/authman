@@ -13,54 +13,56 @@ import (
 )
 
 type Config struct {
-	HTTPAddr           string
-	ExternalHTTPAddr   string
-	DatabaseURL        string
-	PublicBaseURL      string
-	HTTPBasePath       string
-	WebRoot            string
-	DefaultLocale      string
-	AdminUsername      string
-	AdminEmail         string
-	AdminPassword      string
-	AdminPasswordHash  string
-	NodeAccessToken    string
-	CORSAllowedOrigins []string
-	MojangSessionURL   string
-	MojangProfileURL   string
-	MojangRoutes       []mojang.Route
-	MojangTimeout      time.Duration
-	MojangCooldown     time.Duration
-	MojangCacheFresh   time.Duration
-	MojangCacheStale   time.Duration
-	LogLevel           slog.Level
-	ShutdownTimeout    time.Duration
+	HTTPAddr                  string
+	ExternalHTTPAddr          string
+	DatabaseURL               string
+	PublicBaseURL             string
+	HTTPBasePath              string
+	WebRoot                   string
+	DefaultLocale             string
+	AdminUsername             string
+	AdminEmail                string
+	AdminPassword             string
+	AdminPasswordHash         string
+	NodeAccessToken           string
+	CORSAllowedOrigins        []string
+	MojangSessionURL          string
+	MojangProfileURL          string
+	MojangRoutes              []mojang.Route
+	MojangTimeout             time.Duration
+	MojangCooldown            time.Duration
+	MojangCacheFresh          time.Duration
+	MojangCacheStale          time.Duration
+	LogLevel                  slog.Level
+	ShutdownTimeout           time.Duration
+	PresenceReconcileInterval time.Duration
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		HTTPAddr:           envString("AUTHMAN_HTTP_ADDR", ":8080"),
-		ExternalHTTPAddr:   envString("AUTHMAN_EXTERNAL_HTTP_ADDR", ""),
-		DatabaseURL:        envString("AUTHMAN_DATABASE_URL", ""),
-		PublicBaseURL:      envString("AUTHMAN_PUBLIC_BASE_URL", "http://localhost:8080"),
-		HTTPBasePath:       httpBasePath(),
-		WebRoot:            envString("AUTHMAN_CORE_WEB_ROOT", ""),
-		DefaultLocale:      envString("AUTHMAN_DEFAULT_LOCALE", "zh"),
-		AdminUsername:      envString("AUTHMAN_ADMIN_USERNAME", "admin"),
-		AdminEmail:         envString("AUTHMAN_ADMIN_EMAIL", ""),
-		AdminPassword:      envString("AUTHMAN_ADMIN_PASSWORD", ""),
-		AdminPasswordHash:  envString("AUTHMAN_ADMIN_PASSWORD_HASH", ""),
-		NodeAccessToken:    envString("AUTHMAN_NODE_ACCESS_TOKEN", ""),
-		CORSAllowedOrigins: envCSV("AUTHMAN_CORS_ALLOWED_ORIGINS"),
-		MojangSessionURL:   envString("AUTHMAN_MOJANG_SESSION_URL", mojang.DefaultSessionServerURL),
-		MojangProfileURL:   envString("AUTHMAN_MOJANG_PROFILE_URL", mojang.DefaultProfileAPIURL),
-		MojangRoutes:       mojangRoutes(),
-		MojangTimeout:      envDuration("AUTHMAN_MOJANG_TIMEOUT", 5*time.Second),
-		MojangCooldown:     envDuration("AUTHMAN_MOJANG_FAILURE_COOLDOWN", 30*time.Second),
-		MojangCacheFresh:   envDuration("AUTHMAN_MOJANG_CACHE_FRESH_TTL", 30*time.Second),
-		MojangCacheStale:   envDuration("AUTHMAN_MOJANG_CACHE_STALE_TTL", 5*time.Minute),
-		LogLevel:           parseLogLevel(envString("AUTHMAN_LOG_LEVEL", "info")),
-		ShutdownTimeout:    envDuration("AUTHMAN_SHUTDOWN_TIMEOUT", 10*time.Second),
+		HTTPAddr:                  envString("AUTHMAN_HTTP_ADDR", ":8080"),
+		ExternalHTTPAddr:          envString("AUTHMAN_EXTERNAL_HTTP_ADDR", ""),
+		DatabaseURL:               envString("AUTHMAN_DATABASE_URL", ""),
+		PublicBaseURL:             envString("AUTHMAN_PUBLIC_BASE_URL", "http://localhost:8080"),
+		HTTPBasePath:              httpBasePath(),
+		WebRoot:                   envString("AUTHMAN_CORE_WEB_ROOT", ""),
+		DefaultLocale:             envString("AUTHMAN_DEFAULT_LOCALE", "zh"),
+		AdminUsername:             envString("AUTHMAN_ADMIN_USERNAME", "admin"),
+		AdminEmail:                envString("AUTHMAN_ADMIN_EMAIL", ""),
+		AdminPassword:             envString("AUTHMAN_ADMIN_PASSWORD", ""),
+		AdminPasswordHash:         envString("AUTHMAN_ADMIN_PASSWORD_HASH", ""),
+		NodeAccessToken:           envString("AUTHMAN_NODE_ACCESS_TOKEN", ""),
+		CORSAllowedOrigins:        envCSV("AUTHMAN_CORS_ALLOWED_ORIGINS"),
+		MojangSessionURL:          envString("AUTHMAN_MOJANG_SESSION_URL", mojang.DefaultSessionServerURL),
+		MojangProfileURL:          envString("AUTHMAN_MOJANG_PROFILE_URL", mojang.DefaultProfileAPIURL),
+		MojangRoutes:              mojangRoutes(),
+		MojangTimeout:             envDuration("AUTHMAN_MOJANG_TIMEOUT", 5*time.Second),
+		MojangCooldown:            envDuration("AUTHMAN_MOJANG_FAILURE_COOLDOWN", 30*time.Second),
+		MojangCacheFresh:          envDuration("AUTHMAN_MOJANG_CACHE_FRESH_TTL", 30*time.Second),
+		MojangCacheStale:          envDuration("AUTHMAN_MOJANG_CACHE_STALE_TTL", 5*time.Minute),
+		LogLevel:                  parseLogLevel(envString("AUTHMAN_LOG_LEVEL", "info")),
+		ShutdownTimeout:           envDuration("AUTHMAN_SHUTDOWN_TIMEOUT", 10*time.Second),
+		PresenceReconcileInterval: envDuration("AUTHMAN_PRESENCE_RECONCILE_INTERVAL", 30*time.Second),
 	}
 	if cfg.HTTPAddr == "" {
 		return Config{}, fmt.Errorf("AUTHMAN_HTTP_ADDR must not be empty")

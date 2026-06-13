@@ -45,9 +45,24 @@ class AuthmanCommand(
                 }
                 return
             }
+            "rename-profile" -> {
+                if (args.size < 3) {
+                    source.sendMessage(Component.text("Usage: /authman rename-profile <player> <new-profile-name>"))
+                    return
+                }
+                try {
+                    source.sendMessage(Component.text(plugin.renameCurrentProfile(args[1], args[2])))
+                } catch (ex: IllegalArgumentException) {
+                    source.sendMessage(Component.text("Authman profile rename failed: ${ex.message ?: "invalid command arguments"}"))
+                } catch (ex: Exception) {
+                    logger.warn("Failed to rename Authman profile for {} to {}", args[1], args[2], ex)
+                    source.sendMessage(Component.text("Authman profile rename failed: ${ex.message ?: "unknown error"}"))
+                }
+                return
+            }
         }
         if (args.size < 4) {
-            source.sendMessage(Component.text("Usage: /authman <reload|reconnect|transfer|ban-profile|ban-passport> [args...]"))
+            source.sendMessage(Component.text("Usage: /authman <reload|reconnect|transfer|rename-profile|ban-profile|ban-passport> [args...]"))
             source.sendMessage(Component.text("Duration examples: 1s, 1min, 1h, 1w, 1m, 1y."))
             return
         }
@@ -67,7 +82,7 @@ class AuthmanCommand(
                 "ban-profile" -> plugin.client().banProfile(target, durationSeconds, reason)
                 "ban-passport" -> plugin.client().banPassport(target, durationSeconds, reason)
                 else -> {
-                    source.sendMessage(Component.text("Usage: /authman <reload|reconnect|transfer|ban-profile|ban-passport> [args...]"))
+                    source.sendMessage(Component.text("Usage: /authman <reload|reconnect|transfer|rename-profile|ban-profile|ban-passport> [args...]"))
                     return
                 }
             }
@@ -81,7 +96,7 @@ class AuthmanCommand(
     override fun suggest(invocation: SimpleCommand.Invocation): List<String> {
         val args = invocation.arguments()
         if (args.size <= 1) {
-            return listOf("reload", "reconnect", "transfer", "ban-profile", "ban-passport")
+            return listOf("reload", "reconnect", "transfer", "rename-profile", "ban-profile", "ban-passport")
                 .filter { hasActionPermission(invocation.source(), it) }
                 .filter { it.startsWith(args.firstOrNull() ?: "") }
         }
@@ -92,6 +107,12 @@ class AuthmanCommand(
             }
             if (args.size == 3) {
                 return plugin.downstreamTransferSuggestions(args[2])
+            }
+            return emptyList()
+        }
+        if (action == "rename-profile") {
+            if (args.size == 2) {
+                return plugin.onlinePlayerNames().filter { it.startsWith(args[1], ignoreCase = true) }.take(25)
             }
             return emptyList()
         }
@@ -106,6 +127,7 @@ class AuthmanCommand(
             invocation.source().hasPermission(PERMISSION_ALL) ||
             invocation.source().hasPermission(PERMISSION_ADMIN) ||
             invocation.source().hasPermission(PERMISSION_BAN) ||
+            invocation.source().hasPermission(PERMISSION_PROFILE) ||
             invocation.source().hasPermission(PERMISSION_TRANSFER)
     }
 
@@ -119,8 +141,9 @@ class AuthmanCommand(
         return when (action) {
             "reload", "reconnect" -> source.hasPermission(PERMISSION_ADMIN)
             "ban-profile", "ban-passport" -> source.hasPermission(PERMISSION_BAN)
+            "rename-profile" -> source.hasPermission(PERMISSION_PROFILE) || source.hasPermission(PERMISSION_ADMIN)
             "transfer" -> source.hasPermission(PERMISSION_TRANSFER)
-            else -> source.hasPermission(PERMISSION_ADMIN) || source.hasPermission(PERMISSION_BAN) || source.hasPermission(PERMISSION_TRANSFER)
+            else -> source.hasPermission(PERMISSION_ADMIN) || source.hasPermission(PERMISSION_BAN) || source.hasPermission(PERMISSION_PROFILE) || source.hasPermission(PERMISSION_TRANSFER)
         }
     }
 
@@ -128,6 +151,7 @@ class AuthmanCommand(
         const val PERMISSION_ALL = "authman.command.*"
         const val PERMISSION_ADMIN = "authman.command.admin"
         const val PERMISSION_BAN = "authman.command.ban"
+        const val PERMISSION_PROFILE = "authman.command.profile"
         const val PERMISSION_TRANSFER = "authman.command.transfer"
         private val DURATION_PATTERN = Regex("""^([1-9][0-9]*)(s|min|h|d|w|m|y)$""")
 

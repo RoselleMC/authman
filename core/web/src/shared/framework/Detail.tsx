@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Card } from "../components/Card";
+import { Copyable } from "../components/Copyable";
 import { Icon } from "../components/Icon";
 import { cx } from "../utils/cx";
 
@@ -37,17 +38,44 @@ export function DetailSummary({ title, titleMeta, meta, avatarUrl, avatarText, i
   return (
     <Card>
       <div className="id-summary">
-        <span className={cx("pa-avatar pa-lg", avatarUrl && "has-image")}>
-          {avatarUrl ? <img src={avatarUrl} alt="" aria-hidden="true" /> : icon ? <Icon name={icon} size={24} /> : avatarText}
-        </span>
-        <div className="id-name-row">
-          <h2 className="id-raw">{title}</h2>
-          {titleMeta}
+        <div className="id-summary-main">
+          <span className={cx("pa-avatar pa-lg", avatarUrl && "has-image")}>
+            {avatarUrl ? <img src={avatarUrl} alt="" aria-hidden="true" /> : icon ? <Icon name={icon} size={24} /> : avatarText}
+          </span>
+          <div className="id-name-row">
+            <h2 className="id-raw">{title}</h2>
+            {titleMeta}
+          </div>
+          {meta ? <div className="identity-meta-row">{meta}</div> : null}
         </div>
-        {meta ? <div className="identity-meta-row">{meta}</div> : null}
-        {children}
+        {children ? <div className="id-summary-details">{children}</div> : null}
       </div>
     </Card>
+  );
+}
+
+interface DetailIdentifierProps {
+  label: ReactNode;
+  value?: string | null;
+  display?: string;
+  copy?: boolean;
+  mono?: boolean;
+  children?: ReactNode;
+}
+
+export function DetailIdentifier({ label, value, display, copy = true, mono = true, children }: DetailIdentifierProps) {
+  const text = value?.trim() ?? "";
+  return (
+    <div className="id-uuid">
+      <span className="id-uuid-label">{label}</span>
+      <div className="id-uuid-value">
+        {children ? children : text ? (
+          copy ? <Copyable value={text} display={display} mono={mono} /> : <strong className={cx(mono && "mono")}>{display ?? text}</strong>
+        ) : (
+          <strong>—</strong>
+        )}
+      </div>
+    </div>
   );
 }
 

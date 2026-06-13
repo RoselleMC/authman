@@ -379,6 +379,23 @@ func downstreamServerData(server store.DownstreamServer) map[string]any {
 	}
 }
 
+func (s *Server) downstreamServerData(ctx context.Context, server store.DownstreamServer) map[string]any {
+	data := downstreamServerData(server)
+	status := s.effectiveDownstreamStatus(ctx, server.ID, time.Now())
+	addDownstreamRuntimeStatus(data, status)
+	if target, ok := data["target"].(map[string]any); ok {
+		addDownstreamRuntimeStatus(target, status)
+	}
+	return data
+}
+
+func (s *Server) downstreamTargetData(ctx context.Context, server store.DownstreamServer, target store.DownstreamTarget) map[string]any {
+	data := store.DownstreamTargetData(target)
+	status := s.effectiveDownstreamStatus(ctx, server.ID, time.Now())
+	addDownstreamRuntimeStatus(data, status)
+	return data
+}
+
 func stringFromMap(values map[string]any, key string) string {
 	if value, ok := values[key].(string); ok {
 		return value

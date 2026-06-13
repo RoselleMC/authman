@@ -12,6 +12,7 @@ import {
   DetailAside,
   DetailBody,
   DetailGrid,
+  DetailIdentifier,
   DetailSummary,
   Field,
   Input,
@@ -106,10 +107,9 @@ export function LimboBlueprintDetailPage() {
             titleMeta={<Badge tone="info">{blueprint.preview?.block_count ?? 0}</Badge>}
             meta={<><span className="muted-cell">{t("admin.limboBlueprints.col.dimension")}</span><strong>{dimension}</strong></>}
           >
-            <div className="id-uuid">
-              <span className="id-uuid-label">{t("common.updated")}</span>
-              <strong>{formatRelativeTime(blueprint.updated_at)}</strong>
-            </div>
+            <DetailIdentifier label={t("admin.limboBlueprints.detail.blueprintId")} value={blueprint.id} />
+            <DetailIdentifier label="SHA-256" value={blueprint.sha256} />
+            <DetailIdentifier label={t("common.updated")} value={formatRelativeTime(blueprint.updated_at)} copy={false} mono={false} />
           </DetailSummary>
           <DetailActions title={t("common.actions")}>
             <Button variant="primary" icon="check" block loading={updateMut.isPending} disabled={!name.trim()} onClick={() => updateMut.mutate()}>{t("common.save")}</Button>

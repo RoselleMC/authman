@@ -5,6 +5,7 @@ import {
   AdvancedList,
   Button,
   Card,
+  ConfirmDialog,
   Copyable,
   Dialog,
   EmptyState,
@@ -24,7 +25,7 @@ import {
   navigateWithBack,
   type ListColumn,
 } from "@authman/shared";
-import { createOfflinePassport, createPassportBan, fetchPassports, revokeBan, updatePassportStatus, type IdentityListFilters, type PassportRow } from "../api/admin";
+import { createOfflinePassport, createPassportBan, deletePassport, fetchPassports, revokeBan, updatePassportStatus, type IdentityListFilters, type PassportRow } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 import { BanDurationFields, BanStateCell, LockUntilCell, durationSeconds, isValidDuration, type DurationUnit } from "../components/PlayerStateCells";
 
@@ -41,6 +42,7 @@ export function PassportsPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [bulkBanRows, setBulkBanRows] = useState<PassportRow[]>([]);
+  const [bulkDeleteRows, setBulkDeleteRows] = useState<PassportRow[]>([]);
   const [banReason, setBanReason] = useState("");
   const [banDurationValue, setBanDurationValue] = useState("1");
   const [banDurationUnit, setBanDurationUnit] = useState<DurationUnit>("d");
@@ -79,6 +81,18 @@ export function PassportsPage() {
     onSuccess: () => {
       toast.push({ tone: "success", title: t("common.saved") });
       void qc.invalidateQueries({ queryKey: ["admin.passports"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const deleteMut = useMutation({
+    mutationFn: async (rows: PassportRow[]) => {
+      await Promise.all(rows.map((row) => deletePassport(row.id)));
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("common.deleted") });
+      setBulkDeleteRows([]);
+      void qc.invalidateQueries({ queryKey: ["admin.passports"] });
+      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -202,7 +216,7 @@ export function PassportsPage() {
               {rows.every((row) => row.status === "locked") ? <Button size="sm" variant="secondary" icon="unlock" loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, status: "active" })}>{t("common.unlock")}</Button> : null}
               {rows.every((row) => !row.active_ban) ? <Button size="sm" variant="danger-soft" icon="alert" onClick={() => setBulkBanRows(rows)}>{t("common.ban")}</Button> : null}
               {rows.every((row) => !!row.active_ban) ? <Button size="sm" variant="secondary" icon="unlock" loading={revokeMut.isPending} onClick={() => revokeMut.mutate(rows)}>{t("common.unban")}</Button> : null}
-              {rows.every((row) => row.status !== "deleted") ? <Button size="sm" variant="danger" icon="trash" loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, status: "deleted" })}>{t("common.delete")}</Button> : null}
+              <Button size="sm" variant="danger" icon="trash" loading={deleteMut.isPending} onClick={() => setBulkDeleteRows(rows)}>{t("common.delete")}</Button>
             </>
           )}
           empty={<EmptyState icon="key" title={t("admin.passports.empty")} />}
@@ -240,6 +254,16 @@ export function PassportsPage() {
       >
         <BanDurationFields reason={banReason} value={banDurationValue} unit={banDurationUnit} onReasonChange={setBanReason} onValueChange={setBanDurationValue} onUnitChange={setBanDurationUnit} />
       </Dialog>
+      <ConfirmDialog
+        open={bulkDeleteRows.length > 0}
+        title={t("admin.passports.deleteDialog")}
+        body={t("admin.passports.deleteDialogBody")}
+        confirmLabel={t("common.delete")}
+        destructive
+        loading={deleteMut.isPending}
+        onCancel={() => setBulkDeleteRows([])}
+        onConfirm={() => deleteMut.mutate(bulkDeleteRows)}
+      />
     </PageShell>
   );
 }

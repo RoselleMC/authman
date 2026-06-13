@@ -5,6 +5,7 @@ import {
   AdvancedList,
   Button,
   Card,
+  ConfirmDialog,
   Copyable,
   Dialog,
   EmptyState,
@@ -22,7 +23,7 @@ import {
   navigateWithBack,
   type ListColumn,
 } from "@authman/shared";
-import { createProfile, fetchProfiles, type IdentityListFilters, type ProfileRow } from "../api/admin";
+import { createProfile, deleteProfile, fetchProfiles, type IdentityListFilters, type ProfileRow } from "../api/admin";
 import { createProfileBan, revokeBan, updateProfileStatus } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 import { BanDurationFields, BanStateCell, LockUntilCell, durationSeconds, isValidDuration, type DurationUnit } from "../components/PlayerStateCells";
@@ -38,6 +39,7 @@ export function ProfilesPage() {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [bulkBanRows, setBulkBanRows] = useState<ProfileRow[]>([]);
+  const [bulkDeleteRows, setBulkDeleteRows] = useState<ProfileRow[]>([]);
   const [banReason, setBanReason] = useState("");
   const [banDurationValue, setBanDurationValue] = useState("1");
   const [banDurationUnit, setBanDurationUnit] = useState<DurationUnit>("d");
@@ -74,6 +76,18 @@ export function ProfilesPage() {
     onSuccess: () => {
       toast.push({ tone: "success", title: t("common.saved") });
       void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const deleteMut = useMutation({
+    mutationFn: async (rows: ProfileRow[]) => {
+      await Promise.all(rows.map((row) => deleteProfile(row.id)));
+    },
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("common.deleted") });
+      setBulkDeleteRows([]);
+      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
+      void qc.invalidateQueries({ queryKey: ["admin.passports"] });
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -167,6 +181,7 @@ export function ProfilesPage() {
               {rows.every((row) => !!row.active_ban) ? <Button size="sm" variant="secondary" icon="unlock" loading={revokeMut.isPending} onClick={() => revokeMut.mutate(rows)}>{t("common.unban")}</Button> : null}
               {rows.every((row) => row.status !== "archived") ? <Button size="sm" variant="secondary" icon="box" loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, status: "archived" })}>{t("common.archive")}</Button> : null}
               {rows.every((row) => row.status === "archived") ? <Button size="sm" variant="secondary" icon="refresh" loading={statusMut.isPending} onClick={() => statusMut.mutate({ rows, status: "active" })}>{t("common.restore")}</Button> : null}
+              <Button size="sm" variant="danger" icon="trash" loading={deleteMut.isPending} onClick={() => setBulkDeleteRows(rows)}>{t("common.delete")}</Button>
             </>
           )}
           empty={<EmptyState icon="user" title={t("admin.profiles.empty")} />}
@@ -199,6 +214,16 @@ export function ProfilesPage() {
       >
         <BanDurationFields reason={banReason} value={banDurationValue} unit={banDurationUnit} onReasonChange={setBanReason} onValueChange={setBanDurationValue} onUnitChange={setBanDurationUnit} />
       </Dialog>
+      <ConfirmDialog
+        open={bulkDeleteRows.length > 0}
+        title={t("admin.profiles.deleteDialog")}
+        body={t("admin.profiles.deleteDialogBody")}
+        confirmLabel={t("common.delete")}
+        destructive
+        loading={deleteMut.isPending}
+        onCancel={() => setBulkDeleteRows([])}
+        onConfirm={() => deleteMut.mutate(bulkDeleteRows)}
+      />
     </PageShell>
   );
 }

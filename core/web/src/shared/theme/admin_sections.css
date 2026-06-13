@@ -81,6 +81,8 @@
   font-size: 12.5px;
   line-height: 1.45;
 }
+.settings-note strong { display: block; color: var(--color-text); font-size: 13px; font-weight: 620; }
+.settings-note small { display: block; margin-top: 2px; color: var(--color-text-muted); font-size: 12px; line-height: 1.45; }
 
 /* ---------- mojang ---------- */
 .proxy-route { display: flex; flex-direction: column; gap: 2px; }

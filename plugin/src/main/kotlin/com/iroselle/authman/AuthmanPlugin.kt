@@ -13,7 +13,9 @@ import com.iroselle.authman.config.InstanceFingerprint
 import com.iroselle.authman.listener.DownstreamAuthListener
 import com.iroselle.authman.message.AuthmanMessages
 import com.iroselle.authman.model.DownstreamServerOption
+import com.iroselle.authman.model.DownstreamStatusReport
 import com.iroselle.authman.model.NodeAction
+import com.iroselle.authman.model.NodeActionAck
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
@@ -21,7 +23,6 @@ import org.slf4j.Logger
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
 
@@ -49,6 +50,7 @@ class AuthmanPlugin @Inject constructor(
     private var eventLoopRunning: Boolean = false
     @Volatile
     private var heartbeatLoopRunning: Boolean = false
+    private lateinit var downstreamListener: DownstreamAuthListener
 
     @Subscribe
     fun onProxyInitialize(event: ProxyInitializeEvent) {
@@ -57,7 +59,8 @@ class AuthmanPlugin @Inject constructor(
         client = AuthmanClient(config, instanceFingerprint)
         messages = AuthmanMessages()
 
-        server.eventManager.register(this, DownstreamAuthListener(this, server, logger, config, client, messages))
+        downstreamListener = DownstreamAuthListener(this, server, logger, config, client, messages)
+        server.eventManager.register(this, downstreamListener)
         val command = AuthmanCommand(this, logger)
         val meta = server.commandManager.metaBuilder("authman")
             .aliases("am")
@@ -94,7 +97,11 @@ class AuthmanPlugin @Inject constructor(
 
     private fun sendHeartbeat(): Boolean {
         try {
-            val response = client.heartbeat(pluginVersion = VERSION, velocityVersion = server.version.version)
+            val response = client.heartbeat(
+                pluginVersion = VERSION,
+                velocityVersion = server.version.version,
+                status = currentStatusReport(),
+            )
             if (!response.ok) {
                 logger.warn("Authman heartbeat failed with HTTP {}: {}", response.statusCode, response.body)
                 if (response.accessRevoked) {
@@ -109,6 +116,16 @@ class AuthmanPlugin @Inject constructor(
             return false
         }
     }
+
+    private fun currentStatusReport(): DownstreamStatusReport =
+        DownstreamStatusReport(
+            onlinePlayers = if (::downstreamListener.isInitialized) {
+                downstreamListener.onlinePresenceCount()
+            } else {
+                server.allPlayers.count { it.isActive }
+            },
+            maxPlayers = server.configuration.showMaxPlayers,
+        )
 
     private fun applySync(response: com.iroselle.authman.api.HeartbeatResult, source: String) {
         response.runtime?.let {
@@ -166,6 +183,7 @@ class AuthmanPlugin @Inject constructor(
                     client.connectEvents(
                         onSync = { applySync(it, "websocket") },
                         onRevoked = { lockFromCore("Core revoked this node token") },
+                        onPresenceCheck = { downstreamListener.checkPresenceOverWebSocket(it) },
                     ).join()
                     delaySeconds = config.websocketReconnectMinSeconds
                 } catch (ex: Exception) {
@@ -257,6 +275,24 @@ class AuthmanPlugin @Inject constructor(
         return "Transferring ${player.username} to $label ($host:$port)."
     }
 
+    fun renameCurrentProfile(playerName: String, protocolName: String): String {
+        if (coreAccessRevoked) {
+            throw IllegalStateException("Authman Core connection is revoked")
+        }
+        val player = server.getPlayer(playerName).orElse(null)
+            ?: server.allPlayers.firstOrNull {
+                it.username.equals(playerName, ignoreCase = true) || it.uniqueId.toString().equals(playerName, ignoreCase = true)
+            }
+            ?: throw IllegalArgumentException("player is not online: $playerName")
+        val remoteIp = player.remoteAddress.address?.hostAddress ?: player.remoteAddress.hostString
+        val nextName = client.renameProfile(
+            profileId = player.uniqueId.toString(),
+            protocolName = protocolName,
+            remoteIp = remoteIp,
+        )
+        return "Renamed ${player.username}'s current Authman profile to $nextName. The player must leave and rejoin before downstream servers see the new name."
+    }
+
     private fun resolveTransferTarget(ref: String): DownstreamServerOption? {
         val clean = ref.trim()
         if (clean.isBlank()) {
@@ -293,49 +329,32 @@ class AuthmanPlugin @Inject constructor(
         return rejected
     }
 
-    private fun executeNodeActions(actions: List<NodeAction>): List<String> {
+    private fun executeNodeActions(actions: List<NodeAction>): List<NodeActionAck> {
         if (actions.isEmpty()) {
             return emptyList()
         }
-        val acked = mutableListOf<String>()
+        val acked = mutableListOf<NodeActionAck>()
         for (action in actions) {
             when (action.type.lowercase()) {
                 "disconnect" -> {
-                    disconnectActionTargets(action)
-                    acked += action.id
+                    val count = downstreamListener.disconnectActionTargets(action)
+                    acked += NodeActionAck(id = action.id, type = action.type, presenceId = action.presenceId)
+                    logger.info(
+                        "Executed Authman node action {} type={} disconnected={} profile={} presence={}",
+                        action.id,
+                        action.type,
+                        count,
+                        action.profileId,
+                        action.presenceId,
+                    )
+                }
+                "presence_check" -> {
+                    acked += downstreamListener.checkPresenceAction(action)
                 }
                 else -> logger.warn("Ignoring unknown Authman node action {} type={}", action.id, action.type)
             }
         }
         return acked
-    }
-
-    private fun disconnectActionTargets(action: NodeAction) {
-        val uuid = runCatching {
-            action.uuid.takeIf { it.isNotBlank() }?.let(UUID::fromString)
-        }.getOrNull()
-        val component = if (action.reason.isBlank()) {
-            messages.defaultDisconnect(action.protocolName)
-        } else {
-            Component.text(action.reason, NamedTextColor.RED)
-        }
-        var count = 0
-        server.allPlayers.forEach { player ->
-            val uuidMatches = uuid != null && player.uniqueId == uuid
-            val nameMatches = action.protocolName.isNotBlank() && player.username.equals(action.protocolName, ignoreCase = true)
-            if (player.isActive && (uuidMatches || nameMatches)) {
-                player.disconnect(component)
-                count++
-            }
-        }
-        logger.info(
-            "Executed Authman node action {} type={} disconnected={} profile={} presence={}",
-            action.id,
-            action.type,
-            count,
-            action.profileId,
-            action.presenceId,
-        )
     }
 
     companion object {

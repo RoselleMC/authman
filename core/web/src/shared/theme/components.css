@@ -9,6 +9,27 @@
   font-style: normal;
   font-display: swap;
 }
+@font-face {
+  font-family: "AuthmanMinecraftAlt";
+  src: url("../assets/fonts/minecraft-alt.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "AuthmanMinecraftUniform";
+  src: url("../assets/fonts/minecraft-uniform.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "AuthmanMinecraftIllagerAlt";
+  src: url("../assets/fonts/minecraft-illageralt.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
 
 /* ---------- Buttons ---------- */
 .btn {
@@ -591,6 +612,31 @@ thead .adv-list-select-hit { min-height: 38px; }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   letter-spacing: 0;
+}
+.mc-rich__content [data-mc-font="default"],
+.mc-rich__content [data-mc-font="custom"] {
+  font-family: "AuthmanMinecraft", "Minecraft", "Minecraftia", monospace;
+  letter-spacing: 0;
+  font-style: normal;
+  font-variant: normal;
+}
+.mc-rich__content [data-mc-font="uniform"] {
+  font-family: "AuthmanMinecraftUniform", "GNU Unifont", "Unifont", "Noto Sans Mono", ui-monospace, monospace;
+  letter-spacing: 0;
+  font-style: normal;
+  font-variant: normal;
+}
+.mc-rich__content [data-mc-font="alt"] {
+  font-family: "AuthmanMinecraftAlt", "AuthmanMinecraft", "Minecraft", "Minecraftia", monospace;
+  letter-spacing: 0;
+  font-style: normal;
+  font-variant: normal;
+}
+.mc-rich__content [data-mc-font="illageralt"] {
+  font-family: "AuthmanMinecraftIllagerAlt", "AuthmanMinecraft", "Minecraft", "Minecraftia", monospace;
+  letter-spacing: 0;
+  font-style: normal;
+  font-variant: normal;
 }
 .mc-rich__content.is-placeholder {
   color: rgba(255,255,255,.48);

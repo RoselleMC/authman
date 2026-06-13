@@ -39,6 +39,7 @@ type Route struct {
 	Disabled         bool
 	State            RouteState
 	CooldownUntil    time.Time
+	RequestCount     int
 	FailureCount     int
 	RateLimitCount   int
 	LastFailureError string
@@ -87,6 +88,7 @@ func (p *Pool) Execute(ctx context.Context, transport Transport) (Route, error) 
 		if route.CooldownUntil.After(now) {
 			continue
 		}
+		p.Routes[i].RequestCount++
 		if err := transport.Do(ctx, route); err != nil {
 			lastErr = err
 			p.markFailure(i, err, now)

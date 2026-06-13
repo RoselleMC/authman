@@ -10,10 +10,12 @@ import (
 	"github.com/RoselleMC/authman/core/internal/api"
 	"github.com/RoselleMC/authman/core/internal/audit"
 	"github.com/RoselleMC/authman/core/internal/node"
+	"github.com/RoselleMC/authman/core/internal/store"
 	"github.com/RoselleMC/authman/internal/playermsg"
 )
 
 const playerMessagesSettingKey = "player_messages"
+const downstreamServerPlayerMessagesConfigKey = "player_messages"
 
 type playerMessagesState struct {
 	Messages map[string]string               `json:"messages"`
@@ -29,16 +31,30 @@ func (s *Server) playerMessagesStateFromStore(ctx context.Context) playerMessage
 	if err != nil || raw == nil {
 		return state
 	}
+	if decoded, ok := playerMessagesStateFromValue(raw); ok {
+		return decoded
+	}
+	return state
+}
+
+func playerMessagesStateFromValue(raw any) (playerMessagesState, bool) {
+	state := playerMessagesState{
+		Messages: map[string]string{},
+		Dialogs:  map[string]*playermsg.DialogDoc{},
+	}
+	if raw == nil {
+		return state, false
+	}
 	encoded, err := json.Marshal(raw)
 	if err != nil {
-		return state
+		return state, false
 	}
 	var decoded struct {
 		Messages map[string]string          `json:"messages"`
 		Dialogs  map[string]json.RawMessage `json:"dialogs"`
 	}
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		return state
+		return state, false
 	}
 	for key, value := range decoded.Messages {
 		if playermsg.KnownKey(key) && strings.TrimSpace(value) != "" {
@@ -56,7 +72,18 @@ func (s *Server) playerMessagesStateFromStore(ctx context.Context) playerMessage
 		}
 		state.Dialogs[screen] = &doc
 	}
-	return state
+	return state, true
+}
+
+func (s *Server) playerMessagesStateForServer(ctx context.Context, server store.DownstreamServer) (playerMessagesState, string) {
+	if state, ok := playerMessagesStateFromValue(server.PortalConfig[downstreamServerPlayerMessagesConfigKey]); ok {
+		return state, "server"
+	}
+	state := s.playerMessagesStateFromStore(ctx)
+	if len(state.Messages) > 0 || len(state.Dialogs) > 0 {
+		return state, "legacy_global"
+	}
+	return state, "default"
 }
 
 func playerMessagesSettingMap(state playerMessagesState) map[string]any {
@@ -107,6 +134,15 @@ func playerMessagesData(state playerMessagesState) map[string]any {
 	}
 }
 
+func playerMessagesDataWithSource(state playerMessagesState, source string, serverID string) map[string]any {
+	data := playerMessagesData(state)
+	data["source"] = source
+	if strings.TrimSpace(serverID) != "" {
+		data["server_id"] = serverID
+	}
+	return data
+}
+
 func (s *Server) handleAdminPlayerMessages(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdmin(r, false); err != nil {
 		api.WriteError(w, err)
@@ -126,10 +162,100 @@ func (s *Server) handleAdminUpdatePlayerMessages(w http.ResponseWriter, r *http.
 		api.WriteError(w, authErr)
 		return
 	}
-	var req playerMessagesUpdateRequest
-	if err := api.DecodeJSON(r, &req); err != nil {
+	state, fields, decodeErr := playerMessagesStateFromUpdateRequest(r)
+	if decodeErr != nil {
+		api.WriteError(w, decodeErr)
+		return
+	}
+	if len(fields) > 0 {
+		err := api.NewError(http.StatusBadRequest, "player_messages.invalid", "player message configuration is invalid")
+		err.Details = map[string]any{"fields": fields}
 		api.WriteError(w, err)
 		return
+	}
+	if err := s.store.SetSystemSetting(r.Context(), playerMessagesSettingKey, playerMessagesSettingMap(state)); err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "player_messages.save_failed", err.Error()))
+		return
+	}
+	changed := make([]string, 0, len(state.Messages)+len(state.Dialogs))
+	for key := range state.Messages {
+		changed = append(changed, key)
+	}
+	for screen := range state.Dialogs {
+		changed = append(changed, "dialog."+screen)
+	}
+	sort.Strings(changed)
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, "player-messages", "player_messages.update", map[string]any{
+		"overridden": changed,
+	})
+	s.pushAllNodeSync(r.Context(), "player_messages.update")
+	api.WriteJSON(w, http.StatusOK, playerMessagesData(state), nil)
+}
+
+func (s *Server) handleAdminDownstreamServerPlayerMessages(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireAdmin(r, false); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	server, err := s.store.GetDownstreamServer(r.Context(), r.PathValue("id"))
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "server.not_found", "server not found"))
+		return
+	}
+	state, source := s.playerMessagesStateForServer(r.Context(), server)
+	api.WriteJSON(w, http.StatusOK, playerMessagesDataWithSource(state, source, server.ID), nil)
+}
+
+func (s *Server) handleAdminUpdateDownstreamServerPlayerMessages(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	server, err := s.store.GetDownstreamServer(r.Context(), r.PathValue("id"))
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "server.not_found", "server not found"))
+		return
+	}
+	state, fields, decodeErr := playerMessagesStateFromUpdateRequest(r)
+	if decodeErr != nil {
+		api.WriteError(w, decodeErr)
+		return
+	}
+	if len(fields) > 0 {
+		err := api.NewError(http.StatusBadRequest, "player_messages.invalid", "player message configuration is invalid")
+		err.Details = map[string]any{"fields": fields}
+		api.WriteError(w, err)
+		return
+	}
+	if server.PortalConfig == nil {
+		server.PortalConfig = map[string]any{}
+	}
+	server.PortalConfig[downstreamServerPlayerMessagesConfigKey] = playerMessagesSettingMap(state)
+	server, err = s.store.UpsertDownstreamServer(r.Context(), server)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "player_messages.save_failed", err.Error()))
+		return
+	}
+	changed := make([]string, 0, len(state.Messages)+len(state.Dialogs))
+	for key := range state.Messages {
+		changed = append(changed, key)
+	}
+	for screen := range state.Dialogs {
+		changed = append(changed, "dialog."+screen)
+	}
+	sort.Strings(changed)
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, server.ID, "server.player_messages.update", map[string]any{
+		"overridden": changed,
+	})
+	s.pushAllNodeSync(r.Context(), "server.player_messages.update")
+	api.WriteJSON(w, http.StatusOK, playerMessagesDataWithSource(state, "server", server.ID), nil)
+}
+
+func playerMessagesStateFromUpdateRequest(r *http.Request) (playerMessagesState, map[string]any, *api.Error) {
+	var req playerMessagesUpdateRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		return playerMessagesState{}, nil, err
 	}
 	state := playerMessagesState{
 		Messages: map[string]string{},
@@ -160,35 +286,27 @@ func (s *Server) handleAdminUpdatePlayerMessages(w http.ResponseWriter, r *http.
 		}
 		state.Dialogs[screen] = &doc
 	}
-	if len(fields) > 0 {
-		err := api.NewError(http.StatusBadRequest, "player_messages.invalid", "player message configuration is invalid")
-		err.Details = map[string]any{"fields": fields}
-		api.WriteError(w, err)
-		return
-	}
-	if err := s.store.SetSystemSetting(r.Context(), playerMessagesSettingKey, playerMessagesSettingMap(state)); err != nil {
-		api.WriteError(w, api.NewError(http.StatusBadRequest, "player_messages.save_failed", err.Error()))
-		return
-	}
-	changed := make([]string, 0, len(state.Messages)+len(state.Dialogs))
-	for key := range state.Messages {
-		changed = append(changed, key)
-	}
-	for screen := range state.Dialogs {
-		changed = append(changed, "dialog."+screen)
-	}
-	sort.Strings(changed)
-	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, "player-messages", "player_messages.update", map[string]any{
-		"overridden": changed,
-	})
-	s.pushAllNodeSync(r.Context(), "player_messages.update")
-	api.WriteJSON(w, http.StatusOK, playerMessagesData(state), nil)
+	return state, fields, nil
 }
 
 // playerMessagesPayload builds the effective message payload delivered to a
 // node through the heartbeat response.
-func (s *Server) playerMessagesPayload(ctx context.Context, mode string) map[string]any {
+func (s *Server) playerMessagesPayload(ctx context.Context, n node.Node) map[string]any {
 	state := s.playerMessagesStateFromStore(ctx)
+	if node.IsDownstreamVelocity(n.Mode) && strings.TrimSpace(n.ServerID) != "" {
+		if server, err := s.store.GetDownstreamServer(ctx, n.ServerID); err == nil {
+			state, _ = s.playerMessagesStateForServer(ctx, server)
+		}
+	}
+	return playerMessagesPayloadFromState(state, n.Mode)
+}
+
+func (s *Server) playerMessagesPayloadForServer(ctx context.Context, server store.DownstreamServer, mode string) map[string]any {
+	state, _ := s.playerMessagesStateForServer(ctx, server)
+	return playerMessagesPayloadFromState(state, mode)
+}
+
+func playerMessagesPayloadFromState(state playerMessagesState, mode string) map[string]any {
 	if node.NormalizeKind(mode) == "downstream_velocity" {
 		return map[string]any{
 			"messages": playermsg.Effective(playermsg.ScopeGate, state.Messages),

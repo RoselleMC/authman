@@ -140,11 +140,17 @@
 .detail-toolbar .tabs { min-height: 38px; margin-bottom: 0; justify-self: start; }
 .detail-grid { display: grid; grid-template-columns: 320px 1fr; gap: 20px; align-items: start; }
 .detail-aside { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 0; }
-.id-summary { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-bottom: 16px; border-bottom: 1px solid var(--color-border); }
-.id-name-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.id-raw { font-size: 22px; font-weight: 640; letter-spacing: -0.02em; margin: 0; }
-.id-uuid { display: flex; flex-direction: column; gap: 4px; margin-top: 14px; }
+.id-summary { display: flex; flex-direction: column; align-items: stretch; gap: 0; min-width: 0; }
+.id-summary-main { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; padding-bottom: 16px; border-bottom: 1px solid var(--color-border); }
+.id-summary-details { display: flex; flex-direction: column; gap: 11px; width: 100%; min-width: 0; padding-top: 14px; }
+.id-name-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; width: 100%; min-width: 0; }
+.id-raw { font-size: 22px; font-weight: 640; letter-spacing: -0.02em; margin: 0; max-width: 100%; overflow-wrap: anywhere; }
+.id-uuid { display: flex; flex-direction: column; gap: 4px; min-width: 0; width: 100%; }
 .id-uuid-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--color-text-subtle); }
+.id-uuid-value { min-width: 0; max-width: 100%; }
+.id-uuid .copyable { max-width: 100%; min-width: 0; }
+.id-uuid .copyable span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.id-uuid strong, .id-uuid code, .id-uuid .mono { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .action-stack { display: flex; flex-direction: column; gap: 9px; }
 .action-note { display: flex; gap: 7px; align-items: flex-start; font-size: 12px; color: var(--color-text-subtle); line-height: 1.5; margin: 4px 0 0; }
 .action-note svg { margin-top: 1px; flex-shrink: 0; }

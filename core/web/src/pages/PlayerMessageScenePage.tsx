@@ -24,10 +24,10 @@ import {
   GATE_KICK_KEYS,
   LIMBO_KICK_KEYS,
   PROFILE_ERROR_KEYS,
-  PLAYER_MESSAGES_QUERY_KEY,
   MessageRow,
   SourceEditor,
   applySample,
+  playerMessagesQueryKey,
   sampleVars,
 } from "../components/playerMessages";
 
@@ -42,11 +42,14 @@ export function PlayerMessageScenePage() {
   const toast = useToast();
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const params = useParams();
+  const params = useParams<{ id?: string; scene?: string }>();
+  const serverId = (params.id ?? "").trim() || undefined;
   const scene = sceneOf(params.scene);
-  const backTarget = useBackTarget("/login-portals/messages");
+  const serverBackTarget = serverId ? `/nodes/${encodeURIComponent(serverId)}?tab=messages` : "/login-portals/messages";
+  const backTarget = useBackTarget(serverBackTarget);
+  const queryKey = playerMessagesQueryKey(serverId);
 
-  const q = useQuery({ queryKey: PLAYER_MESSAGES_QUERY_KEY, queryFn: fetchPlayerMessages });
+  const q = useQuery({ queryKey, queryFn: () => fetchPlayerMessages(serverId) });
   const [messages, setMessages] = useState<Record<string, string>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
@@ -61,17 +64,17 @@ export function PlayerMessageScenePage() {
     mutationFn: async () => {
       // Refetch right before saving: PUT is full-replace, so the dialog half
       // must come from the freshest server state, not a stale cache.
-      const fresh = await fetchPlayerMessages();
+      const fresh = await fetchPlayerMessages(serverId);
       const dialogs = Object.fromEntries(
         PLAYER_DIALOG_SCREENS.map((entry) => [entry, fresh.dialogs[entry].override]),
       );
-      return updatePlayerMessages({ messages, dialogs });
+      return updatePlayerMessages({ messages, dialogs }, serverId);
     },
     onSuccess: (next) => {
       setMessages({ ...next.messages.overrides });
       setFieldErrors({});
       toast.push({ tone: "success", title: t("admin.playerMessages.saved.toast") });
-      void qc.invalidateQueries({ queryKey: PLAYER_MESSAGES_QUERY_KEY });
+      void qc.invalidateQueries({ queryKey });
     },
     onError: (err) => {
       if (err instanceof ApiError) {

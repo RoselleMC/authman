@@ -314,8 +314,12 @@ export async function fetchPassport(id: string): Promise<PassportDetail> {
 }
 
 export async function updatePassportStatus(id: string, status: PassportRow["status"]): Promise<PassportRow> {
-  const res = await apiFetch<PassportRow>(`/admin/passports/${encodeURIComponent(id)}`, { method: "PATCH", body: { status } });
-  return res.data;
+	const res = await apiFetch<PassportRow>(`/admin/passports/${encodeURIComponent(id)}`, { method: "PATCH", body: { status } });
+	return res.data;
+}
+
+export async function deletePassport(id: string): Promise<void> {
+	await apiFetch<null>(`/admin/passports/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export async function createPassportBan(id: string, input: { reason: string; expires_at?: string | null; expires_in_seconds?: number }): Promise<{ ban: PlayerBan; ended_presences: number }> {
@@ -344,8 +348,17 @@ export async function createProfile(input: { protocol_name: string; passport_id?
 }
 
 export async function updateProfileStatus(id: string, status: ProfileRow["status"]): Promise<ProfileRow> {
-  const res = await apiFetch<ProfileRow>(`/admin/profiles/${encodeURIComponent(id)}`, { method: "PATCH", body: { status } });
-  return res.data;
+	const res = await apiFetch<ProfileRow>(`/admin/profiles/${encodeURIComponent(id)}`, { method: "PATCH", body: { status } });
+	return res.data;
+}
+
+export async function updateProfileName(id: string, protocol_name: string): Promise<ProfileRow> {
+	const res = await apiFetch<ProfileRow>(`/admin/profiles/${encodeURIComponent(id)}`, { method: "PATCH", body: { protocol_name } });
+	return res.data;
+}
+
+export async function deleteProfile(id: string): Promise<void> {
+	await apiFetch<null>(`/admin/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export async function uploadProfileSkin(id: string, input: { skin?: File | null; cape?: File | null; elytra?: File | null; model: "slim" | "wide" }): Promise<ProfileSkinInfo> {
@@ -491,7 +504,7 @@ export interface PortalSettings {
   transfer_cookie_key: string;
   fallback_server_id: string;
   max_profiles_per_passport?: number;
-  auto_join_single_profile?: boolean;
+  auto_auth_ttl_seconds?: number;
   available_servers?: Array<{
     id: string;
     slug: string;
@@ -607,6 +620,8 @@ export interface PlayerMessagesData {
     default: PlayerMessageDialogDoc;
     override: PlayerMessageDialogDoc | null;
   }>;
+  source?: "server" | "legacy_global" | "default" | string;
+  server_id?: string;
 }
 
 export interface PlayerMessagesUpdateInput {
@@ -614,13 +629,18 @@ export interface PlayerMessagesUpdateInput {
   dialogs: Partial<Record<PlayerMessageDialogScreen, PlayerMessageDialogDoc | null>>;
 }
 
-export async function fetchPlayerMessages(): Promise<PlayerMessagesData> {
-  const res = await apiFetch<PlayerMessagesData>("/admin/settings/player-messages");
+function playerMessagesPath(serverId?: string): string {
+  const id = (serverId ?? "").trim();
+  return id ? `/admin/downstream-servers/${encodeURIComponent(id)}/player-messages` : "/admin/settings/player-messages";
+}
+
+export async function fetchPlayerMessages(serverId?: string): Promise<PlayerMessagesData> {
+  const res = await apiFetch<PlayerMessagesData>(playerMessagesPath(serverId));
   return res.data;
 }
 
-export async function updatePlayerMessages(input: PlayerMessagesUpdateInput): Promise<PlayerMessagesData> {
-  const res = await apiFetch<PlayerMessagesData>("/admin/settings/player-messages", { method: "PUT", body: input });
+export async function updatePlayerMessages(input: PlayerMessagesUpdateInput, serverId?: string): Promise<PlayerMessagesData> {
+  const res = await apiFetch<PlayerMessagesData>(playerMessagesPath(serverId), { method: "PUT", body: input });
   return res.data;
 }
 
@@ -907,6 +927,9 @@ export interface DownstreamServer {
   enabled: boolean;
   visible: boolean;
   registration_open: boolean;
+  online_players: number;
+  max_players: number;
+  runtime_status?: DownstreamRuntimeStatus;
   routing_config: {
     registration_strategy?: "open" | "closed" | "invite";
     show_in_global: boolean;
@@ -950,10 +973,21 @@ export interface DownstreamServer {
     resource_pack_enabled?: boolean;
     resource_pack_required?: boolean;
     resource_packs?: DownstreamResourcePack[];
+    online_players?: number;
+    max_players?: number;
+    runtime_status?: DownstreamRuntimeStatus;
   };
   extension_providers: string[];
   created_at?: string;
   updated_at?: string;
+}
+
+export interface DownstreamRuntimeStatus {
+  online_players: number;
+  max_players: number;
+  source: "heartbeat" | "presence" | string;
+  reported_at?: string | null;
+  stale: boolean;
 }
 
 export interface DownstreamResourcePack {

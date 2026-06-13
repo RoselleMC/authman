@@ -19,8 +19,13 @@ import com.iroselle.authman.config.AuthmanConfig
 import com.iroselle.authman.message.AuthmanMessages
 import com.iroselle.authman.model.DownstreamResourcePack
 import com.iroselle.authman.model.DownstreamTarget
+import com.iroselle.authman.model.NodeAction
+import com.iroselle.authman.model.NodeActionAck
+import com.iroselle.authman.model.NodePresenceCheckRequest
+import com.iroselle.authman.model.NodePresenceCheckResult
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.format.NamedTextColor
 import org.slf4j.Logger
 import java.nio.charset.StandardCharsets
 import java.util.Locale
@@ -42,6 +47,82 @@ class DownstreamAuthListener(
     private val presences: MutableMap<UUID, String> = ConcurrentHashMap()
     private val resourcePackTargets: MutableMap<UUID, DownstreamTarget> = ConcurrentHashMap()
     private val privilegedPlayers: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
+
+    fun onlinePresenceCount(): Int =
+        server.allPlayers.count { player ->
+            player.isActive && allowed.contains(player.uniqueId) && !presences[player.uniqueId].isNullOrBlank()
+        }
+
+    fun checkPresenceAction(action: NodeAction): NodeActionAck {
+        val player = findPresenceTarget(action)
+        val online = player?.isActive == true
+        logger.info(
+            "Checked Authman presence action {} online={} profile={} presence={} matched={}",
+            action.id,
+            online,
+            action.profileId,
+            action.presenceId,
+            player?.username ?: "",
+        )
+        return NodeActionAck(
+            id = action.id,
+            type = action.type,
+            presenceId = action.presenceId,
+            passportId = action.passportId,
+            profileId = action.profileId,
+            uuid = action.uuid,
+            protocolName = action.protocolName,
+            online = online,
+        )
+    }
+
+    fun checkPresenceOverWebSocket(request: NodePresenceCheckRequest): NodePresenceCheckResult {
+        val action = NodeAction(
+            id = request.requestId,
+            type = "presence_check",
+            presenceId = request.presenceId,
+            passportId = request.passportId,
+            profileId = request.profileId,
+            uuid = request.uuid,
+            protocolName = request.protocolName,
+            reason = request.reason,
+        )
+        val player = findPresenceTarget(action)
+        val online = player?.isActive == true
+        logger.info(
+            "Answered Authman websocket presence check {} online={} profile={} presence={} matched={}",
+            request.requestId,
+            online,
+            request.profileId,
+            request.presenceId,
+            player?.username ?: "",
+        )
+        return NodePresenceCheckResult(
+            requestId = request.requestId,
+            presenceId = request.presenceId,
+            passportId = request.passportId,
+            profileId = request.profileId,
+            uuid = request.uuid,
+            protocolName = request.protocolName,
+            online = online,
+        )
+    }
+
+    fun disconnectActionTargets(action: NodeAction): Int {
+        val component = if (action.reason.isBlank()) {
+            messages.defaultDisconnect(action.protocolName)
+        } else {
+            Component.text(action.reason, NamedTextColor.RED)
+        }
+        var count = 0
+        for (player in server.allPlayers) {
+            if (presenceActionMatchesPlayer(action, player)) {
+                player.disconnect(component)
+                count++
+            }
+        }
+        return count
+    }
 
     @Subscribe
     fun onGameProfileRequest(event: GameProfileRequestEvent) {
@@ -132,6 +213,10 @@ class DownstreamAuthListener(
                     }
                     "auth.account_locked" -> {
                         rejectWith(player, "account locked", messages.locked(player.username))
+                        return
+                    }
+                    "presence.profile_already_online" -> {
+                        rejectWith(player, "profile already online", messages.alreadyOnline(player.username))
                         return
                     }
                 }
@@ -383,5 +468,29 @@ class DownstreamAuthListener(
         if (player.isActive) {
             player.disconnect(message)
         }
+    }
+
+    private fun findPresenceTarget(action: NodeAction): Player? =
+        server.allPlayers.firstOrNull { player -> presenceActionMatchesPlayer(action, player) }
+
+    private fun presenceActionMatchesPlayer(action: NodeAction, player: Player): Boolean {
+        if (!player.isActive || !allowed.contains(player.uniqueId)) {
+            return false
+        }
+        val requestedPresenceID = action.presenceId.trim()
+        if (requestedPresenceID.isNotEmpty() && presences[player.uniqueId] != requestedPresenceID) {
+            return false
+        }
+        return identityActionMatchesPlayer(action, player)
+    }
+
+    private fun identityActionMatchesPlayer(action: NodeAction, player: Player): Boolean {
+        val uuid = runCatching {
+            action.uuid.takeIf { it.isNotBlank() }?.let(UUID::fromString)
+        }.getOrNull()
+        if (uuid != null) {
+            return player.uniqueId == uuid
+        }
+        return action.protocolName.isNotBlank() && player.username.equals(action.protocolName, ignoreCase = true)
     }
 }

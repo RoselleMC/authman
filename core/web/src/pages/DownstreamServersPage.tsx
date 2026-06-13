@@ -151,6 +151,7 @@ export function DownstreamServersPage() {
     { key: "icon", header: t("admin.servers.col.icon"), mandatory: true, width: "52px", minWidth: "52px", align: "center", render: (r) => <ServerIconCell server={r} /> },
     { key: "name", header: t("admin.servers.col.name"), mandatory: true, sortable: true, sortValue: (r) => r.display_name, filter: { type: "text" }, render: (r) => <strong>{r.display_name}</strong> },
     { key: "status", header: t("admin.servers.col.status"), sortable: true, sortValue: (r) => r.status, render: (r) => <StatusBadge status={r.enabled ? (r.visible ? "active" : "hidden") : "disabled"} /> },
+    { key: "players", header: t("admin.servers.col.players"), minWidth: "110px", sortable: true, sortValue: (r) => r.online_players, render: (r) => <span className={r.runtime_status?.stale ? "muted-cell mono" : "mono"}>{Number(r.online_players ?? 0)}{r.max_players > 0 ? `/${r.max_players}` : ""}</span> },
     { key: "host", header: t("admin.servers.col.host"), minWidth: "190px", render: (r) => <span className="mono">{r.target.transfer_host}:{r.target.transfer_port}</span> },
     { key: "updated", header: t("common.updated"), sortable: true, sortValue: (r) => r.updated_at ?? "", render: (r) => <span className="muted-cell">{formatRelativeTime(r.updated_at)}</span> },
     { key: "open", header: "", mandatory: true, width: "44px", minWidth: "44px", align: "right", sticky: "right", render: () => <Icon name="chevronRight" size={16} /> },

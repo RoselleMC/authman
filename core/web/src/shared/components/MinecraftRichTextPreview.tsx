@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MiniMessage } from "minimessage-js";
+import { MiniMessage, type Component as MiniMessageComponent } from "minimessage-js";
 import { Button } from "./Button";
 import { Dialog } from "./Dialog";
 import { useI18n } from "../i18n/I18nProvider";
+import { minecraftFontInfo } from "../minecraft/fonts";
 import { cx } from "../utils/cx";
 
 const mini = MiniMessage.miniMessage();
@@ -84,7 +85,9 @@ export function MinecraftRichTextPreview({ value, placeholder, className, metada
       return;
     }
     try {
-      mini.toHTML(mini.deserialize(value), host);
+      const component = mini.deserialize(value);
+      mini.toHTML(component, host);
+      annotateMinecraftFontSpans(component, host);
     } catch (err) {
       host.textContent = value;
       setError(err instanceof Error ? err.message : String(err));
@@ -207,16 +210,53 @@ export function MiniMessageEditorDialog({ open, title, desc, value, serverName, 
 
 function collectMiniMessageTags(value: string): string[] {
   const found = new Set<string>();
-  const re = /<\/?\s*([!#]?[a-zA-Z0-9_.-]+)(?=[:>\s])/g;
+  const re = /<\/?\s*([!#]?[a-zA-Z0-9_.-]+)((?::[^>\s]+)*)/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(value))) {
+    if (value[match.index + 1] === "/") continue;
     const rawTag = match[1];
     if (!rawTag) continue;
     let tag = rawTag.toLowerCase();
     if (tag.startsWith("!")) tag = tag.slice(1);
     if (tag.startsWith("#")) tag = "hex";
     tag = TAG_LABELS[tag] ?? tag;
+    if (tag === "font") {
+      const font = fontFromTagArgs(match[2] ?? "");
+      if (font) {
+        const info = minecraftFontInfo(font);
+        found.add(info ? `font:${info.short}` : "font");
+      } else {
+        found.add("font");
+      }
+      continue;
+    }
     if (INTERACTION_TAGS.has(tag)) found.add(tag);
   }
   return [...found].sort();
+}
+
+function fontFromTagArgs(rawArgs: string): string {
+  const parts = rawArgs.split(":").filter(Boolean).map((part) => part.trim()).filter(Boolean);
+  if (!parts.length) return "";
+  const first = parts[0] ?? "";
+  if (parts.length >= 2 && /^[a-z0-9_.-]+$/i.test(first)) {
+    return `${first}:${parts.slice(1).join(":")}`;
+  }
+  return parts.join(":");
+}
+
+function annotateMinecraftFontSpans(component: MiniMessageComponent, host: HTMLElement) {
+  const spans = Array.from(host.querySelectorAll("span"));
+  let index = 0;
+  const visit = (node: MiniMessageComponent) => {
+    const span = spans[index++] as HTMLElement | undefined;
+    const rawFont = node.font()?.asString() ?? "";
+    if (span && rawFont) {
+      const info = minecraftFontInfo(rawFont);
+      span.dataset.mcFontId = info?.id ?? rawFont;
+      span.dataset.mcFont = info?.vanilla ? info.short : "custom";
+    }
+    for (const child of node.children()) visit(child);
+  };
+  visit(component);
 }

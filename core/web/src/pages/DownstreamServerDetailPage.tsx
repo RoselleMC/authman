@@ -14,6 +14,7 @@ import {
   DetailAside,
   DetailBody,
   DetailGrid,
+  DetailIdentifier,
   DetailSummary,
   Dialog,
   EmptyState,
@@ -60,6 +61,7 @@ import {
   type DownstreamResourcePack,
   type IdentityListFilters,
 } from "../api/admin";
+import { PlayerMessagesPage } from "./PlayerMessagesPage";
 
 interface IssuedToken {
   token_once: string;
@@ -67,7 +69,7 @@ interface IssuedToken {
   name: string;
 }
 
-type DetailTab = "overview" | "privileged" | "resources";
+type DetailTab = "overview" | "privileged" | "resources" | "messages";
 
 function toInput(server: DownstreamServer): DownstreamServerInput {
   return {
@@ -161,7 +163,7 @@ export function DownstreamServerDetailPage() {
   const [motdOpen, setMotdOpen] = useState(false);
   const [tab, setTab] = useState<DetailTab>(() => {
     const raw = searchParams.get("tab");
-    return raw === "privileged" || raw === "resources" ? raw : "overview";
+    return raw === "privileged" || raw === "resources" || raw === "messages" ? raw : "overview";
   });
   const [allowOpen, setAllowOpen] = useState(false);
   const [passportSearch, setPassportSearch] = useState("");
@@ -443,6 +445,7 @@ export function DownstreamServerDetailPage() {
             { value: "overview", label: t("common.overview"), icon: "gauge" },
             { value: "privileged", label: t("admin.servers.privileged.heading"), icon: "key" },
             { value: "resources", label: t("admin.servers.resources.heading"), icon: "download" },
+            { value: "messages", label: t("admin.playerMessages.heading"), icon: "mail" },
           ]}
         />
       </div>
@@ -453,12 +456,9 @@ export function DownstreamServerDetailPage() {
             icon="server"
             avatarUrl={serverIcon || null}
             titleMeta={<StatusBadge status={input.enabled ? (input.visible ? "active" : "hidden") : "disabled"} />}
-            meta={<span className="muted-cell">{t("admin.servers.internalId")}: <span className="mono">{server.id}</span></span>}
           >
-            <div className="id-uuid">
-              <span className="id-uuid-label">{t("admin.servers.connectionAddress")}</span>
-              <strong className="mono">{downstreamAddress}</strong>
-            </div>
+            <DetailIdentifier label={t("admin.servers.internalId")} value={server.id} />
+            <DetailIdentifier label={t("admin.servers.connectionAddress")} value={downstreamAddress} />
           </DetailSummary>
           <DetailActions title={t("common.actions")}>
             <Button variant="primary" icon="check" block loading={updateMut.isPending} onClick={() => updateMut.mutate(undefined)}>{t("common.save")}</Button>
@@ -621,6 +621,12 @@ export function DownstreamServerDetailPage() {
                 testId="server-privileged-passports"
               />
             </Card>
+          ) : tab === "messages" ? (
+            <PlayerMessagesPage
+              embedded
+              serverId={id}
+              basePath={`/nodes/${encodeURIComponent(id)}/messages`}
+            />
           ) : (
             <SettingsStack>
               <Card title={t("admin.servers.resources.policy")}>

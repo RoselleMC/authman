@@ -15,6 +15,7 @@ import {
   DetailAside,
   DetailBody,
   DetailGrid,
+  DetailIdentifier,
   DetailSummary,
   ErrorState,
   Field,
@@ -185,6 +186,9 @@ export function NodeDetailPage() {
             titleMeta={<Badge tone={statusTone(node.status)} dot>{t(`admin.nodes.status.${node.status}`, node.status)}</Badge>}
             meta={<><span className="muted-cell">{t("admin.nodes.col.mode")}</span><strong>{t(`admin.nodes.mode.${node.kind}`)}</strong></>}
           >
+            <DetailIdentifier label={t("admin.nodes.detail.nodeId")} value={node.id} />
+            <DetailIdentifier label={t("admin.nodes.detail.instance")} value={node.instance_fingerprint} />
+            <DetailIdentifier label={t("admin.nodes.detail.token")} value={node.token_fingerprint} />
             <DefList>
               <DefRow k={t("admin.nodes.col.heartbeat")}>{formatRelativeTime(node.last_seen_at)}</DefRow>
               <DefRow k={t("admin.nodes.col.version")}>

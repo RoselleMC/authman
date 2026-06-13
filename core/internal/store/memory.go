@@ -28,8 +28,8 @@ type Memory struct {
 	profilesByPassport   map[string]map[string]struct{}
 	playersByID          map[string]identity.Player
 	offlineByNormalized  map[string]string
-	protocolNameIndex    map[string]string
 	credentialsByPlayer  map[string]OfflineCredential
+	portalAuthCache      map[string]PortalAuthCache
 	sessionsByID         map[string]auth.Session
 	portalLinksByToken   map[string]auth.PortalLink
 	auditEvents          []audit.Event
@@ -39,6 +39,7 @@ type Memory struct {
 	bansByID             map[string]PlayerBan
 	nodeActionsByID      map[string]NodeAction
 	downstreamServers    map[string]DownstreamServer
+	downstreamStatus     map[string]DownstreamServerStatus
 	downstreamPrivileges map[string]map[string]DownstreamServerPrivilegedPassport
 	limboBlueprints      map[string]LimboBlueprint
 	profileSkins         map[string]ProfileSkin
@@ -66,8 +67,8 @@ func NewMemory() *Memory {
 		profilesByPassport:   make(map[string]map[string]struct{}),
 		playersByID:          make(map[string]identity.Player),
 		offlineByNormalized:  make(map[string]string),
-		protocolNameIndex:    make(map[string]string),
 		credentialsByPlayer:  make(map[string]OfflineCredential),
+		portalAuthCache:      make(map[string]PortalAuthCache),
 		sessionsByID:         make(map[string]auth.Session),
 		portalLinksByToken:   make(map[string]auth.PortalLink),
 		mojangRoutes:         make(map[string]mojang.Route),
@@ -76,6 +77,7 @@ func NewMemory() *Memory {
 		bansByID:             make(map[string]PlayerBan),
 		nodeActionsByID:      make(map[string]NodeAction),
 		downstreamServers:    make(map[string]DownstreamServer),
+		downstreamStatus:     make(map[string]DownstreamServerStatus),
 		downstreamPrivileges: make(map[string]map[string]DownstreamServerPrivilegedPassport),
 		limboBlueprints:      make(map[string]LimboBlueprint),
 		profileSkins:         make(map[string]ProfileSkin),
@@ -113,11 +115,11 @@ func (m *Memory) CreateOfflinePassportProfile(ctx context.Context, rawName strin
 	if err != nil {
 		return identity.PassportProfile{}, err
 	}
-	uniqueName, err := m.uniqueProtocolNameLocked(protocolName)
+	normalizedProfileName, err := identity.NormalizeProtocolName(protocolName)
 	if err != nil {
 		return identity.PassportProfile{}, err
 	}
-	profile, err := identity.NewOfflineProfile("", uniqueName.Protocol, passport.ID)
+	profile, err := identity.NewOfflineProfile("", normalizedProfileName.Protocol, passport.ID)
 	if err != nil {
 		return identity.PassportProfile{}, err
 	}
@@ -152,18 +154,17 @@ func (m *Memory) UpsertPremiumPassportProfile(ctx context.Context, name string, 
 			profile.ProfileProperties = append([]identity.ProfileProperty(nil), properties...)
 			profile.UpdatedAt = time.Now().UTC()
 			m.profilesByID[profile.ID] = profile
-			m.protocolNameIndex[strings.ToLower(profile.ProtocolName)] = profile.ID
 			player := identity.PlayerFromPassportProfile(passport, profile)
 			m.playersByID[player.ID] = player
 			return identity.PassportProfile{Passport: passport, Profile: profile, Link: m.profileLinks[profile.ID]}, nil
 		}
 	}
 	passport := identity.NewPremiumPassport("", protocolName, uuid)
-	uniqueName, err := m.uniqueProtocolNameLocked(protocolName)
+	normalizedProfileName, err := identity.NormalizeProtocolName(protocolName)
 	if err != nil {
 		return identity.PassportProfile{}, err
 	}
-	profile, err := identity.NewPremiumProfile("", uniqueName.Protocol, uuid, properties, passport.ID)
+	profile, err := identity.NewPremiumProfile("", normalizedProfileName.Protocol, uuid, properties, passport.ID)
 	if err != nil {
 		return identity.PassportProfile{}, err
 	}
@@ -211,11 +212,19 @@ func (m *Memory) GetProfileByProtocolName(ctx context.Context, protocolName stri
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	id, ok := m.protocolNameIndex[key]
-	if !ok {
+	var matches []identity.Profile
+	for _, profile := range m.profilesByID {
+		if strings.EqualFold(profile.ProtocolName, protocolName) {
+			matches = append(matches, profile)
+			if len(matches) > 1 {
+				return identity.Profile{}, fmt.Errorf("profile protocol name is ambiguous: %w", ErrNotFound)
+			}
+		}
+	}
+	if len(matches) == 0 {
 		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
 	}
-	return m.profilesByID[id], nil
+	return matches[0], nil
 }
 
 func (m *Memory) GetPassportForProfile(ctx context.Context, profileID string) (identity.Passport, error) {
@@ -593,9 +602,6 @@ func compareTimeAsc(a time.Time, b time.Time) int {
 func (m *Memory) CreateProfile(ctx context.Context, profile identity.Profile) (identity.Profile, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.protocolNameIndex[strings.ToLower(profile.ProtocolName)]; ok {
-		return identity.Profile{}, fmt.Errorf("profile protocol name already exists")
-	}
 	if profile.UUID == (identity.UUID{}) {
 		uuid, err := identity.RandomProfileUUID()
 		if err != nil {
@@ -616,7 +622,6 @@ func (m *Memory) CreateProfile(ctx context.Context, profile identity.Profile) (i
 	}
 	profile.UpdatedAt = now
 	m.profilesByID[profile.ID] = profile
-	m.protocolNameIndex[strings.ToLower(profile.ProtocolName)] = profile.ID
 	return profile, nil
 }
 
@@ -696,6 +701,89 @@ func (m *Memory) SetProfileStatus(ctx context.Context, id string, status identit
 	return profile, nil
 }
 
+func (m *Memory) UpdateProfileIdentity(ctx context.Context, id string, protocolName string) (identity.Profile, error) {
+	name, err := identity.NormalizeProtocolName(protocolName)
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	profile, ok := m.profilesByID[strings.TrimSpace(id)]
+	if !ok {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	profile.ProtocolName = name.Protocol
+	profile.NormalizedName = name.Normalized
+	profile.DisplayName = name.Protocol
+	profile.UpdatedAt = time.Now().UTC()
+	m.profilesByID[profile.ID] = profile
+	if _, ok := m.profileLinks[profile.ID]; ok {
+		m.refreshProfilePlayerLocked(profile.ID)
+	}
+	return profile, nil
+}
+
+func (m *Memory) DeletePassport(ctx context.Context, id string) (identity.Passport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	passportID := strings.TrimSpace(id)
+	passport, ok := m.passportsByID[passportID]
+	if !ok {
+		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	profileIDs := make([]string, 0, len(m.profilesByPassport[passportID]))
+	for profileID := range m.profilesByPassport[passportID] {
+		profileIDs = append(profileIDs, profileID)
+	}
+	for _, profileID := range profileIDs {
+		m.deleteProfileLocked(profileID, false)
+	}
+	delete(m.profilesByPassport, passportID)
+	delete(m.passportsByID, passportID)
+	delete(m.passportByUsername, passport.UsernameNormalized)
+	delete(m.credentialsByPlayer, passportID)
+	delete(m.passportSkins, passportID)
+	delete(m.premiumTextures, passportID)
+	for id, session := range m.sessionsByID {
+		if session.Kind == auth.SessionPlayer && session.SubjectID == passportID {
+			delete(m.sessionsByID, id)
+		}
+	}
+	for token, link := range m.portalLinksByToken {
+		if link.PlayerID == passportID {
+			delete(m.portalLinksByToken, token)
+		}
+	}
+	for id, ban := range m.bansByID {
+		if ban.Scope == BanScopePassport && ban.TargetID == passportID {
+			delete(m.bansByID, id)
+		}
+	}
+	for id, action := range m.nodeActionsByID {
+		if action.PassportID == passportID {
+			delete(m.nodeActionsByID, id)
+		}
+	}
+	for key, authCache := range m.portalAuthCache {
+		if authCache.PassportID == passportID {
+			delete(m.portalAuthCache, key)
+		}
+	}
+	for serverID, rows := range m.downstreamPrivileges {
+		delete(rows, passportID)
+		if len(rows) == 0 {
+			delete(m.downstreamPrivileges, serverID)
+		}
+	}
+	return passport, nil
+}
+
+func (m *Memory) DeleteProfile(ctx context.Context, id string) (identity.Profile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.deleteProfileLocked(strings.TrimSpace(id), true)
+}
+
 func (m *Memory) GetPassportCredential(ctx context.Context, username string) (identity.Passport, PassportCredential, error) {
 	passport, err := m.GetPassportByUsername(ctx, username)
 	if err != nil {
@@ -717,6 +805,59 @@ func (m *Memory) RecordPassportLoginFailure(ctx context.Context, passportID stri
 
 func (m *Memory) RecordPassportLoginSuccess(ctx context.Context, passportID string) error {
 	return m.RecordOfflineLoginSuccess(ctx, passportID)
+}
+
+func portalAuthCacheKey(passportID string, remoteIP string) string {
+	return strings.TrimSpace(passportID) + "\x00" + strings.TrimSpace(remoteIP)
+}
+
+func (m *Memory) RememberPortalAuthCache(ctx context.Context, passportID string, remoteIP string, ttl time.Duration, now time.Time) (PortalAuthCache, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	passportID = strings.TrimSpace(passportID)
+	remoteIP = strings.TrimSpace(remoteIP)
+	if passportID == "" || remoteIP == "" {
+		return PortalAuthCache{}, fmt.Errorf("portal auth cache passport and remote ip are required")
+	}
+	if ttl <= 0 {
+		return PortalAuthCache{}, fmt.Errorf("portal auth cache ttl must be positive")
+	}
+	if _, ok := m.passportsByID[passportID]; !ok {
+		return PortalAuthCache{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	usedAt := now.UTC()
+	cache := PortalAuthCache{
+		PassportID: passportID,
+		RemoteIP:   remoteIP,
+		CreatedAt:  usedAt,
+		LastUsedAt: usedAt,
+		ExpiresAt:  usedAt.Add(ttl),
+	}
+	key := portalAuthCacheKey(passportID, remoteIP)
+	if existing, ok := m.portalAuthCache[key]; ok {
+		cache.CreatedAt = existing.CreatedAt
+	}
+	m.portalAuthCache[key] = cache
+	return cache, nil
+}
+
+func (m *Memory) UsePortalAuthCache(ctx context.Context, passportID string, remoteIP string, now time.Time) (PortalAuthCache, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	passportID = strings.TrimSpace(passportID)
+	remoteIP = strings.TrimSpace(remoteIP)
+	if passportID == "" || remoteIP == "" {
+		return PortalAuthCache{}, false
+	}
+	key := portalAuthCacheKey(passportID, remoteIP)
+	cache, ok := m.portalAuthCache[key]
+	if !ok || !now.UTC().Before(cache.ExpiresAt) {
+		delete(m.portalAuthCache, key)
+		return PortalAuthCache{}, false
+	}
+	cache.LastUsedAt = now.UTC()
+	m.portalAuthCache[key] = cache
+	return cache, true
 }
 
 func (m *Memory) RecordPlayerSeen(ctx context.Context, passportID string, profileID string, serverID string, ip string, geo *identity.IPGeo, now time.Time) error {
@@ -791,7 +932,6 @@ func (m *Memory) FactoryResetPlayerData(ctx context.Context) error {
 	m.profilesByPassport = make(map[string]map[string]struct{})
 	m.playersByID = make(map[string]identity.Player)
 	m.offlineByNormalized = make(map[string]string)
-	m.protocolNameIndex = make(map[string]string)
 	m.credentialsByPlayer = make(map[string]OfflineCredential)
 	for id, session := range m.sessionsByID {
 		if session.Kind == auth.SessionPlayer {
@@ -808,6 +948,7 @@ func (m *Memory) FactoryResetPlayerData(ctx context.Context) error {
 		}
 	}
 	m.downstreamPrivileges = make(map[string]map[string]DownstreamServerPrivilegedPassport)
+	m.downstreamStatus = make(map[string]DownstreamServerStatus)
 	m.profileSkins = make(map[string]ProfileSkin)
 	m.premiumTextures = make(map[string][]identity.ProfileProperty)
 	m.passportSkins = make(map[string]PassportSkin)
@@ -879,20 +1020,19 @@ func (m *Memory) GetPlayerByProtocolName(ctx context.Context, protocolName strin
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	id, ok := m.protocolNameIndex[key]
-	if !ok {
-		for candidateID, player := range m.playersByID {
-			if strings.EqualFold(player.ProtocolName, protocolName) {
-				id = candidateID
-				ok = true
-				break
+	var matches []identity.Player
+	for _, player := range m.playersByID {
+		if strings.EqualFold(player.ProtocolName, protocolName) {
+			matches = append(matches, player)
+			if len(matches) > 1 {
+				return identity.Player{}, fmt.Errorf("player protocol name is ambiguous: %w", ErrNotFound)
 			}
 		}
 	}
-	if !ok {
+	if len(matches) == 0 {
 		return identity.Player{}, fmt.Errorf("player not found: %w", ErrNotFound)
 	}
-	return m.playersByID[id], nil
+	return matches[0], nil
 }
 
 func (m *Memory) PremiumNameExists(ctx context.Context, rawName string) bool {
@@ -1056,17 +1196,67 @@ func (m *Memory) nextMemoryID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, m.nextID)
 }
 
-func (m *Memory) uniqueProtocolNameLocked(raw string) (identity.OfflineName, error) {
-	for attempt := 1; attempt <= 9999; attempt++ {
-		name, err := uniqueProtocolCandidate(raw, attempt)
-		if err != nil {
-			return identity.OfflineName{}, err
-		}
-		if _, ok := m.protocolNameIndex[name.Normalized]; !ok {
-			return name, nil
+func (m *Memory) deleteProfileLocked(profileID string, promoteReplacement bool) (identity.Profile, error) {
+	profile, ok := m.profilesByID[profileID]
+	if !ok {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	link, hadLink := m.profileLinks[profileID]
+	presenceIDs := map[string]struct{}{}
+	for id, presence := range m.presencesByID {
+		if presence.ProfileID == profileID {
+			presenceIDs[id] = struct{}{}
+			delete(m.presencesByID, id)
 		}
 	}
-	return identity.OfflineName{}, fmt.Errorf("profile protocol name has no available unique variant")
+	delete(m.profilesByID, profileID)
+	delete(m.profileSkins, profileID)
+	delete(m.playersByID, profileID)
+	if hadLink {
+		delete(m.profileLinks, profileID)
+		if ids := m.profilesByPassport[link.PassportID]; ids != nil {
+			delete(ids, profileID)
+			if len(ids) == 0 {
+				delete(m.profilesByPassport, link.PassportID)
+			}
+		}
+	}
+	for id, session := range m.sessionsByID {
+		if session.SelectedProfileID == profileID {
+			session.SelectedProfileID = ""
+			m.sessionsByID[id] = session
+		}
+	}
+	for token, grant := range m.transferGrants {
+		if grant.PlayerID == profileID {
+			delete(m.transferGrants, token)
+		}
+	}
+	for id, data := range m.extensionData {
+		if data.PlayerID == profileID {
+			delete(m.extensionData, id)
+		}
+	}
+	for id, ban := range m.bansByID {
+		if ban.Scope == BanScopeProfile && ban.TargetID == profileID {
+			delete(m.bansByID, id)
+		}
+	}
+	for id, action := range m.nodeActionsByID {
+		_, presenceDeleted := presenceIDs[action.PresenceID]
+		if action.ProfileID == profileID || action.UUID == profile.UUID.String() || presenceDeleted {
+			delete(m.nodeActionsByID, id)
+		}
+	}
+	if promoteReplacement && hadLink && link.IsPrimary {
+		for candidateID := range m.profilesByPassport[link.PassportID] {
+			candidate := m.profileLinks[candidateID]
+			candidate.IsPrimary = true
+			m.profileLinks[candidateID] = candidate
+			break
+		}
+	}
+	return profile, nil
 }
 
 func (m *Memory) storePassportProfileLocked(passport identity.Passport, profile identity.Profile, primary bool) identity.PassportProfile {
@@ -1076,7 +1266,6 @@ func (m *Memory) storePassportProfileLocked(passport identity.Passport, profile 
 		m.passportByUsername[passport.UsernameNormalized] = passport.ID
 	}
 	m.profilesByID[profile.ID] = profile
-	m.protocolNameIndex[strings.ToLower(profile.ProtocolName)] = profile.ID
 	return m.linkProfileLocked(passport, profile, primary)
 }
 
@@ -1422,6 +1611,35 @@ func (m *Memory) ListPassportPresences(ctx context.Context, passportID string) [
 	return out
 }
 
+func (m *Memory) ListActivePresences(ctx context.Context, limit int) []PlayerPresence {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []PlayerPresence{}
+	for _, presence := range m.presencesByID {
+		if presence.EndedAt != nil {
+			continue
+		}
+		out = append(out, presence)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func (m *Memory) CountActivePresencesForServer(ctx context.Context, serverID string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	serverID = strings.TrimSpace(serverID)
+	count := 0
+	for _, presence := range m.presencesByID {
+		if presence.ServerID == serverID && presence.EndedAt == nil {
+			count++
+		}
+	}
+	return count
+}
+
 func (m *Memory) UpsertPresence(ctx context.Context, presence PlayerPresence) (PlayerPresence, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1719,7 +1937,43 @@ func (m *Memory) DeleteDownstreamServer(ctx context.Context, id string) error {
 	}
 	delete(m.downstreamServers, id)
 	delete(m.downstreamPrivileges, id)
+	delete(m.downstreamStatus, id)
 	return nil
+}
+
+func (m *Memory) GetDownstreamServerStatus(ctx context.Context, serverID string) (DownstreamServerStatus, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	status, ok := m.downstreamStatus[strings.TrimSpace(serverID)]
+	return status, ok
+}
+
+func (m *Memory) UpsertDownstreamServerStatus(ctx context.Context, status DownstreamServerStatus) (DownstreamServerStatus, error) {
+	status.ServerID = strings.TrimSpace(status.ServerID)
+	if status.ServerID == "" {
+		return DownstreamServerStatus{}, fmt.Errorf("downstream server status server id is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.downstreamServers[status.ServerID]; !ok {
+		return DownstreamServerStatus{}, fmt.Errorf("downstream server not found: %w", ErrNotFound)
+	}
+	now := time.Now().UTC()
+	if status.ReportedAt.IsZero() {
+		status.ReportedAt = now
+	}
+	status.UpdatedAt = now
+	if status.Source == "" {
+		status.Source = "heartbeat"
+	}
+	if status.OnlinePlayers < 0 {
+		status.OnlinePlayers = 0
+	}
+	if status.MaxPlayers < 0 {
+		status.MaxPlayers = 0
+	}
+	m.downstreamStatus[status.ServerID] = status
+	return status, nil
 }
 
 func (m *Memory) ListDownstreamServerPrivilegedPassports(ctx context.Context, serverID string, query IdentityListQuery) ([]DownstreamServerPrivilegedPassport, int, error) {

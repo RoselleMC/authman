@@ -47,6 +47,7 @@ var defs = []Def{
 	{Key: "limbo.error.profile_create_failed", Default: "Authman could not create this profile.", Scope: ScopeLimbo},
 	{Key: "limbo.error.profile_selection_invalid", Default: "Pick one of your profiles to continue.", Scope: ScopeLimbo},
 	{Key: "gate.kick.unavailable", Default: "<red>Authman 暂时不可用，请稍后重试。<newline>Authman is temporarily unavailable.</red>", Scope: ScopeGate},
+	{Key: "gate.kick.already_online", Default: "<red>This profile is already online on this server.<newline>该档案已在此下游服务器在线。</red><newline><gray>If this is stale, Authman is refreshing the status now. Please try again shortly.</gray>", Placeholders: []string{"player"}, Scope: ScopeGate},
 	{Key: "gate.kick.locked", Default: "<red>This Authman account is locked.<newline>该 Authman 账号已锁定。</red>", Placeholders: []string{"player"}, Scope: ScopeGate},
 	{Key: "gate.kick.banned", Default: "<red>You are banned from this server.</red><newline><gray>{reason}</gray>", Placeholders: []string{"player", "reason"}, Scope: ScopeGate},
 	{Key: "gate.kick.default_disconnect", Default: "Authman disconnected this session.", Placeholders: []string{"player"}, Scope: ScopeGate},

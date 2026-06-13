@@ -65,12 +65,14 @@ export function App() {
         <Route path="/login-portals" element={<LoginPortalsPage tab="instances" />} />
         <Route path="/login-portals/blueprints" element={<LoginPortalsPage tab="blueprints" />} />
         <Route path="/login-portals/blueprints/:id" element={<LimboBlueprintDetailPage />} />
-        <Route path="/login-portals/messages" element={<LoginPortalsPage tab="messages" />} />
-        <Route path="/login-portals/messages/dialogs/:screen" element={<PlayerDialogEditorPage />} />
-        <Route path="/login-portals/messages/scenes/:scene" element={<PlayerMessageScenePage />} />
+        <Route path="/login-portals/messages" element={<Navigate to="/nodes" replace />} />
+        <Route path="/login-portals/messages/dialogs/:screen" element={<Navigate to="/nodes" replace />} />
+        <Route path="/login-portals/messages/scenes/:scene" element={<Navigate to="/nodes" replace />} />
         <Route path="/login-portals/settings" element={<LoginPortalsPage tab="settings" />} />
         <Route path="/login-portals/:id" element={<NodeDetailPage />} />
         <Route path="/nodes" element={<DownstreamServersPage />} />
+        <Route path="/nodes/:id/messages/dialogs/:screen" element={<PlayerDialogEditorPage />} />
+        <Route path="/nodes/:id/messages/scenes/:scene" element={<PlayerMessageScenePage />} />
         <Route path="/nodes/:id" element={<DownstreamServerDetailPage />} />
         <Route path="/servers" element={<Navigate to="/nodes" replace />} />
         <Route path="/servers/:id" element={<LegacyServerRedirect />} />

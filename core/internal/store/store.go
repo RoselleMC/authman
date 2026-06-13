@@ -38,6 +38,16 @@ type DownstreamServerPrivilegedPassport struct {
 	Passport   identity.Passport
 }
 
+type DownstreamServerStatus struct {
+	ServerID      string
+	NodeID        string
+	OnlinePlayers int
+	MaxPlayers    int
+	Source        string
+	ReportedAt    time.Time
+	UpdatedAt     time.Time
+}
+
 type LimboBlueprint struct {
 	ID          string
 	Name        string
@@ -138,7 +148,8 @@ type PlayerPresence struct {
 type NodeActionType string
 
 const (
-	NodeActionDisconnect NodeActionType = "disconnect"
+	NodeActionDisconnect    NodeActionType = "disconnect"
+	NodeActionPresenceCheck NodeActionType = "presence_check"
 )
 
 type NodeAction struct {
@@ -195,6 +206,14 @@ type PassportCredential struct {
 	PasswordUpdatedAt      *time.Time
 	FailedAttempts         int
 	LockedUntil            *time.Time
+}
+
+type PortalAuthCache struct {
+	PassportID string
+	RemoteIP   string
+	CreatedAt  time.Time
+	LastUsedAt time.Time
+	ExpiresAt  time.Time
 }
 
 type AdminUser struct {
@@ -317,9 +336,14 @@ type PlayerStore interface {
 	UnbindProfile(ctx context.Context, profileID string) error
 	SetPassportStatus(ctx context.Context, id string, status identity.PassportStatus) (identity.Passport, error)
 	SetProfileStatus(ctx context.Context, id string, status identity.ProfileStatus) (identity.Profile, error)
+	UpdateProfileIdentity(ctx context.Context, id string, protocolName string) (identity.Profile, error)
+	DeletePassport(ctx context.Context, id string) (identity.Passport, error)
+	DeleteProfile(ctx context.Context, id string) (identity.Profile, error)
 	GetPassportCredential(ctx context.Context, username string) (identity.Passport, PassportCredential, error)
 	RecordPassportLoginFailure(ctx context.Context, passportID string, now time.Time) (PassportCredential, error)
 	RecordPassportLoginSuccess(ctx context.Context, passportID string) error
+	RememberPortalAuthCache(ctx context.Context, passportID string, remoteIP string, ttl time.Duration, now time.Time) (PortalAuthCache, error)
+	UsePortalAuthCache(ctx context.Context, passportID string, remoteIP string, now time.Time) (PortalAuthCache, bool)
 	RecordPlayerSeen(ctx context.Context, passportID string, profileID string, serverID string, ip string, geo *identity.IPGeo, now time.Time) error
 	UpdatePassportPassword(ctx context.Context, passportID string, passwordHash string, encryptedPassword string, keyFingerprint string) error
 	SetPassportPasswordRecovery(ctx context.Context, passportID string, encryptedPassword string, keyFingerprint string) error
@@ -355,6 +379,8 @@ type PlayerStore interface {
 	SetSystemSetting(ctx context.Context, key string, value map[string]any) error
 	ListProfilePresences(ctx context.Context, profileID string) []PlayerPresence
 	ListPassportPresences(ctx context.Context, passportID string) []PlayerPresence
+	ListActivePresences(ctx context.Context, limit int) []PlayerPresence
+	CountActivePresencesForServer(ctx context.Context, serverID string) int
 	UpsertPresence(ctx context.Context, presence PlayerPresence) (PlayerPresence, error)
 	EndPresence(ctx context.Context, id string, reason string, endedAt time.Time) (PlayerPresence, error)
 	EndProfilePresences(ctx context.Context, profileID string, reason string, endedAt time.Time) int
@@ -372,6 +398,8 @@ type PlayerStore interface {
 	GetDownstreamServer(ctx context.Context, idOrSlug string) (DownstreamServer, error)
 	UpsertDownstreamServer(ctx context.Context, server DownstreamServer) (DownstreamServer, error)
 	DeleteDownstreamServer(ctx context.Context, id string) error
+	GetDownstreamServerStatus(ctx context.Context, serverID string) (DownstreamServerStatus, bool)
+	UpsertDownstreamServerStatus(ctx context.Context, status DownstreamServerStatus) (DownstreamServerStatus, error)
 	ListDownstreamServerPrivilegedPassports(ctx context.Context, serverID string, query IdentityListQuery) ([]DownstreamServerPrivilegedPassport, int, error)
 	AddDownstreamServerPrivilegedPassport(ctx context.Context, serverID string, passportID string, createdBy string) (DownstreamServerPrivilegedPassport, error)
 	RemoveDownstreamServerPrivilegedPassport(ctx context.Context, serverID string, passportID string) error

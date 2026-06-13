@@ -1,5 +1,6 @@
 FROM golang:1.25-alpine AS build
-ENV GOPROXY=https://proxy.golang.org,direct
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 COPY limbgo ./limbgo
 COPY authman ./authman

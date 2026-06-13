@@ -5,10 +5,12 @@ import {
   AdvancedList,
   Button,
   Card,
+  ConfirmDialog,
   Copyable,
   DefList,
   DefRow,
   DetailActions,
+  DetailIdentifier,
   DetailSummary,
   Dialog,
   Field,
@@ -32,6 +34,7 @@ import {
   bindProfile,
   createPassportBan,
   createProfile,
+  deletePassport,
   deletePassportSkin,
   extendBan,
   fetchPassport,
@@ -65,6 +68,7 @@ export function PassportDetailPage() {
   const toast = useToast();
   const qc = useQueryClient();
   const [nextStatus, setNextStatus] = useState<PassportRow["status"] | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [selectedProfileID, setSelectedProfileID] = useState("");
   const [protocolName, setProtocolName] = useState("");
@@ -95,6 +99,17 @@ export function PassportDetailPage() {
       setDialog(null);
       void qc.invalidateQueries({ queryKey: ["admin.passport", id] });
       void qc.invalidateQueries({ queryKey: ["admin.passports"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const deleteMut = useMutation({
+    mutationFn: () => deletePassport(id),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("common.deleted") });
+      setDeleteOpen(false);
+      void qc.invalidateQueries({ queryKey: ["admin.passports"] });
+      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
+      navigate(backTarget);
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -290,7 +305,10 @@ export function PassportDetailPage() {
             avatarText={(p.username || "?")[0]}
             titleMeta={<StatusBadge status={p.online ? "online" : "offline_status"} />}
             meta={<><TypeBadge kind={p.kind} /><StatusBadge status={p.status} /></>}
-          />
+          >
+            <DetailIdentifier label="UUID" value={p.uuid} />
+            <DetailIdentifier label={t("admin.passports.detail.passportId")} value={p.id} />
+          </DetailSummary>
           <DetailActions title={t("admin.player.actions")}>
             {activeBan ? (
               <>
@@ -305,9 +323,7 @@ export function PassportDetailPage() {
             ) : (
               <Button variant="secondary" icon="unlock" block onClick={() => { setNextStatus("active"); setDialog("status"); }}>{t("admin.player.unlock")}</Button>
             )}
-            {p.status !== "deleted" ? (
-              <Button variant="danger" icon="trash" block onClick={() => { setNextStatus("deleted"); setDialog("status"); }}>{t("common.delete")}</Button>
-            ) : null}
+            <Button variant="danger" icon="trash" block onClick={() => setDeleteOpen(true)}>{t("common.delete")}</Button>
           </DetailActions>
         </div>
         <div className="detail-body">
@@ -476,6 +492,16 @@ export function PassportDetailPage() {
       >
         <p>{t("admin.passports.statusDialogBody")}</p>
       </Dialog>
+      <ConfirmDialog
+        open={deleteOpen}
+        title={t("admin.passports.deleteDialog")}
+        body={t("admin.passports.deleteDialogBody")}
+        confirmLabel={t("common.delete")}
+        destructive
+        loading={deleteMut.isPending}
+        onCancel={() => setDeleteOpen(false)}
+        onConfirm={() => deleteMut.mutate()}
+      />
       <Dialog
         open={dialog === "bind"}
         onClose={() => !bindMut.isPending && setDialog(null)}

@@ -33,13 +33,13 @@ import {
   type PlayerMessageDialogWhen,
 } from "../api/admin";
 import {
-  PLAYER_MESSAGES_QUERY_KEY,
   SourceEditor,
   type DialogBranch,
   applySample,
   cloneDoc,
   dialogToPreview,
   newElementId,
+  playerMessagesQueryKey,
   sampleVars,
   validateDialogDocTS,
 } from "../components/playerMessages";
@@ -89,12 +89,16 @@ export function PlayerDialogEditorPage() {
   const toast = useToast();
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const params = useParams();
+  const params = useParams<{ id?: string; screen?: string }>();
+  const serverId = (params.id ?? "").trim() || undefined;
   const rawScreen = params.screen ?? "login";
   const screen: PlayerMessageDialogScreen = rawScreen === "register" || rawScreen === "profile_create" || rawScreen === "profile_select" ? rawScreen : "login";
-  const backTarget = useBackTarget("/login-portals/messages");
+  const serverBackTarget = serverId ? `/nodes/${encodeURIComponent(serverId)}?tab=messages` : "/login-portals/messages";
+  const backTarget = useBackTarget(serverBackTarget);
+  const dialogBasePath = serverId ? `/nodes/${encodeURIComponent(serverId)}/messages/dialogs` : "/login-portals/messages/dialogs";
+  const queryKey = playerMessagesQueryKey(serverId);
 
-  const q = useQuery({ queryKey: PLAYER_MESSAGES_QUERY_KEY, queryFn: fetchPlayerMessages });
+  const q = useQuery({ queryKey, queryFn: () => fetchPlayerMessages(serverId) });
 
   const [doc, setDoc] = useState<PlayerMessageDialogDoc | null>(null);
   const [selection, setSelection] = useState<Selection>({ kind: "dialog" });
@@ -118,19 +122,19 @@ export function PlayerDialogEditorPage() {
     mutationFn: async () => {
       // Refetch right before saving: PUT is full-replace, so the untouched
       // half must come from the freshest server state, not a stale cache.
-      const fresh = await fetchPlayerMessages();
+      const fresh = await fetchPlayerMessages(serverId);
       const isOverridden = !docsEqual(doc!, fresh.dialogs[screen].default);
       const dialogs = Object.fromEntries(
         PLAYER_DIALOG_SCREENS.map((entry) => [entry, entry === screen ? (isOverridden ? doc : null) : fresh.dialogs[entry].override]),
       );
-      return updatePlayerMessages({ messages: fresh.messages.overrides, dialogs });
+      return updatePlayerMessages({ messages: fresh.messages.overrides, dialogs }, serverId);
     },
     onSuccess: (next) => {
       const entry = next.dialogs[screen];
       setDoc(cloneDoc(entry.override ?? entry.default));
       setFieldErrors({});
       toast.push({ tone: "success", title: t("admin.playerMessages.saved.toast") });
-      void qc.invalidateQueries({ queryKey: PLAYER_MESSAGES_QUERY_KEY });
+      void qc.invalidateQueries({ queryKey });
     },
     onError: (err) => {
       if (err instanceof ApiError) {
@@ -610,7 +614,7 @@ export function PlayerDialogEditorPage() {
         <BackLink onClick={() => { if (confirmDiscard()) navigate(backTarget); }}>{t("admin.playerMessages.heading")}</BackLink>
         <Segmented<PlayerMessageDialogScreen>
           value={screen}
-          onChange={(next) => { if (confirmDiscard()) navigate(`/login-portals/messages/dialogs/${next}`, { replace: true }); }}
+          onChange={(next) => { if (confirmDiscard()) navigate(`${dialogBasePath}/${next}`, { replace: true }); }}
           options={[
             { value: "login", label: t("admin.playerMessages.scene.login") },
             { value: "register", label: t("admin.playerMessages.scene.register") },

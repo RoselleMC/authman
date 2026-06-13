@@ -379,7 +379,8 @@ func (s *Server) handlePortalCreateProfile(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	settings := s.portalSettings(r.Context())
-	if existing := s.store.ListProfilesForPassport(r.Context(), passport.ID); len(existing) >= settings.MaxProfilesPerPassport {
+	existing := s.store.ListProfilesForPassport(r.Context(), passport.ID)
+	if len(existing) >= settings.MaxProfilesPerPassport {
 		api.WriteError(w, api.NewError(http.StatusForbidden, "profile.limit_reached", "this passport already has the maximum number of profiles"))
 		return
 	}
@@ -387,6 +388,12 @@ func (s *Server) handlePortalCreateProfile(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.invalid_name", err.Error()))
 		return
+	}
+	for _, profile := range existing {
+		if strings.EqualFold(profile.NormalizedName, name.Normalized) {
+			api.WriteError(w, api.NewError(http.StatusConflict, "profile.name_taken", "protocol name is already taken for this passport"))
+			return
+		}
 	}
 	profile, err := identity.NewOfflineProfile("", name.Protocol, passport.ID)
 	if err != nil {

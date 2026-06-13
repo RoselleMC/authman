@@ -21,10 +21,10 @@ import {
   DIALOG_ERROR_KEYS,
   PROFILE_ERROR_KEYS,
   SUCCESS_KEYS,
-  PLAYER_MESSAGES_QUERY_KEY,
   applySample,
   dialogToPreview,
   effectiveMessage,
+  playerMessagesQueryKey,
   sampleVars,
 } from "../components/playerMessages";
 
@@ -61,10 +61,21 @@ function SceneCard({ title, desc, overridden, to, preview, testId }: SceneCardPr
   );
 }
 
-export function PlayerMessagesPage({ embedded = false }: { embedded?: boolean } = {}) {
+interface PlayerMessagesPageProps {
+  embedded?: boolean;
+  serverId?: string;
+  basePath?: string;
+}
+
+function trimPath(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+export function PlayerMessagesPage({ embedded = false, serverId, basePath = "/login-portals/messages" }: PlayerMessagesPageProps = {}) {
   const { t } = useI18n();
-  const q = useQuery({ queryKey: PLAYER_MESSAGES_QUERY_KEY, queryFn: fetchPlayerMessages });
+  const q = useQuery({ queryKey: playerMessagesQueryKey(serverId), queryFn: () => fetchPlayerMessages(serverId) });
   const vars = useMemo(() => sampleVars(t), [t]);
+  const messagesBasePath = trimPath(basePath);
 
   if (q.error) {
     const body = <ErrorState error={q.error} onRetry={() => q.refetch()} />;
@@ -85,7 +96,7 @@ export function PlayerMessagesPage({ embedded = false }: { embedded?: boolean } 
         title={t(`admin.playerMessages.scene.${screen}`)}
         desc={t(`admin.playerMessages.scene.${screen}.desc`)}
         overridden={Boolean(data.dialogs[screen].override)}
-        to={`/login-portals/messages/dialogs/${screen}`}
+        to={`${messagesBasePath}/dialogs/${screen}`}
         testId={`pm-card-dialog-${screen}`}
         preview={(
           <MinecraftDialogPreview
@@ -114,7 +125,7 @@ export function PlayerMessagesPage({ embedded = false }: { embedded?: boolean } 
           title={t("admin.playerMessages.scene.errors")}
           desc={t("admin.playerMessages.scene.errors.desc")}
           overridden={hasMessageOverride(data, [...DIALOG_ERROR_KEYS, ...CHAT_MESSAGE_KEYS, ...PROFILE_ERROR_KEYS, ...LIMBO_KICK_KEYS])}
-          to="/login-portals/messages/scenes/errors"
+          to={`${messagesBasePath}/scenes/errors`}
           testId="pm-card-errors"
           preview={<MinecraftKickPreview compact value={applySample(effectiveMessage(data, data.messages.overrides, "limbo.kick.client_too_old"), vars)} />}
         />
@@ -122,7 +133,7 @@ export function PlayerMessagesPage({ embedded = false }: { embedded?: boolean } 
           title={t("admin.playerMessages.scene.success")}
           desc={t("admin.playerMessages.scene.success.desc")}
           overridden={hasMessageOverride(data, SUCCESS_KEYS)}
-          to="/login-portals/messages/scenes/success"
+          to={`${messagesBasePath}/scenes/success`}
           testId="pm-card-success"
           preview={(
             <MinecraftHudPreview
@@ -137,7 +148,7 @@ export function PlayerMessagesPage({ embedded = false }: { embedded?: boolean } 
           title={t("admin.playerMessages.scene.gate")}
           desc={t("admin.playerMessages.scene.gate.desc")}
           overridden={hasMessageOverride(data, GATE_KICK_KEYS)}
-          to="/login-portals/messages/scenes/gate"
+          to={`${messagesBasePath}/scenes/gate`}
           testId="pm-card-gate"
           preview={<MinecraftKickPreview compact value={applySample(effectiveMessage(data, data.messages.overrides, "gate.kick.banned"), vars)} />}
         />

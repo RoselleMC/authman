@@ -47,45 +47,6 @@ func (p *Postgres) Close() {
 	p.pool.Close()
 }
 
-func uniqueProtocolCandidate(raw string, attempt int) (identity.OfflineName, error) {
-	name, err := identity.NormalizeProtocolName(raw)
-	if err != nil {
-		return identity.OfflineName{}, err
-	}
-	if attempt <= 1 {
-		return name, nil
-	}
-	suffix := "_" + strconv.Itoa(attempt)
-	limit := identity.OfflineNameMaxLength - len(suffix)
-	if limit < identity.OfflineNameMinLength {
-		return identity.OfflineName{}, fmt.Errorf("profile protocol name cannot be made unique")
-	}
-	base := name.Protocol
-	if len(base) > limit {
-		base = base[:limit]
-	}
-	return identity.NormalizeProtocolName(base + suffix)
-}
-
-func uniqueProtocolNameTx(ctx context.Context, tx pgx.Tx, raw string) (identity.OfflineName, error) {
-	for attempt := 1; attempt <= 9999; attempt++ {
-		name, err := uniqueProtocolCandidate(raw, attempt)
-		if err != nil {
-			return identity.OfflineName{}, err
-		}
-		var exists bool
-		if err := tx.QueryRow(ctx, `
-			SELECT EXISTS (SELECT 1 FROM profiles WHERE normalized_name = $1)
-		`, name.Normalized).Scan(&exists); err != nil {
-			return identity.OfflineName{}, err
-		}
-		if !exists {
-			return name, nil
-		}
-	}
-	return identity.OfflineName{}, fmt.Errorf("profile protocol name has no available unique variant")
-}
-
 func (p *Postgres) Migrate(ctx context.Context) error {
 	_, err := p.pool.Exec(ctx, postgresSchema)
 	return err
@@ -110,11 +71,11 @@ func (p *Postgres) CreateOfflinePassportProfile(ctx context.Context, rawName str
 	`, passport.UUID.String(), passport.Username, passport.UsernameNormalized, passport.RawOfflineName, passport.Status, NormalizePassportSkinSource(passport.Kind, passport.SkinSource), passport.CreatedAt, passport.UpdatedAt); err != nil {
 		return identity.PassportProfile{}, err
 	}
-	uniqueName, err := uniqueProtocolNameTx(ctx, tx, protocolName)
+	normalizedProfileName, err := identity.NormalizeProtocolName(protocolName)
 	if err != nil {
 		return identity.PassportProfile{}, err
 	}
-	profile, err := identity.NewOfflineProfile("", uniqueName.Protocol, passport.ID)
+	profile, err := identity.NewOfflineProfile("", normalizedProfileName.Protocol, passport.ID)
 	if err != nil {
 		return identity.PassportProfile{}, err
 	}
@@ -195,11 +156,11 @@ func (p *Postgres) UpsertPremiumPassportProfile(ctx context.Context, name string
 			return identity.PassportProfile{}, err
 		}
 	} else {
-		uniqueName, err := uniqueProtocolNameTx(ctx, tx, protocolName)
+		normalizedProfileName, err := identity.NormalizeProtocolName(protocolName)
 		if err != nil {
 			return identity.PassportProfile{}, err
 		}
-		profile, err = identity.NewPremiumProfile("", uniqueName.Protocol, uuid, properties, passport.ID)
+		profile, err = identity.NewPremiumProfile("", normalizedProfileName.Protocol, uuid, properties, passport.ID)
 		if err != nil {
 			return identity.PassportProfile{}, err
 		}
@@ -294,15 +255,35 @@ func (p *Postgres) GetProfileByProtocolName(ctx context.Context, protocolName st
 	if name == "" {
 		return identity.Profile{}, fmt.Errorf("protocol name is required")
 	}
-	profile, err := scanProfileRow(p.pool.QueryRow(ctx, `
+	rows, err := p.pool.Query(ctx, `
 		SELECT `+profileSelectColumns+`
 		FROM profiles
 		WHERE lower(protocol_name) = $1
-	`, name))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+		LIMIT 2
+	`, name)
+	if err != nil {
+		return identity.Profile{}, err
 	}
-	return profile, err
+	defer rows.Close()
+	var matches []identity.Profile
+	for rows.Next() {
+		profile, err := scanProfileRow(rows)
+		if err != nil {
+			return identity.Profile{}, err
+		}
+		matches = append(matches, profile)
+	}
+	if err := rows.Err(); err != nil {
+		return identity.Profile{}, err
+	}
+	switch len(matches) {
+	case 0:
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	case 1:
+		return matches[0], nil
+	default:
+		return identity.Profile{}, fmt.Errorf("profile protocol name is ambiguous: %w", ErrNotFound)
+	}
 }
 
 func (p *Postgres) GetPassportForProfile(ctx context.Context, profileID string) (identity.Passport, error) {
@@ -961,6 +942,181 @@ func (p *Postgres) SetProfileStatus(ctx context.Context, id string, status ident
 	return profile, err
 }
 
+func (p *Postgres) UpdateProfileIdentity(ctx context.Context, id string, protocolName string) (identity.Profile, error) {
+	name, err := identity.NormalizeProtocolName(protocolName)
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	profile, err := scanProfileRow(p.pool.QueryRow(ctx, `
+		UPDATE profiles
+		SET protocol_name = $2,
+			normalized_name = $3,
+			display_name = $2,
+			updated_at = now()
+		WHERE uuid = $1
+		RETURNING `+profileSelectColumns+`
+	`, strings.TrimSpace(id), name.Protocol, name.Normalized))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	return profile, err
+}
+
+func (p *Postgres) DeletePassport(ctx context.Context, id string) (identity.Passport, error) {
+	passportID := strings.TrimSpace(id)
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return identity.Passport{}, err
+	}
+	defer tx.Rollback(ctx)
+	passport, err := scanPassportRow(tx.QueryRow(ctx, `SELECT `+passportSelectColumns+` FROM passports WHERE uuid = $1`, passportID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	if err != nil {
+		return identity.Passport{}, err
+	}
+	profileIDs, err := collectTextColumn(ctx, tx, `SELECT profile_id FROM profile_passport_links WHERE passport_id = $1`, passportID)
+	if err != nil {
+		return identity.Passport{}, err
+	}
+	if err := deletePassportDependentsTx(ctx, tx, passportID, profileIDs); err != nil {
+		return identity.Passport{}, err
+	}
+	if len(profileIDs) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM profiles WHERE uuid = ANY($1)`, profileIDs); err != nil {
+			return identity.Passport{}, err
+		}
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM passports WHERE uuid = $1`, passportID)
+	if err != nil {
+		return identity.Passport{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return identity.Passport{}, err
+	}
+	return passport, nil
+}
+
+func (p *Postgres) DeleteProfile(ctx context.Context, id string) (identity.Profile, error) {
+	profileID := strings.TrimSpace(id)
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	defer tx.Rollback(ctx)
+	profile, err := scanProfileRow(tx.QueryRow(ctx, `SELECT `+profileSelectColumns+` FROM profiles WHERE uuid = $1`, profileID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	var passportID string
+	var primary bool
+	hadLink := false
+	if err := tx.QueryRow(ctx, `SELECT passport_id, is_primary FROM profile_passport_links WHERE profile_id = $1`, profileID).Scan(&passportID, &primary); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return identity.Profile{}, err
+		}
+	} else {
+		hadLink = true
+	}
+	if err := deleteProfileDependentsTx(ctx, tx, profileID); err != nil {
+		return identity.Profile{}, err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM profiles WHERE uuid = $1`, profileID)
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	}
+	if hadLink && primary {
+		if _, err := tx.Exec(ctx, `
+			UPDATE profile_passport_links
+			SET is_primary = true
+			WHERE profile_id = (
+				SELECT profile_id
+				FROM profile_passport_links
+				WHERE passport_id = $1
+				ORDER BY linked_at, profile_id
+				LIMIT 1
+			)
+		`, passportID); err != nil {
+			return identity.Profile{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return identity.Profile{}, err
+	}
+	return profile, nil
+}
+
+func collectTextColumn(ctx context.Context, tx pgx.Tx, query string, args ...any) ([]string, error) {
+	rows, err := tx.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
+func deletePassportDependentsTx(ctx context.Context, tx pgx.Tx, passportID string, profileIDs []string) error {
+	if len(profileIDs) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM node_actions WHERE passport_id = $1 OR profile_id = ANY($2) OR uuid = ANY($2)`, passportID, profileIDs); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM player_bans WHERE (scope = 'passport' AND target_id = $1) OR (scope = 'profile' AND target_id = ANY($2))`, passportID, profileIDs); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `DELETE FROM node_actions WHERE passport_id = $1`, passportID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM player_bans WHERE scope = 'passport' AND target_id = $1`, passportID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM web_sessions WHERE kind = 'player' AND subject_id = $1`, passportID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM portal_login_links WHERE player_id = $1`, passportID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func deleteProfileDependentsTx(ctx context.Context, tx pgx.Tx, profileID string) error {
+	presenceIDs, err := collectTextColumn(ctx, tx, `SELECT id FROM player_presences WHERE profile_id = $1`, profileID)
+	if err != nil {
+		return err
+	}
+	if len(presenceIDs) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM node_actions WHERE profile_id = $1 OR uuid = $1 OR presence_id = ANY($2)`, profileID, presenceIDs); err != nil {
+			return err
+		}
+	} else if _, err := tx.Exec(ctx, `DELETE FROM node_actions WHERE profile_id = $1 OR uuid = $1`, profileID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE web_sessions SET selected_profile_id = NULL WHERE selected_profile_id = $1`, profileID); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `DELETE FROM player_bans WHERE scope = 'profile' AND target_id = $1`, profileID)
+	return err
+}
+
 func (p *Postgres) GetPassportCredential(ctx context.Context, username string) (identity.Passport, PassportCredential, error) {
 	passport, err := p.GetPassportByUsername(ctx, username)
 	if err != nil {
@@ -1012,6 +1168,53 @@ func (p *Postgres) RecordPassportLoginSuccess(ctx context.Context, passportID st
 		return fmt.Errorf("passport credential not found: %w", ErrNotFound)
 	}
 	return nil
+}
+
+func (p *Postgres) RememberPortalAuthCache(ctx context.Context, passportID string, remoteIP string, ttl time.Duration, now time.Time) (PortalAuthCache, error) {
+	passportID = strings.TrimSpace(passportID)
+	remoteIP = strings.TrimSpace(remoteIP)
+	if passportID == "" || remoteIP == "" {
+		return PortalAuthCache{}, fmt.Errorf("portal auth cache passport and remote ip are required")
+	}
+	if ttl <= 0 {
+		return PortalAuthCache{}, fmt.Errorf("portal auth cache ttl must be positive")
+	}
+	usedAt := now.UTC()
+	expiresAt := usedAt.Add(ttl)
+	cache, err := scanPortalAuthCacheRow(p.pool.QueryRow(ctx, `
+		INSERT INTO portal_auth_cache (passport_id, remote_ip, created_at, last_used_at, expires_at)
+		VALUES ($1, $2, $3, $3, $4)
+		ON CONFLICT (passport_id, remote_ip) DO UPDATE
+		SET last_used_at = EXCLUDED.last_used_at,
+			expires_at = EXCLUDED.expires_at
+		RETURNING passport_id, remote_ip, created_at, last_used_at, expires_at
+	`, passportID, remoteIP, usedAt, expiresAt))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PortalAuthCache{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	return cache, err
+}
+
+func (p *Postgres) UsePortalAuthCache(ctx context.Context, passportID string, remoteIP string, now time.Time) (PortalAuthCache, bool) {
+	passportID = strings.TrimSpace(passportID)
+	remoteIP = strings.TrimSpace(remoteIP)
+	if passportID == "" || remoteIP == "" {
+		return PortalAuthCache{}, false
+	}
+	usedAt := now.UTC()
+	_, _ = p.pool.Exec(ctx, `DELETE FROM portal_auth_cache WHERE expires_at <= $1`, usedAt)
+	cache, err := scanPortalAuthCacheRow(p.pool.QueryRow(ctx, `
+		UPDATE portal_auth_cache
+		SET last_used_at = $3
+		WHERE passport_id = $1
+			AND remote_ip = $2
+			AND expires_at > $3
+		RETURNING passport_id, remote_ip, created_at, last_used_at, expires_at
+	`, passportID, remoteIP, usedAt))
+	if err != nil {
+		return PortalAuthCache{}, false
+	}
+	return cache, true
 }
 
 func (p *Postgres) RecordPlayerSeen(ctx context.Context, passportID string, profileID string, serverID string, ip string, geo *identity.IPGeo, now time.Time) error {
@@ -1955,6 +2158,40 @@ func (p *Postgres) ListPassportPresences(ctx context.Context, passportID string)
 	return p.listPresences(ctx, "passport_id = $1", strings.TrimSpace(passportID))
 }
 
+func (p *Postgres) ListActivePresences(ctx context.Context, limit int) []PlayerPresence {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, passport_id, profile_id, server_id, node_id, protocol_name, uuid, remote_addr, connected_at, last_seen_at, ended_at, coalesce(end_reason, '')
+		FROM player_presences
+		WHERE ended_at IS NULL
+		ORDER BY last_seen_at ASC, connected_at ASC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []PlayerPresence{}
+	for rows.Next() {
+		presence, err := scanPresenceRow(rows)
+		if err == nil {
+			out = append(out, presence)
+		}
+	}
+	return out
+}
+
+func (p *Postgres) CountActivePresencesForServer(ctx context.Context, serverID string) int {
+	var count int
+	err := p.pool.QueryRow(ctx, `SELECT count(*) FROM player_presences WHERE server_id = $1 AND ended_at IS NULL`, strings.TrimSpace(serverID)).Scan(&count)
+	if err != nil {
+		return 0
+	}
+	return count
+}
+
 func (p *Postgres) listPresences(ctx context.Context, where string, arg string) []PlayerPresence {
 	rows, err := p.pool.Query(ctx, `
 		SELECT id, passport_id, profile_id, server_id, node_id, protocol_name, uuid, remote_addr, connected_at, last_seen_at, ended_at, coalesce(end_reason, '')
@@ -2280,6 +2517,51 @@ func (p *Postgres) DeleteDownstreamServer(ctx context.Context, id string) error 
 		return fmt.Errorf("downstream server not found: %w", ErrNotFound)
 	}
 	return nil
+}
+
+func (p *Postgres) GetDownstreamServerStatus(ctx context.Context, serverID string) (DownstreamServerStatus, bool) {
+	status, err := scanDownstreamServerStatusRow(p.pool.QueryRow(ctx, `
+		SELECT server_id, node_id, online_players, max_players, source, reported_at, updated_at
+		FROM downstream_server_status
+		WHERE server_id = $1
+	`, strings.TrimSpace(serverID)))
+	if err != nil {
+		return DownstreamServerStatus{}, false
+	}
+	return status, true
+}
+
+func (p *Postgres) UpsertDownstreamServerStatus(ctx context.Context, status DownstreamServerStatus) (DownstreamServerStatus, error) {
+	status.ServerID = strings.TrimSpace(status.ServerID)
+	status.NodeID = strings.TrimSpace(status.NodeID)
+	status.Source = strings.TrimSpace(status.Source)
+	if status.ServerID == "" {
+		return DownstreamServerStatus{}, fmt.Errorf("downstream server status server id is required")
+	}
+	if status.Source == "" {
+		status.Source = "heartbeat"
+	}
+	if status.OnlinePlayers < 0 {
+		status.OnlinePlayers = 0
+	}
+	if status.MaxPlayers < 0 {
+		status.MaxPlayers = 0
+	}
+	if status.ReportedAt.IsZero() {
+		status.ReportedAt = time.Now().UTC()
+	}
+	return scanDownstreamServerStatusRow(p.pool.QueryRow(ctx, `
+		INSERT INTO downstream_server_status (server_id, node_id, online_players, max_players, source, reported_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, now())
+		ON CONFLICT (server_id) DO UPDATE
+		SET node_id = EXCLUDED.node_id,
+			online_players = EXCLUDED.online_players,
+			max_players = EXCLUDED.max_players,
+			source = EXCLUDED.source,
+			reported_at = EXCLUDED.reported_at,
+			updated_at = now()
+		RETURNING server_id, node_id, online_players, max_players, source, reported_at, updated_at
+	`, status.ServerID, status.NodeID, status.OnlinePlayers, status.MaxPlayers, status.Source, status.ReportedAt.UTC()))
 }
 
 func (p *Postgres) ListDownstreamServerPrivilegedPassports(ctx context.Context, serverID string, query IdentityListQuery) ([]DownstreamServerPrivilegedPassport, int, error) {
@@ -3445,6 +3727,14 @@ func scanPassportCredentialRow(row playerScanner) (PassportCredential, error) {
 	return credential, nil
 }
 
+func scanPortalAuthCacheRow(row playerScanner) (PortalAuthCache, error) {
+	var cache PortalAuthCache
+	if err := row.Scan(&cache.PassportID, &cache.RemoteIP, &cache.CreatedAt, &cache.LastUsedAt, &cache.ExpiresAt); err != nil {
+		return PortalAuthCache{}, err
+	}
+	return cache, nil
+}
+
 func scanOfflineCredentialRow(row playerScanner, credential *OfflineCredential) error {
 	var updatedAt time.Time
 	var lockedUntil *time.Time
@@ -3669,6 +3959,20 @@ func scanDownstreamServerRow(row playerScanner) (DownstreamServer, error) {
 		}
 	}
 	return normalizeDownstreamServer(server), nil
+}
+
+func scanDownstreamServerStatusRow(row playerScanner) (DownstreamServerStatus, error) {
+	var status DownstreamServerStatus
+	err := row.Scan(
+		&status.ServerID,
+		&status.NodeID,
+		&status.OnlinePlayers,
+		&status.MaxPlayers,
+		&status.Source,
+		&status.ReportedAt,
+		&status.UpdatedAt,
+	)
+	return status, err
 }
 
 func scanDownstreamServerPrivilegedPassportRow(row playerScanner) (DownstreamServerPrivilegedPassport, error) {
@@ -3959,7 +4263,7 @@ CREATE INDEX IF NOT EXISTS passports_attributes_gin_idx ON passports USING gin (
 CREATE TABLE IF NOT EXISTS profiles (
 	uuid text PRIMARY KEY,
 	protocol_name text NOT NULL,
-	normalized_name text NOT NULL UNIQUE,
+	normalized_name text NOT NULL,
 	display_name text NOT NULL,
 	status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'locked', 'archived')),
 	skin_source text NOT NULL DEFAULT 'passport',
@@ -3989,6 +4293,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS profile_passport_links_primary_unique
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_seen_ip text;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_seen_geo jsonb;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS attributes jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE profiles DROP CONSTRAINT IF EXISTS profiles_normalized_name_key;
+DROP INDEX IF EXISTS profiles_normalized_name_key;
+CREATE INDEX IF NOT EXISTS profiles_normalized_name_idx ON profiles (normalized_name);
 CREATE INDEX IF NOT EXISTS profiles_attributes_gin_idx ON profiles USING gin (attributes);
 
 CREATE TABLE IF NOT EXISTS profile_skins (
@@ -4040,6 +4347,17 @@ CREATE TABLE IF NOT EXISTS offline_passport_credentials (
 
 ALTER TABLE offline_passport_credentials ADD COLUMN IF NOT EXISTS encrypted_password text NOT NULL DEFAULT '';
 ALTER TABLE offline_passport_credentials ADD COLUMN IF NOT EXISTS password_key_fingerprint text NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS portal_auth_cache (
+	passport_id text NOT NULL REFERENCES passports(uuid) ON DELETE CASCADE,
+	remote_ip text NOT NULL,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	last_used_at timestamptz NOT NULL DEFAULT now(),
+	expires_at timestamptz NOT NULL,
+	PRIMARY KEY (passport_id, remote_ip)
+);
+
+CREATE INDEX IF NOT EXISTS portal_auth_cache_expires_at_idx ON portal_auth_cache (expires_at);
 
 CREATE TABLE IF NOT EXISTS web_sessions (
 	id text PRIMARY KEY,
@@ -4309,7 +4627,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS player_presences_profile_server_active_unique
 CREATE TABLE IF NOT EXISTS node_actions (
 	id text PRIMARY KEY,
 	node_id text NOT NULL REFERENCES velocity_nodes(id) ON DELETE CASCADE,
-	action_type text NOT NULL CHECK (action_type IN ('disconnect')),
+	action_type text NOT NULL CHECK (action_type IN ('disconnect', 'presence_check')),
 	presence_id text NOT NULL DEFAULT '',
 	passport_id text NOT NULL DEFAULT '',
 	profile_id text NOT NULL DEFAULT '',
@@ -4320,6 +4638,9 @@ CREATE TABLE IF NOT EXISTS node_actions (
 	expires_at timestamptz,
 	acked_at timestamptz
 );
+
+ALTER TABLE node_actions DROP CONSTRAINT IF EXISTS node_actions_action_type_check;
+ALTER TABLE node_actions ADD CONSTRAINT node_actions_action_type_check CHECK (action_type IN ('disconnect', 'presence_check'));
 
 CREATE INDEX IF NOT EXISTS node_actions_pending_idx
 	ON node_actions (node_id, created_at)
@@ -4356,6 +4677,26 @@ CREATE TABLE IF NOT EXISTS downstream_servers (
 	created_at timestamptz NOT NULL DEFAULT now(),
 	updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS downstream_server_status (
+	server_id text PRIMARY KEY REFERENCES downstream_servers(id) ON DELETE CASCADE,
+	node_id text NOT NULL DEFAULT '',
+	online_players integer NOT NULL DEFAULT 0 CHECK (online_players >= 0),
+	max_players integer NOT NULL DEFAULT 0 CHECK (max_players >= 0),
+	source text NOT NULL DEFAULT 'heartbeat',
+	reported_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS downstream_server_status_reported_at_idx
+	ON downstream_server_status (reported_at DESC);
+
+UPDATE downstream_servers
+SET portal_config = jsonb_set(COALESCE(portal_config, '{}'::jsonb), '{player_messages}', (
+	SELECT value FROM system_settings WHERE key = 'player_messages'
+), true)
+WHERE NOT (COALESCE(portal_config, '{}'::jsonb) ? 'player_messages')
+	AND EXISTS (SELECT 1 FROM system_settings WHERE key = 'player_messages');
 
 CREATE TABLE IF NOT EXISTS downstream_server_privileged_passports (
 	server_id text NOT NULL REFERENCES downstream_servers(id) ON DELETE CASCADE,

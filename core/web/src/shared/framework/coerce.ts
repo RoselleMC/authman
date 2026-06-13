@@ -190,7 +190,7 @@ export function coerceMojangProxy(raw: unknown): SafeMojangProxy {
     url_masked: asString(r.url_masked, kind === "direct" ? "(direct)" : ""),
     state: asString(r.state, "healthy"),
     weight: asNumber(r.weight, 1),
-    request_count: asNumber(firstDefined(r.recent_request_count, r.failure_count, r.rate_limit_count, r.request_count), 0),
+    request_count: asNumber(firstDefined(r.recent_request_count, r.request_count), 0),
     cooldown_remaining_seconds: asNumber(r.cooldown_remaining_seconds, 0),
     last_error_at: typeof r.last_error_at === "string" ? r.last_error_at : null,
   };

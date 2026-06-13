@@ -773,7 +773,14 @@ function AdminsPanel() {
         pending={createMut.isPending}
         error={createMut.error}
         onClose={() => !createMut.isPending && setDialogOpen(false)}
-        onSubmit={(input) => createMut.mutate(input)}
+        onSubmit={(input) =>
+          createMut.mutate({
+            username: input.username,
+            email: input.email,
+            password: input.password,
+            role: input.role,
+          })
+        }
       />
       <AdminUserDialog
         open={editingUser !== null}

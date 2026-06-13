@@ -57,6 +57,7 @@ func main() {
 		options.Nodes = postgresStore
 	}
 	app := server.New(options)
+	app.StartBackground(ctx)
 
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,

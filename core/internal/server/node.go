@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"sort"
@@ -34,17 +36,35 @@ type updateNodeRequest struct {
 }
 
 type nodeHeartbeatRequest struct {
-	Name                string `json:"name"`
-	ServerID            string `json:"server_id"`
-	Mode                string `json:"mode"`
-	Kind                string `json:"kind"`
-	InstanceFingerprint string `json:"instance_fingerprint"`
-	PluginVersion       string `json:"plugin_version"`
-	VelocityVersion     string `json:"velocity_version"`
+	Name                string                      `json:"name"`
+	ServerID            string                      `json:"server_id"`
+	Mode                string                      `json:"mode"`
+	Kind                string                      `json:"kind"`
+	InstanceFingerprint string                      `json:"instance_fingerprint"`
+	PluginVersion       string                      `json:"plugin_version"`
+	VelocityVersion     string                      `json:"velocity_version"`
+	Status              *nodeDownstreamStatusReport `json:"status"`
+}
+
+type nodeDownstreamStatusReport struct {
+	OnlinePlayers int `json:"online_players"`
+	MaxPlayers    int `json:"max_players"`
 }
 
 type ackNodeActionsRequest struct {
-	IDs []string `json:"ids"`
+	IDs     []string              `json:"ids"`
+	Results []nodeActionAckResult `json:"results"`
+}
+
+type nodeActionAckResult struct {
+	ID           string `json:"id"`
+	Type         string `json:"type"`
+	PresenceID   string `json:"presence_id"`
+	PassportID   string `json:"passport_id"`
+	ProfileID    string `json:"profile_id"`
+	UUID         string `json:"uuid"`
+	ProtocolName string `json:"protocol_name"`
+	Online       *bool  `json:"online"`
 }
 
 func (s *Server) handleAdminCreateNode(w http.ResponseWriter, r *http.Request) {
@@ -299,10 +319,15 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "node.unauthorized", "missing node token"))
 		return
 	}
+	req, hasBody, decodeErr := decodeNodeHeartbeatRequest(r)
+	if decodeErr != nil {
+		api.WriteError(w, decodeErr)
+		return
+	}
+	now := time.Now()
 	if s.cfg.NodeAccessToken != "" && auth.ConstantTimeTokenEqual("node-access", token, auth.HashToken("node-access", s.cfg.NodeAccessToken)) {
-		var req nodeHeartbeatRequest
-		if err := api.DecodeJSON(r, &req); err != nil {
-			api.WriteError(w, err)
+		if !hasBody {
+			api.WriteError(w, api.NewError(http.StatusBadRequest, "system.invalid_json", "invalid JSON request body"))
 			return
 		}
 		node, err := s.nodes.Register(r.Context(), node.Registration{
@@ -314,20 +339,64 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 			AccessFingerprint:   auth.TokenFingerprint(token),
 			PluginVersion:       req.PluginVersion,
 			VelocityVersion:     req.VelocityVersion,
-		}, time.Now())
+		}, now)
 		if err != nil {
 			api.WriteError(w, api.NewError(http.StatusForbidden, "node.revoked", err.Error()))
 			return
 		}
+		s.recordNodeDownstreamStatus(r.Context(), node, req.Status, now)
 		api.WriteJSON(w, http.StatusOK, s.nodeSyncPayload(r.Context(), node), nil)
 		return
 	}
-	node, err := s.nodes.Heartbeat(r.Context(), token, time.Now())
+	node, err := s.nodes.Heartbeat(r.Context(), token, now)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "node.unauthorized", "invalid node token"))
 		return
 	}
+	if hasBody {
+		s.recordNodeDownstreamStatus(r.Context(), node, req.Status, now)
+	}
 	api.WriteJSON(w, http.StatusOK, s.nodeSyncPayload(r.Context(), node), nil)
+}
+
+func decodeNodeHeartbeatRequest(r *http.Request) (nodeHeartbeatRequest, bool, *api.Error) {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nodeHeartbeatRequest{}, false, api.NewError(http.StatusBadRequest, "system.invalid_json", "invalid JSON request body")
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nodeHeartbeatRequest{}, false, nil
+	}
+	var req nodeHeartbeatRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return nodeHeartbeatRequest{}, false, api.NewError(http.StatusBadRequest, "system.invalid_json", "invalid JSON request body")
+	}
+	return req, true, nil
+}
+
+func (s *Server) recordNodeDownstreamStatus(ctx context.Context, n node.Node, report *nodeDownstreamStatusReport, now time.Time) {
+	if report == nil || !node.IsDownstreamVelocity(n.Mode) {
+		return
+	}
+	serverID := strings.TrimSpace(n.ServerID)
+	if serverID == "" {
+		return
+	}
+	status, err := s.store.UpsertDownstreamServerStatus(ctx, store.DownstreamServerStatus{
+		ServerID:      serverID,
+		NodeID:        n.ID,
+		OnlinePlayers: clampNonNegative(report.OnlinePlayers),
+		MaxPlayers:    clampNonNegative(report.MaxPlayers),
+		Source:        "heartbeat",
+		ReportedAt:    now.UTC(),
+	})
+	if err != nil {
+		s.logger.Warn("failed to record downstream server status", "node_id", n.ID, "server_id", serverID, "err", err)
+		return
+	}
+	s.logger.Debug("recorded downstream server status", "node_id", n.ID, "server_id", serverID, "online_players", status.OnlinePlayers, "max_players", status.MaxPlayers)
 }
 
 func (s *Server) handleNodeAckActions(w http.ResponseWriter, r *http.Request) {
@@ -341,9 +410,57 @@ func (s *Server) handleNodeAckActions(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, err)
 		return
 	}
-	acked := s.store.AckNodeActions(r.Context(), n.ID, req.IDs, time.Now())
+	now := time.Now()
+	s.processNodeActionAckResults(r, n, req.Results, now)
+	ids := append([]string(nil), req.IDs...)
+	for _, result := range req.Results {
+		if trimmed := strings.TrimSpace(result.ID); trimmed != "" {
+			ids = append(ids, trimmed)
+		}
+	}
+	acked := s.store.AckNodeActions(r.Context(), n.ID, ids, now)
 	s.pushNodeSync(r.Context(), n, "node_action.ack")
 	api.WriteJSON(w, http.StatusOK, map[string]any{"acked": acked}, nil)
+}
+
+func (s *Server) processNodeActionAckResults(r *http.Request, n node.Node, results []nodeActionAckResult, now time.Time) {
+	for _, result := range results {
+		if !strings.EqualFold(strings.TrimSpace(result.Type), string(store.NodeActionPresenceCheck)) {
+			continue
+		}
+		if result.Online == nil || *result.Online {
+			s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(result.ProfileID), "presence.check", map[string]any{
+				"action_id":     strings.TrimSpace(result.ID),
+				"presence_id":   strings.TrimSpace(result.PresenceID),
+				"passport_id":   strings.TrimSpace(result.PassportID),
+				"profile_id":    strings.TrimSpace(result.ProfileID),
+				"uuid":          strings.TrimSpace(result.UUID),
+				"protocol_name": strings.TrimSpace(result.ProtocolName),
+				"online":        result.Online != nil && *result.Online,
+			})
+			continue
+		}
+		presenceID := strings.TrimSpace(result.PresenceID)
+		if presenceID == "" {
+			continue
+		}
+		presence, err := s.store.EndPresence(r.Context(), presenceID, "presence_check_absent", now)
+		if err != nil {
+			s.logger.Warn("failed to end stale presence after node check", "node_id", n.ID, "action_id", result.ID, "presence_id", presenceID, "err", err)
+			continue
+		}
+		s.audit(r, audit.ActorNode, n.ID, audit.TargetPlayer, presence.ProfileID, "presence.reconcile", map[string]any{
+			"action_id":     strings.TrimSpace(result.ID),
+			"presence_id":   presence.ID,
+			"passport_id":   presence.PassportID,
+			"profile_id":    presence.ProfileID,
+			"server_id":     presence.ServerID,
+			"node_id":       presence.NodeID,
+			"uuid":          presence.UUID,
+			"protocol_name": presence.ProtocolName,
+			"reason":        "presence_check_absent",
+		})
+	}
 }
 
 type resolvePlayerRequest struct {
@@ -471,11 +588,10 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 		api.WriteError(w, api.NewError(http.StatusServiceUnavailable, "mojang.verifier_unavailable", "Mojang verifier is not configured"))
 		return
 	}
-	profile, err := s.mojangVerifier.HasJoined(r.Context(), yggdrasil.HasJoinedRequest{
-		Username: strings.TrimSpace(req.Username),
-		ServerID: strings.TrimSpace(req.ServerID),
-		IP:       strings.TrimSpace(req.RemoteIP),
-	})
+	username := strings.TrimSpace(req.Username)
+	serverID := strings.TrimSpace(req.ServerID)
+	remoteIP := strings.TrimSpace(req.RemoteIP)
+	profile, ipFallback, err := s.verifyLimboMojangSession(r.Context(), username, serverID, remoteIP)
 	if err != nil {
 		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "limbo.session.verify_failure", map[string]any{
 			"username":        req.Username,
@@ -506,6 +622,12 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 		api.WriteError(w, api.NewError(http.StatusUnauthorized, "session.verify_failed", err.Error()))
 		return
 	}
+	passportPreexisting := false
+	if uuid, parseErr := identity.ParseUUID(profile.ID); parseErr == nil {
+		if existing, existingErr := s.store.GetPassportByID(r.Context(), uuid.String()); existingErr == nil && existing.Kind == identity.PassportKindPremium {
+			passportPreexisting = true
+		}
+	}
 	passport, ok := s.persistPremiumPassport(r.Context(), profile)
 	if !ok {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "session.persist_failed", "failed to persist premium passport"))
@@ -513,13 +635,15 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 	}
 	_ = s.store.SetPassportPremiumTextures(r.Context(), passport.ID, profilePropertiesToIdentity(profile.Properties))
 	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, passport.ID, "limbo.session.verify_success", map[string]any{
-		"passport_id":     passport.ID,
-		"username":        profile.Name,
-		"uuid":            passport.UUID.String(),
-		"remote_ip":       req.RemoteIP,
-		"requested_host":  req.RequestedHost,
-		"protocol":        req.ProtocolVersion,
-		"verification_by": "mojang",
+		"passport_id":          passport.ID,
+		"username":             profile.Name,
+		"uuid":                 passport.UUID.String(),
+		"remote_ip":            req.RemoteIP,
+		"requested_host":       req.RequestedHost,
+		"protocol":             req.ProtocolVersion,
+		"verification_by":      "mojang",
+		"ip_fallback":          ipFallback,
+		"passport_preexisting": passportPreexisting,
 	})
 	properties := make([]identity.ProfileProperty, 0, len(profile.Properties))
 	for _, property := range profile.Properties {
@@ -527,13 +651,39 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 	}
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"profile": map[string]any{
-			"uuid":       passport.UUID.String(),
-			"name":       profile.Name,
-			"properties": profilePropertiesData(properties),
-			"source":     "mojang",
-			"verified":   true,
+			"uuid":                 passport.UUID.String(),
+			"name":                 profile.Name,
+			"properties":           profilePropertiesData(properties),
+			"source":               "mojang",
+			"verified":             true,
+			"passport_id":          passport.ID,
+			"passport_preexisting": passportPreexisting,
 		},
 	}, nil)
+}
+
+func (s *Server) verifyLimboMojangSession(ctx context.Context, username string, serverID string, remoteIP string) (yggdrasil.Profile, bool, error) {
+	profile, err := s.mojangVerifier.HasJoined(ctx, yggdrasil.HasJoinedRequest{
+		Username: username,
+		ServerID: serverID,
+		IP:       remoteIP,
+	})
+	if err == nil || remoteIP == "" || !errors.Is(err, yggdrasil.ErrProfileNotFound) {
+		return profile, false, err
+	}
+	fallbackProfile, fallbackErr := s.mojangVerifier.HasJoined(ctx, yggdrasil.HasJoinedRequest{
+		Username: username,
+		ServerID: serverID,
+	})
+	if fallbackErr == nil {
+		s.logger.Info("limbo premium session verified after retry without remote IP", "username", username, "server_id", serverID, "remote_ip", remoteIP)
+		return fallbackProfile, true, nil
+	}
+	if errors.Is(fallbackErr, yggdrasil.ErrProfileNotFound) {
+		return yggdrasil.Profile{}, false, err
+	}
+	s.logger.Warn("limbo premium session retry without remote IP failed", "username", username, "server_id", serverID, "remote_ip", remoteIP, "err", fallbackErr)
+	return yggdrasil.Profile{}, false, fallbackErr
 }
 
 func (s *Server) handleNodeResolveLimboLoginPolicy(w http.ResponseWriter, r *http.Request) {
@@ -600,11 +750,7 @@ func (s *Server) handleNodeResolveLimboLoginPolicy(w http.ResponseWriter, r *htt
 			writePolicy("hybrid", "premium_claim_uuid_match", &profile)
 			return
 		}
-		if sameOfflineLoginUUID(req.ClaimedUUID, username) {
-			writePolicy("offline", "offline_claim_uuid_match", &profile)
-			return
-		}
-		writePolicy("hybrid", "premium_claim_uuid_unrecognized", &profile)
+		writePolicy("offline", "premium_claim_uuid_mismatch", &profile)
 		return
 	}
 	if errors.Is(err, yggdrasil.ErrProfileNotFound) {
@@ -638,14 +784,6 @@ func sameProfileUUID(left string, right string) bool {
 	leftUUID, leftErr := identity.ParseUUID(left)
 	rightUUID, rightErr := identity.ParseUUID(right)
 	return leftErr == nil && rightErr == nil && leftUUID == rightUUID
-}
-
-func sameOfflineLoginUUID(claimed string, username string) bool {
-	claimedUUID, err := identity.ParseUUID(claimed)
-	if err != nil {
-		return false
-	}
-	return claimedUUID == vanillaOfflineLoginUUID(username)
 }
 
 func vanillaOfflineLoginUUID(username string) identity.UUID {
@@ -687,7 +825,7 @@ func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request)
 		api.WriteError(w, apiErr)
 		return
 	}
-	data := s.nodePassportResolveData(r.Context(), passport, req.Verified)
+	data := s.nodePassportResolveData(r.Context(), passport, req.Verified, req.RemoteIP)
 	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, passport.ID, "player.resolve", map[string]any{
 		"requested_username": strings.TrimSpace(req.Username),
 		"passport_id":        passport.ID,
@@ -720,6 +858,13 @@ func (s *Server) resolveNodePassport(ctx context.Context, n node.Node, req resol
 		}
 		return passport, nil
 	}
+	if strings.TrimSpace(req.LoginMode) == "offline" {
+		passport, err := s.store.GetPassportByUsername(ctx, strings.TrimSpace(req.Username))
+		if err != nil {
+			return identity.Passport{}, api.NewError(http.StatusNotFound, "player.not_found", "player not found")
+		}
+		return passport, nil
+	}
 	if passport, err := s.findPassportByLoginName(ctx, strings.TrimSpace(req.Username)); err == nil {
 		return passport, nil
 	}
@@ -740,6 +885,12 @@ type authenticatePlayerRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 	RemoteIP string `json:"remote_ip"`
+}
+
+type rememberPortalAuthRequest struct {
+	PassportID string `json:"passport_id"`
+	RemoteIP   string `json:"remote_ip"`
+	Reason     string `json:"reason"`
 }
 
 type registerOfflinePlayerRequest struct {
@@ -804,11 +955,23 @@ func (s *Server) handleNodeAuthenticatePlayer(w http.ResponseWriter, r *http.Req
 		return
 	}
 	_ = s.store.RecordPassportLoginSuccess(r.Context(), passport.ID)
+	var cache store.PortalAuthCache
+	remembered := false
+	if next, ok, cacheErr := s.rememberPortalAuthCache(r.Context(), passport.ID, req.RemoteIP, time.Now()); cacheErr != nil {
+		s.logger.Warn("failed to remember portal auth cache after offline password success", "passport_id", passport.ID, "remote_ip", req.RemoteIP, "err", cacheErr)
+	} else {
+		cache = next
+		remembered = ok
+	}
 	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPassport, passport.ID, "offline.password.success", map[string]any{
-		"server_id": n.ServerID,
-		"remote_ip": req.RemoteIP,
+		"server_id":                 n.ServerID,
+		"remote_ip":                 req.RemoteIP,
+		"portal_auth_cache_written": remembered,
 	})
 	response := map[string]any{"authenticated": true, "passport_id": passport.ID}
+	if remembered {
+		response["auth_cache"] = portalAuthCacheData(cache, true)
+	}
 	if primary, err := s.store.GetPrimaryProfileForPassport(r.Context(), passport.ID); err == nil {
 		player := identity.PlayerFromPassportProfile(passport, primary)
 		player.ProfileProperties = s.effectiveProfileProperties(r.Context(), primary, &passport)
@@ -816,6 +979,49 @@ func (s *Server) handleNodeAuthenticatePlayer(w http.ResponseWriter, r *http.Req
 		response["player"] = playerData(player)
 	}
 	api.WriteJSON(w, http.StatusOK, response, nil)
+}
+
+func (s *Server) handleNodeRememberPortalAuth(w http.ResponseWriter, r *http.Request) {
+	n, nodeErr := s.requireNode(r)
+	if nodeErr != nil {
+		api.WriteError(w, nodeErr)
+		return
+	}
+	if !node.IsLimboPortal(n.Mode) {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "node.kind_forbidden", "only limbo portal nodes can remember portal auth"))
+		return
+	}
+	var req rememberPortalAuthRequest
+	if err := api.DecodeJSON(r, &req); err != nil {
+		api.WriteError(w, err)
+		return
+	}
+	passportID := strings.TrimSpace(req.PassportID)
+	if passportID == "" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "passport.required", "passport id is required"))
+		return
+	}
+	passport, err := s.store.GetPassportByID(r.Context(), passportID)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "passport.not_found", "passport not found"))
+		return
+	}
+	if passport.Status != identity.PassportStatusActive {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "passport.not_editable", "passport is not active"))
+		return
+	}
+	cache, remembered, err := s.rememberPortalAuthCache(r.Context(), passport.ID, req.RemoteIP, time.Now())
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "portal_auth_cache.save_failed", "failed to remember portal auth"))
+		return
+	}
+	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPassport, passport.ID, "portal.auth_cache.remember", map[string]any{
+		"remote_ip":  req.RemoteIP,
+		"reason":     strings.TrimSpace(req.Reason),
+		"remembered": remembered,
+		"expires_at": cache.ExpiresAt,
+	})
+	api.WriteJSON(w, http.StatusOK, map[string]any{"auth_cache": portalAuthCacheData(cache, remembered)}, nil)
 }
 
 func (s *Server) handleNodeRegisterOfflinePlayer(w http.ResponseWriter, r *http.Request) {
@@ -859,7 +1065,10 @@ func (s *Server) handleNodeRegisterOfflinePlayer(w http.ResponseWriter, r *http.
 		"server_id":      n.ServerID,
 		"remote_ip":      req.RemoteIP,
 	})
-	data := s.nodePassportResolveData(r.Context(), passport, false)
+	if _, _, cacheErr := s.rememberPortalAuthCache(r.Context(), passport.ID, req.RemoteIP, time.Now()); cacheErr != nil {
+		s.logger.Warn("failed to remember portal auth cache after offline registration", "passport_id", passport.ID, "remote_ip", req.RemoteIP, "err", cacheErr)
+	}
+	data := s.nodePassportResolveData(r.Context(), passport, false, req.RemoteIP)
 	// The player just proved this passport by setting its password.
 	if auth, ok := data["auth"].(map[string]any); ok {
 		auth["required"] = false
@@ -909,8 +1118,9 @@ func (s *Server) handleNodeResolvePortalTarget(w http.ResponseWriter, r *http.Re
 		"protocol":       req.ProtocolVersion,
 	})
 	data := map[string]any{
-		"server": downstreamServerData(server),
-		"target": store.DownstreamTargetData(target),
+		"server":          s.downstreamServerData(r.Context(), server),
+		"target":          s.downstreamTargetData(r.Context(), server, target),
+		"player_messages": s.playerMessagesPayloadForServer(r.Context(), server, "limbo_portal"),
 	}
 	if blueprintID := strings.TrimSpace(stringFromAnyServer(server.PortalConfig["limbo_blueprint_id"])); blueprintID != "" {
 		if blueprint, err := s.store.GetLimboBlueprint(r.Context(), blueprintID); err == nil {
@@ -1257,7 +1467,15 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 	if remoteAddr == "" {
 		remoteAddr = clientIP(r)
 	}
-	presence, err := s.store.UpsertPresence(r.Context(), store.PlayerPresence{
+	if existing := activePresencesForProfileServer(s.store.ListProfilePresences(r.Context(), player.ID), server.ID); len(existing) > 0 {
+		remaining, checked, cleared, queuedChecks := s.refreshProfileServerPresenceConflict(r, n, player.ID, server.ID, existing, now)
+		if len(remaining) > 0 {
+			s.rejectProfileAlreadyOnline(w, r, n, player, server.ID, req.RemoteIP, remaining, checked, cleared, queuedChecks)
+			return
+		}
+		s.logger.Info("cleared stale presence conflict before creating downstream presence", "profile_id", player.ID, "server_id", server.ID, "node_id", n.ID, "checked", checked, "cleared", cleared, "queued_presence_checks", queuedChecks)
+	}
+	presenceInput := store.PlayerPresence{
 		PassportID:   passport.ID,
 		ProfileID:    player.ID,
 		ServerID:     server.ID,
@@ -1267,16 +1485,26 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 		RemoteAddr:   remoteAddr,
 		ConnectedAt:  now,
 		LastSeenAt:   now,
-	})
+	}
+	presence, err := s.store.UpsertPresence(r.Context(), presenceInput)
 	if err != nil {
-		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "presence.reject", playerEventDetails(player, map[string]any{
-			"reason":    "profile_already_online_on_server",
-			"server_id": server.ID,
-			"node_id":   n.ID,
-			"remote_ip": req.RemoteIP,
-		}))
-		api.WriteError(w, api.NewError(http.StatusConflict, "presence.profile_already_online", "profile is already online on this server"))
-		return
+		existing := activePresencesForProfileServer(s.store.ListProfilePresences(r.Context(), player.ID), server.ID)
+		if len(existing) == 0 {
+			s.logger.Warn("failed to create player presence", "profile_id", player.ID, "server_id", server.ID, "node_id", n.ID, "err", err)
+			api.WriteError(w, api.NewError(http.StatusInternalServerError, "presence.create_failed", "failed to create player presence"))
+			return
+		}
+		remaining, checked, cleared, queuedChecks := s.refreshProfileServerPresenceConflict(r, n, player.ID, server.ID, existing, now)
+		if len(remaining) > 0 {
+			s.rejectProfileAlreadyOnline(w, r, n, player, server.ID, req.RemoteIP, remaining, checked, cleared, queuedChecks)
+			return
+		}
+		presence, err = s.store.UpsertPresence(r.Context(), presenceInput)
+		if err != nil {
+			s.logger.Warn("failed to create player presence after clearing stale conflict", "profile_id", player.ID, "server_id", server.ID, "node_id", n.ID, "err", err)
+			api.WriteError(w, api.NewError(http.StatusInternalServerError, "presence.create_failed", "failed to create player presence"))
+			return
+		}
 	}
 	s.recordPlayerSeenWithClientIP(r, player, server.ID, req.RemoteIP, now)
 	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.consume", map[string]any{
@@ -1299,6 +1527,49 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 			"privileged": privilegedPassport,
 		},
 	}, nil)
+}
+
+func (s *Server) refreshProfileServerPresenceConflict(r *http.Request, n node.Node, profileID string, serverID string, existing []store.PlayerPresence, now time.Time) ([]store.PlayerPresence, int, int, int) {
+	checked, cleared, queuedChecks := s.refreshPresencesViaWebSocket(r, n, existing, "profile already online conflict", now)
+	remaining := activePresencesForProfileServer(s.store.ListProfilePresences(r.Context(), profileID), serverID)
+	return remaining, checked, cleared, queuedChecks
+}
+
+func (s *Server) rejectProfileAlreadyOnline(w http.ResponseWriter, r *http.Request, n node.Node, player identity.Player, serverID string, remoteIP string, existing []store.PlayerPresence, checked int, cleared int, queuedChecks int) {
+	presenceIDs := make([]string, 0, len(existing))
+	nodeIDs := make([]string, 0, len(existing))
+	for _, presence := range existing {
+		if strings.TrimSpace(presence.ID) != "" {
+			presenceIDs = append(presenceIDs, presence.ID)
+		}
+		if strings.TrimSpace(presence.NodeID) != "" {
+			nodeIDs = append(nodeIDs, presence.NodeID)
+		}
+	}
+	s.auditWithClientIP(r, remoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "presence.reject", playerEventDetails(player, map[string]any{
+		"reason":                    "profile_already_online_on_server",
+		"server_id":                 serverID,
+		"node_id":                   n.ID,
+		"remote_ip":                 remoteIP,
+		"existing_presence_ids":     presenceIDs,
+		"existing_node_ids":         nodeIDs,
+		"websocket_presence_checks": checked,
+		"cleared_stale_presences":   cleared,
+		"queued_presence_checks":    queuedChecks,
+		"presence_check_trigger":    "transfer_grant_consume_conflict",
+		"presence_check_required":   true,
+	}))
+	err := api.NewError(http.StatusConflict, "presence.profile_already_online", "profile is already online on this server")
+	err.Details = map[string]any{
+		"profile_id":                player.ID,
+		"server_id":                 serverID,
+		"existing_presence_ids":     presenceIDs,
+		"websocket_presence_checks": checked,
+		"cleared_stale_presences":   cleared,
+		"queued_presence_checks":    queuedChecks,
+		"presence_check_required":   true,
+	}
+	api.WriteError(w, err)
 }
 
 func (s *Server) handleNodeEndPresence(w http.ResponseWriter, r *http.Request) {

@@ -4,10 +4,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Button,
   Card,
+  ConfirmDialog,
   Copyable,
   DefList,
   DefRow,
   DetailActions,
+  DetailIdentifier,
   DetailSummary,
   Dialog,
   Field,
@@ -23,12 +25,12 @@ import {
   useToast,
   useBackTarget,
 } from "@authman/shared";
-import { bindProfile, createProfileBan, deleteProfileSkin, extendBan, fetchPassports, fetchProfile, kickPresence, revokeBan, unbindProfile, updateProfileSkinSource, updateProfileStatus, uploadProfileSkin, type PlayerBan, type ProfileRow } from "../api/admin";
+import { bindProfile, createProfileBan, deleteProfile, deleteProfileSkin, extendBan, fetchPassports, fetchProfile, kickPresence, revokeBan, unbindProfile, updateProfileName, updateProfileSkinSource, updateProfileStatus, uploadProfileSkin, type PlayerBan, type ProfileRow } from "../api/admin";
 import { AuditEventList } from "../components/AuditEventList";
 import { ErrorBlock } from "../components/ErrorBlock";
 import { MinecraftSkinPreview } from "../components/MinecraftSkinPreview";
 
-type DialogState = null | "status" | "bind" | "unbind" | "ban" | "extendBan" | "revokeBan";
+type DialogState = null | "status" | "rename" | "bind" | "unbind" | "ban" | "extendBan" | "revokeBan";
 type DetailTab = "overview" | "skin" | "audit";
 type DurationUnit = "s" | "min" | "h" | "d" | "w" | "m" | "y";
 
@@ -44,7 +46,9 @@ export function ProfileDetailPage() {
   const toast = useToast();
   const qc = useQueryClient();
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [status, setStatus] = useState<ProfileRow["status"]>("active");
+  const [protocolName, setProtocolName] = useState("");
   const [passportID, setPassportID] = useState("");
   const [tab, setTab] = useState<DetailTab>("overview");
   const [banReason, setBanReason] = useState("");
@@ -71,6 +75,28 @@ export function ProfileDetailPage() {
       setDialog(null);
       void qc.invalidateQueries({ queryKey: ["admin.profile", id] });
       void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const renameMut = useMutation({
+    mutationFn: () => updateProfileName(id, protocolName),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("common.saved") });
+      setDialog(null);
+      void qc.invalidateQueries({ queryKey: ["admin.profile", id] });
+      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
+      void qc.invalidateQueries({ queryKey: ["admin.passports"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const deleteMut = useMutation({
+    mutationFn: () => deleteProfile(id),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("common.deleted") });
+      setDeleteOpen(false);
+      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
+      void qc.invalidateQueries({ queryKey: ["admin.passports"] });
+      navigate(backTarget);
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -177,6 +203,11 @@ export function ProfileDetailPage() {
       setSkinModel(normalizeSkinModel(q.data.skin.model));
     }
   }, [q.data?.id, q.data?.skin.model]);
+  useEffect(() => {
+    if (q.data?.protocol_name) {
+      setProtocolName(q.data.protocol_name);
+    }
+  }, [q.data?.id, q.data?.protocol_name]);
 
   if (q.isLoading) return <div className="page"><Card>{t("common.loading")}</Card></div>;
   if (q.error || !q.data) return <div className="page"><ErrorBlock error={q.error} onRetry={() => q.refetch()} /></div>;
@@ -216,7 +247,11 @@ export function ProfileDetailPage() {
             icon="user"
             titleMeta={<StatusBadge status={p.online ? "online" : "offline_status"} />}
             meta={<><span className="muted-cell">{t("admin.profiles.profileIdentity")}</span><StatusBadge status={p.status} /></>}
-          />
+          >
+            <DetailIdentifier label="UUID" value={p.uuid} />
+            <DetailIdentifier label={t("admin.profiles.detail.profileId")} value={p.id} />
+            {p.passport ? <DetailIdentifier label={t("admin.profiles.col.passport")} value={p.passport.id} /> : null}
+          </DetailSummary>
           <DetailActions title={t("admin.player.actions")}>
             {activeBan ? (
               <>
@@ -238,6 +273,8 @@ export function ProfileDetailPage() {
             )}
             <Button variant="secondary" icon="link" block onClick={() => { setPassportID(""); setDialog("bind"); }}>{t("admin.profiles.bind")}</Button>
             {p.passport ? <Button variant="danger" icon="link" block onClick={() => setDialog("unbind")}>{t("admin.profiles.unbind")}</Button> : null}
+            <Button variant="secondary" icon="settings" block onClick={() => { setProtocolName(p.protocol_name); setDialog("rename"); }}>{t("admin.profiles.rename")}</Button>
+            <Button variant="danger" icon="trash" block onClick={() => setDeleteOpen(true)}>{t("common.delete")}</Button>
           </DetailActions>
         </div>
         <div className="detail-body">
@@ -402,6 +439,27 @@ export function ProfileDetailPage() {
       >
         <p>{t("admin.profiles.statusDialogBody")}</p>
       </Dialog>
+      <Dialog
+        open={dialog === "rename"}
+        onClose={() => !renameMut.isPending && setDialog(null)}
+        title={t("admin.profiles.rename")}
+        icon="settings"
+        footer={<><Button variant="ghost" onClick={() => setDialog(null)}>{t("common.cancel")}</Button><Button loading={renameMut.isPending} disabled={!protocolName.trim() || protocolName.trim() === p.protocol_name} onClick={() => renameMut.mutate()}>{t("common.confirm")}</Button></>}
+      >
+        <Field label={t("admin.profiles.col.protocol")} hint={t("admin.profiles.renameHint")}>
+          <Input value={protocolName} onChange={(e) => setProtocolName(e.target.value)} autoFocus />
+        </Field>
+      </Dialog>
+      <ConfirmDialog
+        open={deleteOpen}
+        title={t("admin.profiles.deleteDialog")}
+        body={t("admin.profiles.deleteDialogBody")}
+        confirmLabel={t("common.delete")}
+        destructive
+        loading={deleteMut.isPending}
+        onCancel={() => setDeleteOpen(false)}
+        onConfirm={() => deleteMut.mutate()}
+      />
       <Dialog
         open={dialog === "bind"}
         onClose={() => !bindMut.isPending && setDialog(null)}

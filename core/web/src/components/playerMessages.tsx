@@ -11,6 +11,11 @@ export interface DialogPreviewState {
 
 export const PLAYER_MESSAGES_QUERY_KEY = ["admin.player-messages"];
 
+export function playerMessagesQueryKey(serverId?: string): readonly unknown[] {
+  const id = (serverId ?? "").trim();
+  return id ? ["admin.downstreamServer.player-messages", id] : PLAYER_MESSAGES_QUERY_KEY;
+}
+
 export const DIALOG_ERROR_KEYS = [
   "limbo.error.password_required",
   "limbo.error.invalid_password",
@@ -47,6 +52,7 @@ export const SUCCESS_KEYS = [
 
 export const GATE_KICK_KEYS = [
   "gate.kick.unavailable",
+  "gate.kick.already_online",
   "gate.kick.locked",
   "gate.kick.banned",
   "gate.kick.default_disconnect",
@@ -282,7 +288,16 @@ interface SourceEditorProps {
 
 export function SourceEditor({ value, onChange, placeholders = [], rows = 3, error, testId }: SourceEditorProps) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
-  const insert = (name: string) => {
+  const replaceSelection = (nextValue: string, cursorStart: number, cursorEnd = cursorStart) => {
+    onChange(nextValue);
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(cursorStart, cursorEnd);
+    });
+  };
+  const insertPlaceholder = (name: string) => {
     const token = `{${name}}`;
     const el = ref.current;
     if (!el) {
@@ -291,11 +306,7 @@ export function SourceEditor({ value, onChange, placeholders = [], rows = 3, err
     }
     const start = el.selectionStart ?? value.length;
     const end = el.selectionEnd ?? value.length;
-    onChange(value.slice(0, start) + token + value.slice(end));
-    requestAnimationFrame(() => {
-      el.focus();
-      el.setSelectionRange(start + token.length, start + token.length);
-    });
+    replaceSelection(value.slice(0, start) + token + value.slice(end), start + token.length);
   };
   return (
     <div className="field" style={{ gap: 6 }}>
@@ -309,7 +320,7 @@ export function SourceEditor({ value, onChange, placeholders = [], rows = 3, err
         data-testid={testId}
       />
       {error ? <div className="field__error">{error}</div> : null}
-      <PlaceholderChips names={placeholders} onInsert={insert} />
+      <PlaceholderChips names={placeholders} onInsert={insertPlaceholder} />
     </div>
   );
 }

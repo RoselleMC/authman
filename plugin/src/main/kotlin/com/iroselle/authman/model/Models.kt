@@ -38,17 +38,22 @@ data class DownstreamResourcePack(
 )
 
 data class DownstreamServerOption(
-    val id: String,
-    val slug: String,
-    val displayName: String,
-    val status: String,
-    val transferHost: String,
-    val transferPort: Int,
+	val id: String,
+	val slug: String,
+	val displayName: String,
+	val status: String,
+	val transferHost: String,
+	val transferPort: Int,
+)
+
+data class DownstreamStatusReport(
+	val onlinePlayers: Int,
+	val maxPlayers: Int,
 )
 
 data class DownstreamTransferResult(
-    val token: String,
-    val resolved: ResolvedPlayer,
+	val token: String,
+	val resolved: ResolvedPlayer,
     val target: DownstreamTarget,
 )
 
@@ -61,4 +66,35 @@ data class NodeAction(
     val uuid: String,
     val protocolName: String,
     val reason: String,
+)
+
+data class NodeActionAck(
+    val id: String,
+    val type: String = "",
+    val presenceId: String = "",
+    val passportId: String = "",
+    val profileId: String = "",
+    val uuid: String = "",
+    val protocolName: String = "",
+    val online: Boolean? = null,
+)
+
+data class NodePresenceCheckRequest(
+    val requestId: String,
+    val presenceId: String,
+    val passportId: String,
+    val profileId: String,
+    val uuid: String,
+    val protocolName: String,
+    val reason: String,
+)
+
+data class NodePresenceCheckResult(
+    val requestId: String,
+    val presenceId: String,
+    val passportId: String,
+    val profileId: String,
+    val uuid: String,
+    val protocolName: String,
+    val online: Boolean,
 )

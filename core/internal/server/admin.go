@@ -89,6 +89,7 @@ type portalSettingsRequest struct {
 	FallbackServerID       string `json:"fallback_server_id"`
 	MaxProfilesPerPassport int    `json:"max_profiles_per_passport"`
 	AutoJoinSingleProfile  bool   `json:"auto_join_single_profile"`
+	AutoAuthTTLSeconds     int    `json:"auto_auth_ttl_seconds"`
 }
 
 type brandingSettingsRequest struct {
@@ -118,6 +119,7 @@ type adminUserCreateRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 	Role     string `json:"role"`
+	Status   string `json:"status"`
 }
 
 type adminUserUpdateRequest struct {
@@ -332,7 +334,8 @@ type createOfflinePassportRequest struct {
 }
 
 type updateProfileRequest struct {
-	Status string `json:"status"`
+	Status       string `json:"status"`
+	ProtocolName string `json:"protocol_name"`
 }
 
 func (s *Server) handleAdminPassports(w http.ResponseWriter, r *http.Request) {
@@ -472,6 +475,32 @@ func (s *Server) handleAdminUpdatePassport(w http.ResponseWriter, r *http.Reques
 	api.WriteJSON(w, http.StatusOK, passportRowData(passport, s.store.ListProfilesForPassport(r.Context(), passport.ID), s.store.ListPassportPresences(r.Context(), passport.ID)), nil)
 }
 
+func (s *Server) handleAdminDeletePassport(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	passport, err := s.store.GetPassportByID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "passport.not_found", "passport not found"))
+		return
+	}
+	presences := s.store.ListPassportPresences(r.Context(), passport.ID)
+	queued := s.enqueueDisconnectActions(r.Context(), presences, "passport deleted", time.Now())
+	deleted, err := s.store.DeletePassport(r.Context(), passport.ID)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "passport.not_found", "passport not found"))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, deleted.ID, "passport.delete", map[string]any{
+		"username":       deleted.Username,
+		"kind":           deleted.Kind,
+		"queued_actions": queued,
+	})
+	api.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "queued_actions": queued}, nil)
+}
+
 func (s *Server) handleAdminProfiles(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdmin(r, false); err != nil {
 		api.WriteError(w, err)
@@ -527,7 +556,14 @@ func (s *Server) handleAdminCreateProfile(w http.ResponseWriter, r *http.Request
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.invalid_name", err.Error()))
 		return
 	}
-	profile, err := identity.NewOfflineProfile("", name.Protocol, strings.TrimSpace(req.PassportID))
+	passportID := strings.TrimSpace(req.PassportID)
+	if passportID != "" {
+		if profileNameTakenForPassport(s.store.ListProfilesForPassport(r.Context(), passportID), "", name.Normalized) {
+			api.WriteError(w, api.NewError(http.StatusConflict, "profile.name_taken", "protocol name is already taken for this passport"))
+			return
+		}
+	}
+	profile, err := identity.NewOfflineProfile("", name.Protocol, passportID)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.invalid_name", err.Error()))
 		return
@@ -538,8 +574,8 @@ func (s *Server) handleAdminCreateProfile(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var passport *identity.Passport
-	if strings.TrimSpace(req.PassportID) != "" {
-		pp, err := s.store.BindProfileToPassport(r.Context(), profile.ID, strings.TrimSpace(req.PassportID), false)
+	if passportID != "" {
+		pp, err := s.store.BindProfileToPassport(r.Context(), profile.ID, passportID, false)
 		if err != nil {
 			api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.bind_failed", err.Error()))
 			return
@@ -548,6 +584,19 @@ func (s *Server) handleAdminCreateProfile(w http.ResponseWriter, r *http.Request
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, profile.ID, "profile.create", map[string]any{"protocol_name": profile.ProtocolName})
 	api.WriteJSON(w, http.StatusCreated, profileRowData(profile, passport, s.store.ListProfilePresences(r.Context(), profile.ID)), nil)
+}
+
+func profileNameTakenForPassport(profiles []identity.Profile, excludeProfileID string, normalizedName string) bool {
+	excludeProfileID = strings.TrimSpace(excludeProfileID)
+	for _, profile := range profiles {
+		if excludeProfileID != "" && profile.ID == excludeProfileID {
+			continue
+		}
+		if strings.EqualFold(profile.NormalizedName, normalizedName) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleAdminProfileDetail(w http.ResponseWriter, r *http.Request) {
@@ -587,18 +636,78 @@ func (s *Server) handleAdminUpdateProfile(w http.ResponseWriter, r *http.Request
 		api.WriteError(w, err)
 		return
 	}
-	status := identity.ProfileStatus(strings.TrimSpace(req.Status))
-	if status == "" {
-		api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.status_required", "status is required"))
+	id := r.PathValue("id")
+	if strings.TrimSpace(req.Status) == "" && strings.TrimSpace(req.ProtocolName) == "" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.update_required", "status or protocol name is required"))
 		return
 	}
-	profile, err := s.store.SetProfileStatus(r.Context(), r.PathValue("id"), status)
+	profile, err := s.store.GetProfileByID(r.Context(), id)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "profile.not_found", "profile not found"))
 		return
 	}
-	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, profile.ID, "profile.status.update", map[string]any{"status": status})
-	api.WriteJSON(w, http.StatusOK, profileRowData(profile, nil, s.store.ListProfilePresences(r.Context(), profile.ID)), nil)
+	if strings.TrimSpace(req.ProtocolName) != "" {
+		name, err := identity.NormalizeProtocolName(req.ProtocolName)
+		if err != nil {
+			api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.invalid_name", err.Error()))
+			return
+		}
+		if passport, err := s.store.GetPassportForProfile(r.Context(), profile.ID); err == nil {
+			if profileNameTakenForPassport(s.store.ListProfilesForPassport(r.Context(), passport.ID), profile.ID, name.Normalized) {
+				api.WriteError(w, api.NewError(http.StatusConflict, "profile.name_taken", "protocol name is already taken for this passport"))
+				return
+			}
+		}
+		oldName := profile.ProtocolName
+		profile, err = s.store.UpdateProfileIdentity(r.Context(), profile.ID, name.Protocol)
+		if err != nil {
+			api.WriteError(w, api.NewError(http.StatusNotFound, "profile.not_found", "profile not found"))
+			return
+		}
+		s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, profile.ID, "profile.identity.update", map[string]any{
+			"old_protocol_name": oldName,
+			"protocol_name":     profile.ProtocolName,
+		})
+	}
+	if strings.TrimSpace(req.Status) != "" {
+		status := identity.ProfileStatus(strings.TrimSpace(req.Status))
+		profile, err = s.store.SetProfileStatus(r.Context(), profile.ID, status)
+		if err != nil {
+			api.WriteError(w, api.NewError(http.StatusNotFound, "profile.not_found", "profile not found"))
+			return
+		}
+		s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, profile.ID, "profile.status.update", map[string]any{"status": status})
+	}
+	var passport *identity.Passport
+	if p, err := s.store.GetPassportForProfile(r.Context(), profile.ID); err == nil {
+		passport = &p
+	}
+	api.WriteJSON(w, http.StatusOK, profileRowData(profile, passport, s.store.ListProfilePresences(r.Context(), profile.ID)), nil)
+}
+
+func (s *Server) handleAdminDeleteProfile(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	profile, err := s.store.GetProfileByID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "profile.not_found", "profile not found"))
+		return
+	}
+	presences := s.store.ListProfilePresences(r.Context(), profile.ID)
+	queued := s.enqueueDisconnectActions(r.Context(), presences, "profile deleted", time.Now())
+	deleted, err := s.store.DeleteProfile(r.Context(), profile.ID)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "profile.not_found", "profile not found"))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, deleted.ID, "profile.delete", map[string]any{
+		"protocol_name":  deleted.ProtocolName,
+		"queued_actions": queued,
+	})
+	api.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "queued_actions": queued}, nil)
 }
 
 func (s *Server) handleAdminBindProfile(w http.ResponseWriter, r *http.Request) {
@@ -1090,6 +1199,7 @@ func (s *Server) handleAdminMojangRoutes(w http.ResponseWriter, r *http.Request)
 				"state":                      state,
 				"url_masked":                 maskRouteURL(route),
 				"weight":                     route.Weight,
+				"request_count":              route.RequestCount,
 				"failure_count":              route.FailureCount,
 				"rate_limit_count":           route.RateLimitCount,
 				"cooldown_remaining_seconds": cooldown,
@@ -1780,6 +1890,7 @@ func mojangRouteData(route mojang.Route, now time.Time) map[string]any {
 		"state":                      state,
 		"url_masked":                 maskRouteURL(route),
 		"weight":                     route.Weight,
+		"request_count":              route.RequestCount,
 		"failure_count":              route.FailureCount,
 		"rate_limit_count":           route.RateLimitCount,
 		"cooldown_remaining_seconds": cooldown,
@@ -1828,7 +1939,7 @@ func (s *Server) handleAdminDownstreamServers(w http.ResponseWriter, r *http.Req
 	servers := s.store.ListDownstreamServers(r.Context())
 	filtered := make([]store.DownstreamServer, 0, len(servers))
 	for _, server := range servers {
-		data := downstreamServerData(server)
+		data := s.downstreamServerData(r.Context(), server)
 		if search != "" && !containsFold(server.ID, search) && !containsFold(server.Slug, search) && !containsFold(server.DisplayName, search) && !containsFold(fmt.Sprint(data["target"]), search) {
 			continue
 		}
@@ -1855,7 +1966,7 @@ func (s *Server) handleAdminDownstreamServers(w http.ResponseWriter, r *http.Req
 	start, end := pageBounds(len(filtered), params)
 	data := make([]map[string]any, 0, end-start)
 	for _, server := range filtered[start:end] {
-		data = append(data, downstreamServerData(server))
+		data = append(data, s.downstreamServerData(r.Context(), server))
 	}
 	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), len(filtered), params))
 }
@@ -1870,7 +1981,7 @@ func (s *Server) handleAdminDownstreamServerDetail(w http.ResponseWriter, r *htt
 		api.WriteError(w, api.NewError(http.StatusNotFound, "server.not_found", "server not found"))
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, downstreamServerData(server), nil)
+	api.WriteJSON(w, http.StatusOK, s.downstreamServerData(r.Context(), server), nil)
 }
 
 func (s *Server) handleAdminCreateDownstreamServer(w http.ResponseWriter, r *http.Request) {
@@ -1896,7 +2007,7 @@ func (s *Server) handleAdminCreateDownstreamServer(w http.ResponseWriter, r *htt
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, server.ID, "server.upsert", map[string]any{"slug": server.Slug})
 	s.pushAllNodeSync(r.Context(), "server.upsert")
-	api.WriteJSON(w, http.StatusCreated, downstreamServerData(server), nil)
+	api.WriteJSON(w, http.StatusCreated, s.downstreamServerData(r.Context(), server), nil)
 }
 
 func (s *Server) handleAdminUpdateDownstreamServer(w http.ResponseWriter, r *http.Request) {
@@ -1928,7 +2039,7 @@ func (s *Server) handleAdminUpdateDownstreamServer(w http.ResponseWriter, r *htt
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetDownstreamServer, server.ID, "server.upsert", map[string]any{"slug": server.Slug})
 	s.pushAllNodeSync(r.Context(), "server.upsert")
-	api.WriteJSON(w, http.StatusOK, downstreamServerData(server), nil)
+	api.WriteJSON(w, http.StatusOK, s.downstreamServerData(r.Context(), server), nil)
 }
 
 func (s *Server) handleAdminUploadDownstreamServerIcon(w http.ResponseWriter, r *http.Request) {
@@ -1965,7 +2076,7 @@ func (s *Server) handleAdminUploadDownstreamServerIcon(w http.ResponseWriter, r 
 		"slug": server.Slug,
 	})
 	s.pushAllNodeSync(r.Context(), "server.icon.update")
-	api.WriteJSON(w, http.StatusOK, downstreamServerData(server), nil)
+	api.WriteJSON(w, http.StatusOK, s.downstreamServerData(r.Context(), server), nil)
 }
 
 func (s *Server) handleAdminDeleteDownstreamServerIcon(w http.ResponseWriter, r *http.Request) {
@@ -1993,7 +2104,7 @@ func (s *Server) handleAdminDeleteDownstreamServerIcon(w http.ResponseWriter, r 
 		"slug": server.Slug,
 	})
 	s.pushAllNodeSync(r.Context(), "server.icon.delete")
-	api.WriteJSON(w, http.StatusOK, downstreamServerData(server), nil)
+	api.WriteJSON(w, http.StatusOK, s.downstreamServerData(r.Context(), server), nil)
 }
 
 func (s *Server) handleAdminListDownstreamServerPrivilegedPassports(w http.ResponseWriter, r *http.Request) {
@@ -2144,6 +2255,7 @@ func (s *Server) handleAdminUpdatePortalSettings(w http.ResponseWriter, r *http.
 		FallbackServerID:       normalizePortalFallbackServerID(req.FallbackServerID),
 		MaxProfilesPerPassport: clampMaxProfiles(req.MaxProfilesPerPassport),
 		AutoJoinSingleProfile:  req.AutoJoinSingleProfile,
+		AutoAuthTTLSeconds:     clampAutoAuthTTLSeconds(req.AutoAuthTTLSeconds),
 	}
 	if settings.FallbackServerID != "" {
 		if _, err := s.store.GetDownstreamServer(r.Context(), settings.FallbackServerID); err != nil {
@@ -2165,9 +2277,13 @@ type portalSettings struct {
 	FallbackServerID       string
 	MaxProfilesPerPassport int
 	// AutoJoinSingleProfile skips the profile manager when a passport owns
-	// exactly one profile. Off by default: the manager is the standard flow.
+	// exactly one profile. Deprecated for the current limbo: single-profile
+	// routing is now automatic and this remains only for old node responses.
 	AutoJoinSingleProfile bool
+	AutoAuthTTLSeconds    int
 }
+
+const defaultPortalAutoAuthTTLSeconds = 12 * 60 * 60
 
 func clampMaxProfiles(value int) int {
 	if value < 1 {
@@ -2179,11 +2295,22 @@ func clampMaxProfiles(value int) int {
 	return value
 }
 
+func clampAutoAuthTTLSeconds(value int) int {
+	if value < 0 {
+		return defaultPortalAutoAuthTTLSeconds
+	}
+	if value > 7*24*60*60 {
+		return 7 * 24 * 60 * 60
+	}
+	return value
+}
+
 func (s *Server) portalSettings(ctx context.Context) portalSettings {
 	defaults := portalSettings{
 		TransferCookieKey:      "authman:transfer_grant",
 		FallbackServerID:       "",
 		MaxProfilesPerPassport: 3,
+		AutoAuthTTLSeconds:     defaultPortalAutoAuthTTLSeconds,
 	}
 	raw, err := s.store.GetSystemSetting(ctx, "portal")
 	if err == nil {
@@ -2192,6 +2319,7 @@ func (s *Server) portalSettings(ctx context.Context) portalSettings {
 			FallbackServerID:       normalizePortalFallbackServerID(stringValue(raw["fallback_server_id"], defaults.FallbackServerID)),
 			MaxProfilesPerPassport: clampMaxProfiles(intValue(raw["max_profiles_per_passport"], defaults.MaxProfilesPerPassport)),
 			AutoJoinSingleProfile:  boolValue(raw["auto_join_single_profile"], false),
+			AutoAuthTTLSeconds:     clampAutoAuthTTLSeconds(intValue(raw["auto_auth_ttl_seconds"], defaults.AutoAuthTTLSeconds)),
 		}
 	}
 	return defaults
@@ -2211,6 +2339,7 @@ func portalSettingsMap(settings portalSettings) map[string]any {
 		"fallback_server_id":        strings.TrimSpace(settings.FallbackServerID),
 		"max_profiles_per_passport": clampMaxProfiles(settings.MaxProfilesPerPassport),
 		"auto_join_single_profile":  settings.AutoJoinSingleProfile,
+		"auto_auth_ttl_seconds":     clampAutoAuthTTLSeconds(settings.AutoAuthTTLSeconds),
 	}
 }
 
@@ -2229,6 +2358,7 @@ func portalSettingsData(settings portalSettings, servers []store.DownstreamServe
 		"fallback_server_id":        strings.TrimSpace(settings.FallbackServerID),
 		"max_profiles_per_passport": clampMaxProfiles(settings.MaxProfilesPerPassport),
 		"auto_join_single_profile":  settings.AutoJoinSingleProfile,
+		"auto_auth_ttl_seconds":     clampAutoAuthTTLSeconds(settings.AutoAuthTTLSeconds),
 		"available_servers":         available,
 	}
 }
@@ -2416,6 +2546,14 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "admin.role_invalid", "role is invalid"))
 		return
 	}
+	status := strings.TrimSpace(strings.ToLower(req.Status))
+	if status == "" {
+		status = "active"
+	}
+	if status != "active" && status != "disabled" {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "admin.status_invalid", "status is invalid"))
+		return
+	}
 	passwordHash, hashErr := auth.HashPassword(req.Password, s.passwordParams)
 	if hashErr != nil {
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "auth.password_too_weak", "password is too weak"))
@@ -2426,7 +2564,7 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		Email:        email,
 		PasswordHash: passwordHash,
 		Role:         roleID,
-		Status:       "active",
+		Status:       status,
 	})
 	if storeErr != nil {
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "admin.user_create_failed", storeErr.Error()))
@@ -2435,6 +2573,7 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, user.ID, "admin.user.create", map[string]any{
 		"username": user.Username,
 		"role":     user.Role,
+		"status":   user.Status,
 	})
 	api.WriteJSON(w, http.StatusCreated, s.adminUserData(r.Context(), user), nil)
 }

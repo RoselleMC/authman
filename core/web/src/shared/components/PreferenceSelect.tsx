@@ -3,8 +3,7 @@ import { Icon } from "./Icon";
 import { useI18n, type LocalePreference } from "../i18n/I18nProvider";
 import { useTheme, type ThemePreference } from "../theme/ThemeProvider";
 import { cx } from "../utils/cx";
-import flagCn from "../assets/flags/cn.svg";
-import flagGb from "../assets/flags/gb.svg";
+import { countryFlagUrl } from "../utils/flags";
 
 export interface PreferenceOption<T extends string> {
   value: T;
@@ -95,7 +94,7 @@ export function PreferenceSelect<T extends string>({
 }
 
 function LocaleFlag({ locale }: { locale: "en" | "zh" }) {
-  const src = locale === "zh" ? flagCn : flagGb;
+  const src = countryFlagUrl(locale === "zh" ? "cn" : "gb");
   return <img className="pref-select__flag" src={src} alt="" aria-hidden="true" />;
 }
 

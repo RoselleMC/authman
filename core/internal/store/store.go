@@ -409,6 +409,7 @@ type PlayerStore interface {
 	UpsertLimboBlueprint(ctx context.Context, blueprint LimboBlueprint) (LimboBlueprint, error)
 	DeleteLimboBlueprint(ctx context.Context, id string) error
 	SaveTransferGrant(ctx context.Context, grant auth.TransferGrant) error
+	GetPendingTransferGrantByProtocolName(ctx context.Context, serverID string, protocolName string, now time.Time) (auth.TransferGrant, error)
 	ConsumeTransferGrant(ctx context.Context, tokenHash string, serverID string, uuid string, protocolName string, gateNodeID string, allowedPortalSources []string, now time.Time) (auth.TransferGrant, error)
 	ListExtensionPlayerData(ctx context.Context, playerID string, serverSlug string, includePrivate bool) []ExtensionPlayerData
 	UpsertExtensionPlayerData(ctx context.Context, data ExtensionPlayerData) (ExtensionPlayerData, error)

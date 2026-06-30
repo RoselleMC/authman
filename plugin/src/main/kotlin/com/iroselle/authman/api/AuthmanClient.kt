@@ -83,6 +83,7 @@ class AuthmanClient(
                 properties = parseProperties(player["properties"]),
             ),
             presenceId = presence.stringOr("id", ""),
+            remoteIp = presence.stringOr("remote_addr", data.obj("grant").stringOr("remote_ip", "")),
             target = parseDownstreamTarget(target),
             privilegedPassport = passport.boolean("privileged"),
         )

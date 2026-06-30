@@ -1,4 +1,5 @@
 import { useI18n } from "../i18n/I18nProvider";
+import { countryFlagUrl } from "../utils/flags";
 import { Icon } from "./Icon";
 
 export interface IPGeoLocale {
@@ -38,7 +39,7 @@ export function IPLocation({ ip, geo, compact = false }: Props) {
           <Icon name="globe" size={14} />
         </span>
       ) : countryCode ? (
-        <img className="ip-location__flag" src={`https://flagcdn.com/w40/${countryCode}.png`} alt="" aria-hidden="true" />
+        <img className="ip-location__flag" src={countryFlagUrl(countryCode)} alt="" aria-hidden="true" />
       ) : null}
       <span className="ip-location__main">
         <code className="mono">{displayIP}</code>

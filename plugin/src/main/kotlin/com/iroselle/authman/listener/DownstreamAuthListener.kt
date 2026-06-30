@@ -27,6 +27,9 @@ import net.kyori.adventure.key.Key
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.slf4j.Logger
+import java.lang.reflect.Field
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.UUID
@@ -183,13 +186,13 @@ class DownstreamAuthListener(
         val data = event.originalData
         if (data == null || data.isEmpty()) {
             validating.remove(player.uniqueId)
-            reject(player, "missing Authman transfer grant cookie")
+            rejectWith(player, "missing Authman transfer grant cookie", messages.missingTransferGrant(player.username))
             return
         }
         val token = data.toString(StandardCharsets.UTF_8).trim()
         if (token.isEmpty()) {
             validating.remove(player.uniqueId)
-            reject(player, "empty Authman transfer grant cookie")
+            rejectWith(player, "empty Authman transfer grant cookie", messages.missingTransferGrant(player.username))
             return
         }
         val remoteIp = player.remoteAddress.address?.hostAddress ?: player.remoteAddress.hostString
@@ -224,6 +227,7 @@ class DownstreamAuthListener(
             reject(player, "invalid Authman transfer grant: ${ex.message}")
             return
         }
+        applyLimboRemoteAddress(player, result.remoteIp)
         allowed.add(player.uniqueId)
         if (result.presenceId.isNotBlank()) {
             presences[player.uniqueId] = result.presenceId
@@ -442,7 +446,7 @@ class DownstreamAuthListener(
         try {
             player.requestCookie(cookieKey())
         } catch (ex: IllegalArgumentException) {
-            reject(player, "client does not support transfer cookies")
+            rejectWith(player, "client does not support transfer cookies", messages.transferUnsupported(player.username))
         }
     }
 
@@ -451,7 +455,7 @@ class DownstreamAuthListener(
     private fun scheduleValidationTimeout(player: Player) {
         server.scheduler.buildTask(plugin, Runnable {
             if (player.isActive && pending.contains(player.uniqueId) && !allowed.contains(player.uniqueId)) {
-                reject(player, "Authman downstream validation timed out")
+                rejectWith(player, "Authman downstream validation timed out", messages.validationTimeout(player.username))
             }
         }).delay(config.downstreamValidationTimeoutSeconds, TimeUnit.SECONDS).schedule()
     }
@@ -468,6 +472,57 @@ class DownstreamAuthListener(
         if (player.isActive) {
             player.disconnect(message)
         }
+    }
+
+    private fun applyLimboRemoteAddress(player: Player, remoteIp: String) {
+        val cleanIp = remoteIp.trim()
+        if (cleanIp.isBlank()) {
+            logger.info("Authman consume response did not include a Limbo remote IP for {}; keeping Velocity remote address {}", player.username, player.remoteAddress)
+            return
+        }
+        val current = player.remoteAddress
+        val target = try {
+            InetSocketAddress(InetAddress.getByName(cleanIp), current.port)
+        } catch (ex: Exception) {
+            logger.warn("Ignoring invalid Authman Limbo remote IP {} for {}", cleanIp, player.username, ex)
+            return
+        }
+        val currentHost = current.address?.hostAddress ?: current.hostString
+        val targetHost = target.address?.hostAddress ?: target.hostString
+        if (currentHost == targetHost) {
+            return
+        }
+        val changed = runCatching {
+            val connectionMethod = player.javaClass.methods.firstOrNull { method ->
+                method.name == "getConnection" && method.parameterCount == 0
+            } ?: return@runCatching false
+            connectionMethod.isAccessible = true
+            val connection = connectionMethod.invoke(player) ?: return@runCatching false
+            val remoteAddressField = findField(connection.javaClass, "remoteAddress") ?: return@runCatching false
+            remoteAddressField.isAccessible = true
+            remoteAddressField.set(connection, target)
+            true
+        }.getOrElse { ex ->
+            logger.warn("Failed to apply Authman Limbo remote IP {} for {}", cleanIp, player.username, ex)
+            false
+        }
+        if (changed) {
+            logger.info("Applied Authman Limbo remote IP for {}: {} -> {}", player.username, currentHost, targetHost)
+        } else {
+            logger.warn("Velocity player implementation does not expose a writable remote address for {}; keeping {}", player.username, currentHost)
+        }
+    }
+
+    private fun findField(type: Class<*>, name: String): Field? {
+        var current: Class<*>? = type
+        while (current != null) {
+            try {
+                return current.getDeclaredField(name)
+            } catch (_: NoSuchFieldException) {
+                current = current.superclass
+            }
+        }
+        return null
     }
 
     private fun findPresenceTarget(action: NodeAction): Player? =

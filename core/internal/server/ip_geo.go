@@ -23,20 +23,23 @@ type ipGeoCacheEntry struct {
 }
 
 type ipGeoResolver struct {
-	mu            sync.Mutex
-	entries       map[string]ipGeoCacheEntry
-	client        *http.Client
-	cooldownUntil time.Time
-	cacheTTL      time.Duration
-	timeout       time.Duration
-	routes        []mojang.Route
-	cursor        int
+	mu             sync.Mutex
+	entries        map[string]ipGeoCacheEntry
+	client         *http.Client
+	routeCooldowns map[string]time.Time
+	cacheTTL       time.Duration
+	timeout        time.Duration
+	routes         []mojang.Route
+	cursor         int
+	now            func() time.Time
 }
 
 func newIPGeoResolver() *ipGeoResolver {
 	return &ipGeoResolver{
-		entries: map[string]ipGeoCacheEntry{},
-		client:  &http.Client{Timeout: 3 * time.Second},
+		entries:        map[string]ipGeoCacheEntry{},
+		client:         &http.Client{Timeout: 3 * time.Second},
+		routeCooldowns: map[string]time.Time{},
+		now:            time.Now,
 	}
 }
 
@@ -52,12 +55,8 @@ func (r *ipGeoResolver) lookup(ctx context.Context, ip string) *identity.IPGeo {
 	if !publicIP(ip) {
 		return localNetworkGeo(ip)
 	}
-	now := time.Now()
+	now := r.nowTime()
 	r.mu.Lock()
-	if now.Before(r.cooldownUntil) {
-		r.mu.Unlock()
-		return nil
-	}
 	if entry, ok := r.entries[ip]; ok && now.Before(entry.expiresAt) {
 		r.mu.Unlock()
 		return cloneGeo(entry.geo)
@@ -76,7 +75,8 @@ func (r *ipGeoResolver) lookup(ctx context.Context, ip string) *identity.IPGeo {
 }
 
 func (r *ipGeoResolver) fetch(ctx context.Context, ip string) *identity.IPGeo {
-	routes := r.executionRoutes()
+	now := r.nowTime()
+	routes := r.executionRoutes(now)
 	if len(routes) == 0 {
 		routes = []mojang.Route{{ID: "direct", Kind: mojang.RouteDirect, Weight: 1}}
 	}
@@ -84,12 +84,16 @@ func (r *ipGeoResolver) fetch(ctx context.Context, ip string) *identity.IPGeo {
 	for _, route := range routes {
 		client, err := r.clientForRoute(route)
 		if err != nil {
+			r.cooldownRoute(route, 30*time.Second, now)
 			continue
 		}
 		en = r.fetchLocale(ctx, client, ip, "en")
 		zh = r.fetchLocale(ctx, client, ip, "zh-CN")
 		if en.status == "success" || zh.status == "success" {
 			break
+		}
+		if cooldown := geoCooldownFor(en, zh); cooldown > 0 {
+			r.cooldownRoute(route, cooldown, now)
 		}
 	}
 	if en.status != "success" && zh.status != "success" {
@@ -131,18 +135,18 @@ func (r *ipGeoResolver) fetchLocale(ctx context.Context, client *http.Client, ip
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return ipAPIResponse{status: "fail", message: err.Error()}
+		return ipAPIResponse{status: "fail", message: err.Error(), routeError: true}
 	}
 	defer resp.Body.Close()
+	retryAfter := geoRetryAfter(resp)
 	if resp.StatusCode != http.StatusOK {
-		r.updateRateLimit(resp)
-		return ipAPIResponse{status: "fail", message: fmt.Sprintf("http_%d", resp.StatusCode)}
+		return ipAPIResponse{status: "fail", message: fmt.Sprintf("http_%d", resp.StatusCode), retryAfter: retryAfter}
 	}
-	r.updateRateLimit(resp)
 	var out ipAPIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return ipAPIResponse{status: "fail", message: err.Error()}
+		return ipAPIResponse{status: "fail", message: err.Error(), routeError: true, retryAfter: retryAfter}
 	}
+	out.retryAfter = retryAfter
 	return out
 }
 
@@ -154,7 +158,7 @@ func (r *ipGeoResolver) configure(routes []mojang.Route, cacheTTL time.Duration,
 	r.timeout = timeout
 }
 
-func (r *ipGeoResolver) executionRoutes() []mojang.Route {
+func (r *ipGeoResolver) executionRoutes(now time.Time) []mojang.Route {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	routes := make([]mojang.Route, 0, len(r.routes))
@@ -162,6 +166,13 @@ func (r *ipGeoResolver) executionRoutes() []mojang.Route {
 	for _, route := range r.routes {
 		if route.Disabled {
 			continue
+		}
+		key := geoRouteKey(route)
+		if until, ok := r.routeCooldowns[key]; ok {
+			if until.After(now) {
+				continue
+			}
+			delete(r.routeCooldowns, key)
 		}
 		weight := route.Weight
 		if weight <= 0 {
@@ -218,18 +229,72 @@ func (r *ipGeoResolver) clientForRoute(route mojang.Route) (*http.Client, error)
 	return &http.Client{Timeout: timeout, Transport: transport}, nil
 }
 
-func (r *ipGeoResolver) updateRateLimit(resp *http.Response) {
+func (r *ipGeoResolver) nowTime() time.Time {
+	if r.now == nil {
+		return time.Now().UTC()
+	}
+	return r.now().UTC()
+}
+
+func (r *ipGeoResolver) cooldownRoute(route mojang.Route, cooldown time.Duration, now time.Time) {
+	if cooldown <= 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.hasRouteFallbackLocked(route, now) {
+		return
+	}
+	if r.routeCooldowns == nil {
+		r.routeCooldowns = map[string]time.Time{}
+	}
+	r.routeCooldowns[geoRouteKey(route)] = now.Add(cooldown)
+}
+
+func (r *ipGeoResolver) hasRouteFallbackLocked(failed mojang.Route, now time.Time) bool {
+	failedKey := geoRouteKey(failed)
+	for _, route := range r.routes {
+		if route.Disabled || geoRouteKey(route) == failedKey {
+			continue
+		}
+		if until, ok := r.routeCooldowns[geoRouteKey(route)]; ok && until.After(now) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func geoRouteKey(route mojang.Route) string {
+	if strings.TrimSpace(route.ID) != "" {
+		return strings.TrimSpace(route.ID)
+	}
+	return string(route.Kind) + "|" + strings.TrimSpace(route.URL)
+}
+
+func geoCooldownFor(responses ...ipAPIResponse) time.Duration {
+	var cooldown time.Duration
+	for _, response := range responses {
+		if response.retryAfter > cooldown {
+			cooldown = response.retryAfter
+		}
+		if response.routeError && cooldown == 0 {
+			cooldown = 30 * time.Second
+		}
+	}
+	return cooldown
+}
+
+func geoRetryAfter(resp *http.Response) time.Duration {
 	remaining := strings.TrimSpace(resp.Header.Get("X-Rl"))
 	if remaining != "0" {
-		return
+		return 0
 	}
 	ttlSeconds, _ := strconv.Atoi(strings.TrimSpace(resp.Header.Get("X-Ttl")))
 	if ttlSeconds <= 0 {
 		ttlSeconds = 60
 	}
-	r.mu.Lock()
-	r.cooldownUntil = time.Now().Add(time.Duration(ttlSeconds) * time.Second)
-	r.mu.Unlock()
+	return time.Duration(ttlSeconds) * time.Second
 }
 
 type ipAPIResponse struct {
@@ -242,6 +307,8 @@ type ipAPIResponse struct {
 	city        string
 	isp         string
 	asn         string
+	retryAfter  time.Duration
+	routeError  bool
 }
 
 func (r *ipAPIResponse) UnmarshalJSON(raw []byte) error {

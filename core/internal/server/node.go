@@ -814,6 +814,24 @@ func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request)
 		api.WriteError(w, err)
 		return
 	}
+	if player, passport, grant, ok := s.resolvePendingGrantPlayer(r.Context(), n, req); ok {
+		data := s.nodePassportResolveDataWithPlayer(r.Context(), passport, player, true, req.Verified, req.RemoteIP)
+		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, passport.ID, "player.resolve", map[string]any{
+			"requested_username": strings.TrimSpace(req.Username),
+			"passport_id":        passport.ID,
+			"passport_kind":      string(passport.Kind),
+			"player_id":          player.ID,
+			"grant_id":           grant.ID,
+			"resolution":         "pending_transfer_grant",
+			"protocol_name":      player.ProtocolName,
+			"uuid":               player.UUID.String(),
+			"auth":               data["auth"],
+			"kind":               node.NormalizeKind(n.Mode),
+			"remote_ip":          req.RemoteIP,
+		})
+		api.WriteJSON(w, http.StatusOK, data, nil)
+		return
+	}
 	passport, apiErr := s.resolveNodePassport(r.Context(), n, req)
 	if apiErr != nil {
 		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "player.resolve_failure", map[string]any{
@@ -835,6 +853,39 @@ func (s *Server) handleNodeResolvePlayer(w http.ResponseWriter, r *http.Request)
 		"remote_ip":          req.RemoteIP,
 	})
 	api.WriteJSON(w, http.StatusOK, data, nil)
+}
+
+func (s *Server) resolvePendingGrantPlayer(ctx context.Context, n node.Node, req resolvePlayerRequest) (identity.Player, identity.Passport, auth.TransferGrant, bool) {
+	if !node.IsDownstreamVelocity(n.Mode) {
+		return identity.Player{}, identity.Passport{}, auth.TransferGrant{}, false
+	}
+	if strings.TrimSpace(req.LoginMode) != "" || req.Verified {
+		return identity.Player{}, identity.Passport{}, auth.TransferGrant{}, false
+	}
+	serverID := strings.TrimSpace(n.ServerID)
+	username := strings.TrimSpace(req.Username)
+	if serverID == "" || username == "" {
+		return identity.Player{}, identity.Passport{}, auth.TransferGrant{}, false
+	}
+	grant, err := s.store.GetPendingTransferGrantByProtocolName(ctx, serverID, username, time.Now())
+	if err != nil {
+		return identity.Player{}, identity.Passport{}, auth.TransferGrant{}, false
+	}
+	player, err := s.store.GetPlayerByID(ctx, grant.PlayerID)
+	if err != nil {
+		s.logger.Warn("pending transfer grant points to missing player", "grant_id", grant.ID, "player_id", grant.PlayerID, "server_id", serverID, "protocol_name", grant.ProtocolName, "err", err)
+		return identity.Player{}, identity.Passport{}, auth.TransferGrant{}, false
+	}
+	passport, err := s.store.GetPassportForProfile(ctx, player.ID)
+	if err != nil {
+		s.logger.Warn("pending transfer grant points to unbound profile", "grant_id", grant.ID, "player_id", player.ID, "server_id", serverID, "protocol_name", grant.ProtocolName, "err", err)
+		return identity.Player{}, identity.Passport{}, auth.TransferGrant{}, false
+	}
+	if uuid, err := identity.ParseUUID(grant.UUID); err == nil {
+		player.UUID = uuid
+	}
+	player.ProtocolName = grant.ProtocolName
+	return player, passport, grant, true
 }
 
 func (s *Server) resolveNodePassport(ctx context.Context, n node.Node, req resolvePlayerRequest) (identity.Passport, *api.Error) {
@@ -1314,6 +1365,7 @@ func (s *Server) writeNodeTransferGrant(w http.ResponseWriter, r *http.Request, 
 		server.ID,
 		n.ID,
 		source,
+		req.RemoteIP,
 		player.UUID.String(),
 		player.ProtocolName,
 		target.TransferHost,
@@ -1329,7 +1381,9 @@ func (s *Server) writeNodeTransferGrant(w http.ResponseWriter, r *http.Request, 
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "transfer_grant.save_failed", "failed to save transfer grant"))
 		return
 	}
-	s.recordPlayerSeenWithClientIP(r, player, server.ID, req.RemoteIP, now)
+	if normalizeClientIPValue(req.RemoteIP) != "" {
+		s.recordPlayerSeenWithClientIP(r, player, server.ID, req.RemoteIP, now)
+	}
 	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, createEvent, map[string]any{
 		"server_id":     server.ID,
 		"source":        source,
@@ -1425,6 +1479,9 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 		api.WriteError(w, api.NewError(http.StatusForbidden, "transfer_grant.invalid", err.Error()))
 		return
 	}
+	gateRemoteIP := normalizeClientIPValue(req.RemoteIP)
+	portalRemoteIP := normalizeClientIPValue(grant.RemoteIP)
+	effectiveRemoteIP := portalRemoteIP
 	player, err := s.store.GetPlayerByID(r.Context(), grant.PlayerID)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
@@ -1435,13 +1492,15 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 		return
 	}
 	if ban, banned := s.activeBanForPlayer(r.Context(), player); banned {
-		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
-			"reason":     "banned",
-			"server_id":  server.ID,
-			"ban_id":     ban.ID,
-			"ban_scope":  ban.Scope,
-			"expires_at": ban.ExpiresAt,
-			"remote_ip":  req.RemoteIP,
+		s.auditWithClientIP(r, effectiveRemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
+			"reason":           "banned",
+			"server_id":        server.ID,
+			"ban_id":           ban.ID,
+			"ban_scope":        ban.Scope,
+			"expires_at":       ban.ExpiresAt,
+			"remote_ip":        effectiveRemoteIP,
+			"portal_remote_ip": portalRemoteIP,
+			"gate_remote_ip":   gateRemoteIP,
 		}))
 		api.WriteError(w, api.NewError(http.StatusForbidden, "auth.banned", ban.Reason))
 		return
@@ -1453,24 +1512,23 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 	}
 	privilegedPassport := s.store.DownstreamServerHasPrivilegedPassport(r.Context(), server.ID, passport.ID)
 	if target.Status == "hidden" && !privilegedPassport {
-		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
-			"reason":      "server_hidden",
-			"server_id":   server.ID,
-			"passport_id": passport.ID,
-			"remote_ip":   req.RemoteIP,
+		s.auditWithClientIP(r, effectiveRemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.reject", playerEventDetails(player, map[string]any{
+			"reason":           "server_hidden",
+			"server_id":        server.ID,
+			"passport_id":      passport.ID,
+			"remote_ip":        effectiveRemoteIP,
+			"portal_remote_ip": portalRemoteIP,
+			"gate_remote_ip":   gateRemoteIP,
 		}))
 		api.WriteError(w, api.NewError(http.StatusForbidden, "server.privileged_required", "privileged passport is required for this server"))
 		return
 	}
 	now := time.Now()
-	remoteAddr := normalizeClientIPValue(req.RemoteIP)
-	if remoteAddr == "" {
-		remoteAddr = clientIP(r)
-	}
+	remoteAddr := effectiveRemoteIP
 	if existing := activePresencesForProfileServer(s.store.ListProfilePresences(r.Context(), player.ID), server.ID); len(existing) > 0 {
 		remaining, checked, cleared, queuedChecks := s.refreshProfileServerPresenceConflict(r, n, player.ID, server.ID, existing, now)
 		if len(remaining) > 0 {
-			s.rejectProfileAlreadyOnline(w, r, n, player, server.ID, req.RemoteIP, remaining, checked, cleared, queuedChecks)
+			s.rejectProfileAlreadyOnline(w, r, n, player, server.ID, effectiveRemoteIP, remaining, checked, cleared, queuedChecks)
 			return
 		}
 		s.logger.Info("cleared stale presence conflict before creating downstream presence", "profile_id", player.ID, "server_id", server.ID, "node_id", n.ID, "checked", checked, "cleared", cleared, "queued_presence_checks", queuedChecks)
@@ -1496,7 +1554,7 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 		}
 		remaining, checked, cleared, queuedChecks := s.refreshProfileServerPresenceConflict(r, n, player.ID, server.ID, existing, now)
 		if len(remaining) > 0 {
-			s.rejectProfileAlreadyOnline(w, r, n, player, server.ID, req.RemoteIP, remaining, checked, cleared, queuedChecks)
+			s.rejectProfileAlreadyOnline(w, r, n, player, server.ID, effectiveRemoteIP, remaining, checked, cleared, queuedChecks)
 			return
 		}
 		presence, err = s.store.UpsertPresence(r.Context(), presenceInput)
@@ -1506,15 +1564,20 @@ func (s *Server) handleNodeConsumeTransferGrant(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
-	s.recordPlayerSeenWithClientIP(r, player, server.ID, req.RemoteIP, now)
-	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.consume", map[string]any{
-		"server_id":     server.ID,
-		"protocol_name": protocolName,
-		"uuid":          uuid,
-		"source":        req.Source,
-		"portal_source": grant.PortalSource,
-		"presence_id":   presence.ID,
-		"remote_ip":     req.RemoteIP,
+	if effectiveRemoteIP != "" {
+		s.recordPlayerSeenWithClientIP(r, player, server.ID, effectiveRemoteIP, now)
+	}
+	s.auditWithClientIP(r, effectiveRemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, player.ID, "transfer_grant.consume", map[string]any{
+		"server_id":               server.ID,
+		"protocol_name":           protocolName,
+		"uuid":                    uuid,
+		"source":                  req.Source,
+		"portal_source":           grant.PortalSource,
+		"presence_id":             presence.ID,
+		"remote_ip":               effectiveRemoteIP,
+		"portal_remote_ip":        portalRemoteIP,
+		"gate_remote_ip":          gateRemoteIP,
+		"gate_remote_ip_rejected": gateRemoteIP != "",
 	})
 	api.WriteJSON(w, http.StatusOK, map[string]any{
 		"allowed":  true,
@@ -2278,6 +2341,7 @@ func transferGrantData(grant auth.TransferGrant) map[string]any {
 		"server_id":      grant.ServerID,
 		"portal_node_id": grant.PortalNodeID,
 		"portal_source":  grant.PortalSource,
+		"remote_ip":      grant.RemoteIP,
 		"gate_node_id":   grant.GateNodeID,
 		"uuid":           grant.UUID,
 		"protocol_name":  grant.ProtocolName,

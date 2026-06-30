@@ -91,7 +91,7 @@ func (p *Pool) Execute(ctx context.Context, transport Transport) (Route, error) 
 		p.Routes[i].RequestCount++
 		if err := transport.Do(ctx, route); err != nil {
 			lastErr = err
-			p.markFailure(i, err, now)
+			p.markFailure(i, err, now, p.hasFallbackRoute(i, now))
 			continue
 		}
 		if p.Routes[i].State != "" && p.Routes[i].State != RouteHealthy {
@@ -133,7 +133,17 @@ func (p *Pool) executionOrder() []int {
 	return out
 }
 
-func (p *Pool) markFailure(index int, err error, now time.Time) {
+func (p *Pool) hasFallbackRoute(failedIndex int, now time.Time) bool {
+	for i, route := range p.Routes {
+		if i == failedIndex || route.Disabled || route.CooldownUntil.After(now) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (p *Pool) markFailure(index int, err error, now time.Time, cool bool) {
 	route := &p.Routes[index]
 	route.FailureCount++
 	route.LastFailureError = err.Error()
@@ -159,8 +169,12 @@ func (p *Pool) markFailure(index int, err error, now time.Time) {
 		cooldown = rateLimit.RetryAfter
 		event.RetryAfter = rateLimit.RetryAfter
 	}
-	route.CooldownUntil = now.Add(cooldown)
-	route.State = RouteCoolingDown
+	if cool {
+		route.CooldownUntil = now.Add(cooldown)
+		route.State = RouteCoolingDown
+	} else {
+		route.CooldownUntil = time.Time{}
+	}
 	p.recordEvent(index, event)
 }
 

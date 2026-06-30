@@ -2132,6 +2132,38 @@ func (m *Memory) SaveTransferGrant(ctx context.Context, grant auth.TransferGrant
 	return nil
 }
 
+func (m *Memory) GetPendingTransferGrantByProtocolName(ctx context.Context, serverID string, protocolName string, now time.Time) (auth.TransferGrant, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	serverID = strings.TrimSpace(serverID)
+	protocolName = strings.TrimSpace(protocolName)
+	if serverID == "" || protocolName == "" {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant not found: %w", ErrNotFound)
+	}
+	var selected auth.TransferGrant
+	for _, grant := range m.transferGrants {
+		if grant.ConsumedAt != nil {
+			continue
+		}
+		if grant.ServerID != serverID {
+			continue
+		}
+		if !strings.EqualFold(grant.ProtocolName, protocolName) {
+			continue
+		}
+		if !now.UTC().Before(grant.ExpiresAt) {
+			continue
+		}
+		if selected.ID == "" || grant.CreatedAt.After(selected.CreatedAt) {
+			selected = grant
+		}
+	}
+	if selected.ID == "" {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant not found: %w", ErrNotFound)
+	}
+	return selected, nil
+}
+
 func (m *Memory) ConsumeTransferGrant(ctx context.Context, tokenHash string, serverID string, uuid string, protocolName string, gateNodeID string, allowedPortalSources []string, now time.Time) (auth.TransferGrant, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -2754,6 +2754,7 @@ func (p *Postgres) SaveTransferGrant(ctx context.Context, grant auth.TransferGra
 			server_id,
 			portal_node_id,
 			portal_source,
+			remote_ip,
 			gate_node_id,
 			token_hash,
 			uuid,
@@ -2764,9 +2765,26 @@ func (p *Postgres) SaveTransferGrant(ctx context.Context, grant auth.TransferGra
 			expires_at,
 			consumed_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-	`, grant.ID, grant.PlayerID, grant.ServerID, grant.PortalNodeID, grant.PortalSource, grant.GateNodeID, grant.TokenHash, grant.UUID, grant.ProtocolName, grant.TargetHost, grant.TargetPort, grant.CreatedAt, grant.ExpiresAt, grant.ConsumedAt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+	`, grant.ID, grant.PlayerID, grant.ServerID, grant.PortalNodeID, grant.PortalSource, grant.RemoteIP, grant.GateNodeID, grant.TokenHash, grant.UUID, grant.ProtocolName, grant.TargetHost, grant.TargetPort, grant.CreatedAt, grant.ExpiresAt, grant.ConsumedAt)
 	return err
+}
+
+func (p *Postgres) GetPendingTransferGrantByProtocolName(ctx context.Context, serverID string, protocolName string, now time.Time) (auth.TransferGrant, error) {
+	grant, err := scanTransferGrantRow(p.pool.QueryRow(ctx, `
+		SELECT id, player_id, server_id, portal_node_id, portal_source, remote_ip, gate_node_id, token_hash, uuid, protocol_name, target_host, target_port, created_at, expires_at, consumed_at
+		FROM transfer_grants
+		WHERE server_id = $1
+			AND lower(protocol_name) = lower($2)
+			AND consumed_at IS NULL
+			AND expires_at > $3
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, strings.TrimSpace(serverID), strings.TrimSpace(protocolName), now.UTC()))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.TransferGrant{}, fmt.Errorf("transfer grant not found: %w", ErrNotFound)
+	}
+	return grant, err
 }
 
 func (p *Postgres) ConsumeTransferGrant(ctx context.Context, tokenHash string, serverID string, uuid string, protocolName string, gateNodeID string, allowedPortalSources []string, now time.Time) (auth.TransferGrant, error) {
@@ -2777,7 +2795,7 @@ func (p *Postgres) ConsumeTransferGrant(ctx context.Context, tokenHash string, s
 	defer tx.Rollback(ctx)
 
 	grant, err := scanTransferGrantRow(tx.QueryRow(ctx, `
-		SELECT id, player_id, server_id, portal_node_id, portal_source, gate_node_id, token_hash, uuid, protocol_name, target_host, target_port, created_at, expires_at, consumed_at
+		SELECT id, player_id, server_id, portal_node_id, portal_source, remote_ip, gate_node_id, token_hash, uuid, protocol_name, target_host, target_port, created_at, expires_at, consumed_at
 		FROM transfer_grants
 		WHERE token_hash = $1
 		FOR UPDATE
@@ -2814,7 +2832,7 @@ func (p *Postgres) ConsumeTransferGrant(ctx context.Context, tokenHash string, s
 		SET consumed_at = $2,
 			gate_node_id = $3
 		WHERE token_hash = $1
-		RETURNING id, player_id, server_id, portal_node_id, portal_source, gate_node_id, token_hash, uuid, protocol_name, target_host, target_port, created_at, expires_at, consumed_at
+		RETURNING id, player_id, server_id, portal_node_id, portal_source, remote_ip, gate_node_id, token_hash, uuid, protocol_name, target_host, target_port, created_at, expires_at, consumed_at
 	`, tokenHash, consumedAt, gateNodeID), &grant)
 	if err != nil {
 		return auth.TransferGrant{}, err
@@ -3815,6 +3833,7 @@ func scanTransferGrantRowInto(row playerScanner, grant *auth.TransferGrant) erro
 		&grant.ServerID,
 		&grant.PortalNodeID,
 		&grant.PortalSource,
+		&grant.RemoteIP,
 		&grant.GateNodeID,
 		&grant.TokenHash,
 		&grant.UUID,
@@ -4718,6 +4737,7 @@ CREATE TABLE IF NOT EXISTS transfer_grants (
 	server_id text NOT NULL REFERENCES downstream_servers(id) ON DELETE CASCADE,
 	portal_node_id text NOT NULL DEFAULT '',
 	portal_source text NOT NULL DEFAULT '',
+	remote_ip text NOT NULL DEFAULT '',
 	gate_node_id text NOT NULL DEFAULT '',
 	token_hash text NOT NULL UNIQUE,
 	uuid text NOT NULL,
@@ -4733,6 +4753,7 @@ CREATE INDEX IF NOT EXISTS transfer_grants_token_hash_idx ON transfer_grants (to
 CREATE INDEX IF NOT EXISTS transfer_grants_expires_at_idx ON transfer_grants (expires_at);
 CREATE INDEX IF NOT EXISTS transfer_grants_server_player_idx ON transfer_grants (server_id, player_id);
 ALTER TABLE transfer_grants ADD COLUMN IF NOT EXISTS portal_source text NOT NULL DEFAULT '';
+ALTER TABLE transfer_grants ADD COLUMN IF NOT EXISTS remote_ip text NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS extension_player_data (
 	id text PRIMARY KEY,

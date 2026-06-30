@@ -3,11 +3,15 @@ package identity
 import (
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
-	OfflineNameMinLength = 3
-	OfflineNameMaxLength = 16
+	OfflineNameMinLength  = 3
+	OfflineNameMaxLength  = 16
+	ProtocolNameMinLength = 1
+	ProtocolNameMaxLength = 16
 )
 
 var reservedOfflineNames = map[string]struct{}{
@@ -27,23 +31,24 @@ type OfflineName struct {
 }
 
 func NormalizeOfflineName(raw string) (OfflineName, error) {
-	return normalizeMinecraftName(raw, "offline username")
+	return normalizeName(raw, "offline username", OfflineNameMinLength, OfflineNameMaxLength, isOfflineNameRune)
 }
 
 func NormalizeProtocolName(raw string) (OfflineName, error) {
-	return normalizeMinecraftName(raw, "profile protocol name")
+	return normalizeName(raw, "profile protocol name", ProtocolNameMinLength, ProtocolNameMaxLength, isProtocolNameRune)
 }
 
-func normalizeMinecraftName(raw string, label string) (OfflineName, error) {
+func normalizeName(raw string, label string, minLength int, maxLength int, validRune func(rune) bool) (OfflineName, error) {
 	name := strings.TrimSpace(raw)
 	if name != raw {
 		return OfflineName{}, fmt.Errorf("%s must not contain leading or trailing whitespace", label)
 	}
-	if len(name) < OfflineNameMinLength || len(name) > OfflineNameMaxLength {
-		return OfflineName{}, fmt.Errorf("%s length must be between %d and %d", label, OfflineNameMinLength, OfflineNameMaxLength)
+	length := utf8.RuneCountInString(name)
+	if length < minLength || length > maxLength {
+		return OfflineName{}, fmt.Errorf("%s length must be between %d and %d characters", label, minLength, maxLength)
 	}
 	for _, r := range name {
-		if !isOfflineNameRune(r) {
+		if !validRune(r) {
 			return OfflineName{}, fmt.Errorf("%s contains invalid character %q", label, r)
 		}
 	}
@@ -63,4 +68,11 @@ func isOfflineNameRune(r rune) bool {
 		r >= 'A' && r <= 'Z' ||
 		r >= '0' && r <= '9' ||
 		r == '_'
+}
+
+func isProtocolNameRune(r rune) bool {
+	if isOfflineNameRune(r) {
+		return true
+	}
+	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }

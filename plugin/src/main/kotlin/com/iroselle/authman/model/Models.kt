@@ -16,6 +16,7 @@ data class DownstreamConsumeResult(
     val allowed: Boolean,
     val resolved: ResolvedPlayer,
     val presenceId: String,
+    val remoteIp: String,
     val target: DownstreamTarget,
     val privilegedPassport: Boolean,
 )

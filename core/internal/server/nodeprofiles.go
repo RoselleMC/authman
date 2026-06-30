@@ -65,6 +65,10 @@ func (s *Server) profilePolicyData(ctx context.Context, profileCount int) map[st
 // passport: optional primary-profile player payload plus the full profile
 // list and creation policy.
 func (s *Server) nodePassportResolveData(ctx context.Context, passport identity.Passport, verified bool, remoteIP string) map[string]any {
+	return s.nodePassportResolveDataWithPlayer(ctx, passport, identity.Player{}, false, verified, remoteIP)
+}
+
+func (s *Server) nodePassportResolveDataWithPlayer(ctx context.Context, passport identity.Passport, selected identity.Player, hasSelected bool, verified bool, remoteIP string) map[string]any {
 	profiles := s.store.ListProfilesForPassport(ctx, passport.ID)
 	primaryID := ""
 	var playerPayload any
@@ -75,6 +79,11 @@ func (s *Server) nodePassportResolveData(ctx context.Context, passport identity.
 		player.ProfileProperties = s.effectiveProfileProperties(ctx, primary, &passport)
 		playerPayload = playerData(player)
 		authLocked = player.Locked
+	}
+	if hasSelected {
+		selected.ProfileProperties = s.effectiveProfilePropertiesByID(ctx, selected.ID)
+		playerPayload = playerData(selected)
+		authLocked = selected.Locked
 	}
 	authRequired := passport.Kind == identity.PassportKindOffline && !authLocked && !verified
 	authKind := "premium"

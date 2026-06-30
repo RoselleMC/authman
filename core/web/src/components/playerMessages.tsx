@@ -52,6 +52,9 @@ export const SUCCESS_KEYS = [
 
 export const GATE_KICK_KEYS = [
   "gate.kick.unavailable",
+  "gate.kick.missing_transfer_grant",
+  "gate.kick.transfer_unsupported",
+  "gate.kick.validation_timeout",
   "gate.kick.already_online",
   "gate.kick.locked",
   "gate.kick.banned",

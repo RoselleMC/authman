@@ -1294,6 +1294,10 @@ func shouldSkipLoginDialog(resolved resolveResponse, errorText string, premiumPa
 	return false, ""
 }
 
+func shouldShowRegisterForResolveNotFound(player limbgo.Player) bool {
+	return player.LoginMode == limbgo.LoginModeOffline || !player.Verified
+}
+
 func (p *portal) showLoginDialogMessage(ctx context.Context, session limbgo.PlayerSession, errorText string) error {
 	p.ensureSessionTarget(ctx, session)
 	vars := p.sessionVars(session)
@@ -1304,7 +1308,7 @@ func (p *portal) showLoginDialogMessage(ctx context.Context, session limbgo.Play
 	resolved, err := p.client.resolvePlayer(ctx, player)
 	if err != nil {
 		var coreErr coreAPIError
-		if errors.As(err, &coreErr) && coreErr.Status == http.StatusNotFound && !player.Verified {
+		if errors.As(err, &coreErr) && coreErr.Status == http.StatusNotFound && shouldShowRegisterForResolveNotFound(player) {
 			p.logResolvePlayerFailure("limbo player resolve returned not found; showing register dialog", "login_dialog", player, err, "decision", "show_register_dialog", "has_error", strings.TrimSpace(errorText) != "")
 			return p.showRegisterDialog(ctx, session)
 		}

@@ -9,6 +9,9 @@
 build/
 **/.gradle/
 **/build/
+/injector/bin/
+/plugin/bin/
+/.npm-cache/
 
 # Local regression/test scratch is also excluded through .git/info/exclude.
 /web/e2e/

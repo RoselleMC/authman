@@ -205,12 +205,19 @@ function GatewayPanel({
   onSession: (session: PortalSession) => void;
   onMessage: (message: string) => void;
 }) {
-  const [mode, setMode] = useState<Mode>(tokenFromLocation() ? "link" : "login");
+  const [initialToken] = useState(tokenFromLocation);
+  const [mode, setMode] = useState<Mode>(initialToken ? "link" : "login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [token, setToken] = useState(tokenFromLocation());
+  const [token, setToken] = useState(initialToken);
   const [busy, setBusy] = useState(false);
   const [nameState, setNameState] = useState("");
+
+  useEffect(() => {
+    if (initialToken || new URLSearchParams(window.location.search).has("token")) {
+      clearTokenFromLocation();
+    }
+  }, [initialToken]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -1271,8 +1278,14 @@ function versionedAsset(url: string | null | undefined, version: string | null |
 
 function tokenFromLocation() {
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-  const query = new URLSearchParams(window.location.search);
-  return hash.get("token") || query.get("token") || "";
+  return hash.get("token") || "";
+}
+
+function clearTokenFromLocation() {
+  const url = new URL(window.location.href);
+  url.hash = "";
+  url.searchParams.delete("token");
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}`);
 }
 
 function errorMessage(err: unknown) {

@@ -5,6 +5,7 @@ import com.velocitypowered.api.command.SimpleCommand
 import com.velocitypowered.api.proxy.Player
 import com.iroselle.authman.AuthmanPlugin
 import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.event.ClickEvent
 import org.slf4j.Logger
 
 class AuthmanCommand(
@@ -60,9 +61,29 @@ class AuthmanCommand(
                 }
                 return
             }
+            "portal-link" -> {
+                val target = args.getOrNull(1) ?: (source as? Player)?.username
+                if (target.isNullOrBlank()) {
+                    source.sendMessage(Component.text("Usage: /authman portal-link <online-player>"))
+                    return
+                }
+                try {
+                    val result = plugin.createPortalLink(target)
+                    source.sendMessage(
+                        Component.text("Authman portal link for $target: ")
+                            .append(Component.text(result.url).clickEvent(ClickEvent.openUrl(result.url))),
+                    )
+                } catch (ex: IllegalArgumentException) {
+                    source.sendMessage(Component.text("Authman portal link failed: ${ex.message ?: "invalid command arguments"}"))
+                } catch (ex: Exception) {
+                    logger.warn("Failed to create Authman portal link for {}", target, ex)
+                    source.sendMessage(Component.text("Authman portal link failed: ${ex.message ?: "unknown error"}"))
+                }
+                return
+            }
         }
         if (args.size < 4) {
-            source.sendMessage(Component.text("Usage: /authman <reload|reconnect|transfer|rename-profile|ban-profile|ban-passport> [args...]"))
+            source.sendMessage(Component.text("Usage: /authman <reload|reconnect|transfer|rename-profile|portal-link|ban-profile|ban-passport> [args...]"))
             source.sendMessage(Component.text("Duration examples: 1s, 1min, 1h, 1w, 1m, 1y."))
             return
         }
@@ -82,7 +103,7 @@ class AuthmanCommand(
                 "ban-profile" -> plugin.client().banProfile(target, durationSeconds, reason)
                 "ban-passport" -> plugin.client().banPassport(target, durationSeconds, reason)
                 else -> {
-                    source.sendMessage(Component.text("Usage: /authman <reload|reconnect|transfer|rename-profile|ban-profile|ban-passport> [args...]"))
+                    source.sendMessage(Component.text("Usage: /authman <reload|reconnect|transfer|rename-profile|portal-link|ban-profile|ban-passport> [args...]"))
                     return
                 }
             }
@@ -96,7 +117,7 @@ class AuthmanCommand(
     override fun suggest(invocation: SimpleCommand.Invocation): List<String> {
         val args = invocation.arguments()
         if (args.size <= 1) {
-            return listOf("reload", "reconnect", "transfer", "rename-profile", "ban-profile", "ban-passport")
+            return listOf("reload", "reconnect", "transfer", "rename-profile", "portal-link", "ban-profile", "ban-passport")
                 .filter { hasActionPermission(invocation.source(), it) }
                 .filter { it.startsWith(args.firstOrNull() ?: "") }
         }
@@ -110,7 +131,7 @@ class AuthmanCommand(
             }
             return emptyList()
         }
-        if (action == "rename-profile") {
+        if (action == "rename-profile" || action == "portal-link") {
             if (args.size == 2) {
                 return plugin.onlinePlayerNames().filter { it.startsWith(args[1], ignoreCase = true) }.take(25)
             }
@@ -128,7 +149,8 @@ class AuthmanCommand(
             invocation.source().hasPermission(PERMISSION_ADMIN) ||
             invocation.source().hasPermission(PERMISSION_BAN) ||
             invocation.source().hasPermission(PERMISSION_PROFILE) ||
-            invocation.source().hasPermission(PERMISSION_TRANSFER)
+            invocation.source().hasPermission(PERMISSION_TRANSFER) ||
+            invocation.source().hasPermission(PERMISSION_PORTAL_LINK)
     }
 
     private fun hasActionPermission(source: CommandSource, action: String): Boolean {
@@ -143,7 +165,8 @@ class AuthmanCommand(
             "ban-profile", "ban-passport" -> source.hasPermission(PERMISSION_BAN)
             "rename-profile" -> source.hasPermission(PERMISSION_PROFILE) || source.hasPermission(PERMISSION_ADMIN)
             "transfer" -> source.hasPermission(PERMISSION_TRANSFER)
-            else -> source.hasPermission(PERMISSION_ADMIN) || source.hasPermission(PERMISSION_BAN) || source.hasPermission(PERMISSION_PROFILE) || source.hasPermission(PERMISSION_TRANSFER)
+            "portal-link" -> source.hasPermission(PERMISSION_PORTAL_LINK)
+            else -> source.hasPermission(PERMISSION_ADMIN) || source.hasPermission(PERMISSION_BAN) || source.hasPermission(PERMISSION_PROFILE) || source.hasPermission(PERMISSION_TRANSFER) || source.hasPermission(PERMISSION_PORTAL_LINK)
         }
     }
 
@@ -153,6 +176,7 @@ class AuthmanCommand(
         const val PERMISSION_BAN = "authman.command.ban"
         const val PERMISSION_PROFILE = "authman.command.profile"
         const val PERMISSION_TRANSFER = "authman.command.transfer"
+        const val PERMISSION_PORTAL_LINK = "authman.command.portal-link"
         private val DURATION_PATTERN = Regex("""^([1-9][0-9]*)(s|min|h|d|w|m|y)$""")
 
         fun parseDurationSeconds(input: String): Long? {

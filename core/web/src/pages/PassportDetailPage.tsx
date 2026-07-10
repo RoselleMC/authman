@@ -18,6 +18,7 @@ import {
   Input,
   IPLocation,
   Select,
+  SecretReveal,
   StatusBadge,
   Tabs,
   TypeBadge,
@@ -32,6 +33,7 @@ import {
 import { AuditEventList } from "../components/AuditEventList";
 import {
   bindProfile,
+  createPassportPortalLink,
   createPassportBan,
   createProfile,
   deletePassport,
@@ -39,20 +41,24 @@ import {
   extendBan,
   fetchPassport,
   fetchProfiles,
+  resetPassportPassword,
+  revokePortalLink,
   revokeBan,
   unbindProfile,
   updatePassportSkinSource,
   updatePassportStatus,
   uploadPassportSkin,
   type PassportRow,
+  type PortalLinkSecret,
   type PlayerBan,
   type ProfileSummary,
 } from "../api/admin";
+import { useSession } from "../auth/SessionContext";
 import { ErrorBlock } from "../components/ErrorBlock";
 import { BanStateCell, LockUntilCell } from "../components/PlayerStateCells";
 import { MinecraftSkinPreview } from "../components/MinecraftSkinPreview";
 
-type DialogState = null | "status" | "bind" | "create" | "ban" | "extendBan" | "revokeBan";
+type DialogState = null | "status" | "bind" | "create" | "ban" | "extendBan" | "revokeBan" | "portalLink" | "portalLinkSecret" | "resetPassword" | "resetPasswordSecret";
 type DetailTab = "overview" | "skin" | "audit";
 type DurationUnit = "s" | "min" | "h" | "d" | "w" | "m" | "y";
 
@@ -62,6 +68,7 @@ const DEFAULT_BAN_UNIT: DurationUnit = "d";
 export function PassportDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const { t } = useI18n();
+  const { hasPermission } = useSession();
   const navigate = useNavigate();
   const location = useLocation();
   const backTarget = useBackTarget("/passports");
@@ -81,6 +88,10 @@ export function PassportDetailPage() {
   const [capeFile, setCapeFile] = useState<File | null>(null);
   const [elytraFile, setElytraFile] = useState<File | null>(null);
   const [skinModel, setSkinModel] = useState<"wide" | "slim">("wide");
+  const [portalProfileID, setPortalProfileID] = useState("");
+  const [portalLinkSecret, setPortalLinkSecret] = useState<PortalLinkSecret | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetPasswordSecret, setResetPasswordSecret] = useState("");
   const profileList = useListState({ urlPrefix: "boundProfiles", urlSync: false, defaults: { pageSize: 10, hidden: ["uuid", "lockedUntil"] } });
   const q = useQuery({ queryKey: ["admin.passport", id], queryFn: () => fetchPassport(id), enabled: !!id });
   const previewSkinURL = useObjectURL(skinFile);
@@ -110,6 +121,37 @@ export function PassportDetailPage() {
       void qc.invalidateQueries({ queryKey: ["admin.passports"] });
       void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
       navigate(backTarget);
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const portalLinkMut = useMutation({
+    mutationFn: () => createPassportPortalLink(id, {
+      suggested_profile_id: portalProfileID || undefined,
+      expires_in_seconds: 10 * 60,
+    }),
+    onSuccess: (link) => {
+      setPortalLinkSecret(link);
+      setDialog("portalLinkSecret");
+      void qc.invalidateQueries({ queryKey: ["admin.passport", id] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const portalLinkRevokeMut = useMutation({
+    mutationFn: (linkID: string) => revokePortalLink(linkID),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.player.portalLink.revoked") });
+      void qc.invalidateQueries({ queryKey: ["admin.passport", id] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const resetPasswordMut = useMutation({
+    mutationFn: () => resetPassportPassword(id, resetPassword.trim() || undefined),
+    onSuccess: (result) => {
+      setResetPasswordSecret(result.temporary_password ?? resetPassword);
+      setResetPassword("");
+      setDialog("resetPasswordSecret");
+      toast.push({ tone: "success", title: t("admin.player.reset.toast") });
+      void qc.invalidateQueries({ queryKey: ["admin.passport", id] });
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -233,6 +275,10 @@ export function PassportDetailPage() {
   const persistedSkinModel = normalizeSkinModel(p.skin.model);
   const hasSkinChanges = !usingUpstreamSkin && Boolean(skinFile || capeFile || elytraFile || (p.skin.has_custom_skin && skinModel !== persistedSkinModel));
   const activeBan = firstActiveBan(p.bans);
+  const portalLinks = p.portal_links ?? [];
+  const activeProfiles = p.profiles.filter((profile) => profile.status === "active");
+  const canCreatePortalLink = hasPermission("players.portal_link.create");
+  const canResetPassword = hasPermission("players.password.reset");
   const banDurationValid = isValidDuration(banDurationValue);
   const relatedAuditIDs = [p.id, p.uuid, ...p.profiles.flatMap((profile) => [profile.id, profile.uuid])]
     .filter(Boolean)
@@ -323,6 +369,26 @@ export function PassportDetailPage() {
             ) : (
               <Button variant="secondary" icon="unlock" block onClick={() => { setNextStatus("active"); setDialog("status"); }}>{t("admin.player.unlock")}</Button>
             )}
+            {canCreatePortalLink && activeProfiles.length > 0 ? (
+              <Button
+                variant="secondary"
+                icon="link"
+                block
+                onClick={() => {
+                  const primary = activeProfiles.find((profile) => profile.id === p.primary_profile?.id);
+                  setPortalProfileID(primary?.id ?? activeProfiles[0]?.id ?? "");
+                  setPortalLinkSecret(null);
+                  setDialog("portalLink");
+                }}
+              >
+                {t("admin.player.generateLink")}
+              </Button>
+            ) : null}
+            {canResetPassword && p.kind === "offline" ? (
+              <Button variant="secondary" icon="key" block onClick={() => { setResetPassword(""); setResetPasswordSecret(""); setDialog("resetPassword"); }}>
+                {t("admin.player.resetPassword")}
+              </Button>
+            ) : null}
             <Button variant="danger" icon="trash" block onClick={() => setDeleteOpen(true)}>{t("common.delete")}</Button>
           </DetailActions>
         </div>
@@ -337,6 +403,33 @@ export function PassportDetailPage() {
                   <DefRow k={t("admin.players.col.lastSeen")}>{formatAbsTime(p.last_seen_at)}</DefRow>
                   <DefRow k={t("admin.players.col.lastSeenIp")}><IPLocation ip={p.last_seen_ip} geo={p.last_seen_geo} /></DefRow>
                 </DefList>
+              </Card>
+              <Card title={t("admin.player.portalLink.history")}>
+                {portalLinks.length ? (
+                  <div className="ban-list">
+                    {portalLinks.map((link) => {
+                      const profile = p.profiles.find((candidate) => candidate.id === link.suggested_profile_id);
+                      const active = link.status === "active" && new Date(link.expires_at).getTime() > Date.now();
+                      const displayStatus = link.status === "active" && !active ? "expired" : link.status;
+                      return (
+                        <div key={link.id} className="ban-row">
+                          <div>
+                            <strong>{profile?.protocol_name ?? link.suggested_profile_id ?? p.username}</strong>
+                            <p className="muted-cell">{t("admin.player.portalLink.expires").replace("{time}", formatAbsTime(link.expires_at))}</p>
+                          </div>
+                          <div className="portal-link-actions">
+                            <StatusBadge status={displayStatus} />
+                            {active && canCreatePortalLink ? (
+                              <Button size="sm" variant="danger-soft" icon="close" loading={portalLinkRevokeMut.isPending && portalLinkRevokeMut.variables === link.id} onClick={() => portalLinkRevokeMut.mutate(link.id)}>
+                                {t("common.revoke")}
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : <p className="muted-cell">{t("admin.player.portalLink.none")}</p>}
               </Card>
               <Card noBody className="table-card">
                 {p.profiles.length ? (
@@ -476,6 +569,61 @@ export function PassportDetailPage() {
           )}
         </div>
       </div>
+      <Dialog
+        open={dialog === "portalLink"}
+        onClose={() => !portalLinkMut.isPending && setDialog(null)}
+        icon="link"
+        title={t("admin.player.generateLink")}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDialog(null)}>{t("common.cancel")}</Button>
+            <Button variant="primary" loading={portalLinkMut.isPending} disabled={!portalProfileID} onClick={() => portalLinkMut.mutate()}>{t("admin.player.portalLink.generate")}</Button>
+          </>
+        }
+      >
+        <Field label={t("admin.player.portalLink.profile")}>
+          <Select
+            value={portalProfileID}
+            options={activeProfiles.map((profile) => ({ value: profile.id, label: `${profile.protocol_name} · ${profile.uuid}` }))}
+            onChange={setPortalProfileID}
+          />
+        </Field>
+      </Dialog>
+      <Dialog
+        open={dialog === "portalLinkSecret"}
+        onClose={() => { setPortalLinkSecret(null); setDialog(null); }}
+        icon="link"
+        title={t("admin.player.portalLink.created")}
+        footer={<Button variant="primary" onClick={() => { setPortalLinkSecret(null); setDialog(null); }}>{t("admin.player.portalLink.close")}</Button>}
+      >
+        {portalLinkSecret ? <SecretReveal value={portalLinkSecret.url} warning={<p>{t("admin.player.portalLink.warning")}</p>} valueTestId="portal-link-secret" /> : null}
+      </Dialog>
+      <Dialog
+        open={dialog === "resetPassword"}
+        onClose={() => !resetPasswordMut.isPending && setDialog(null)}
+        icon="key"
+        title={t("admin.player.resetPassword")}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDialog(null)}>{t("common.cancel")}</Button>
+            <Button variant="primary" loading={resetPasswordMut.isPending} onClick={() => resetPasswordMut.mutate()}>{t("common.confirm")}</Button>
+          </>
+        }
+      >
+        <Field label={t("admin.player.portalLink.passwordOptional")}>
+          <Input type="password" value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} autoFocus />
+        </Field>
+        <p className="muted-cell">{t("admin.player.portalLink.passwordOptionalHint")}</p>
+      </Dialog>
+      <Dialog
+        open={dialog === "resetPasswordSecret"}
+        onClose={() => { setResetPasswordSecret(""); setDialog(null); }}
+        icon="key"
+        title={t("admin.player.reset.toast")}
+        footer={<Button variant="primary" onClick={() => { setResetPasswordSecret(""); setDialog(null); }}>{t("common.close")}</Button>}
+      >
+        {resetPasswordSecret ? <SecretReveal value={resetPasswordSecret} warning={<p>{t("admin.player.portalLink.passwordWarning")}</p>} valueTestId="temporary-password-secret" /> : null}
+      </Dialog>
       <Dialog
         open={dialog === "status"}
         onClose={() => !statusMut.isPending && setDialog(null)}

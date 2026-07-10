@@ -231,6 +231,26 @@ export interface PassportDetail extends PassportRow {
   presences: PlayerPresence[];
   bans: PlayerBan[];
   audit_events: AuditEventSummary[];
+  portal_links: PortalLinkSummary[];
+}
+
+export interface PortalLinkSummary {
+  id: string;
+  kind: "premium" | "offline";
+  passport_id: string;
+  suggested_profile_id: string | null;
+  server_id: string | null;
+  issued_by_node_id: string | null;
+  status: "active" | "used" | "revoked";
+  created_at: string;
+  expires_at: string;
+  used_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface PortalLinkSecret extends PortalLinkSummary {
+  url: string;
+  token: string;
 }
 
 export interface ProfileRow extends ProfileSummary {
@@ -314,12 +334,30 @@ export async function fetchPassport(id: string): Promise<PassportDetail> {
 }
 
 export async function updatePassportStatus(id: string, status: PassportRow["status"]): Promise<PassportRow> {
-	const res = await apiFetch<PassportRow>(`/admin/passports/${encodeURIComponent(id)}`, { method: "PATCH", body: { status } });
-	return res.data;
+  const res = await apiFetch<PassportRow>(`/admin/passports/${encodeURIComponent(id)}`, { method: "PATCH", body: { status } });
+  return res.data;
 }
 
 export async function deletePassport(id: string): Promise<void> {
-	await apiFetch<null>(`/admin/passports/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await apiFetch<null>(`/admin/passports/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function createPassportPortalLink(id: string, input: { suggested_profile_id?: string; server_id?: string; expires_in_seconds?: number }): Promise<PortalLinkSecret> {
+  const res = await apiFetch<{ link: PortalLinkSecret }>(`/admin/passports/${encodeURIComponent(id)}/portal-link`, { method: "POST", body: input });
+  return res.data.link;
+}
+
+export async function revokePortalLink(id: string): Promise<PortalLinkSummary> {
+  const res = await apiFetch<PortalLinkSummary>(`/admin/portal-links/${encodeURIComponent(id)}`, { method: "DELETE" });
+  return res.data;
+}
+
+export async function resetPassportPassword(id: string, password?: string): Promise<{ ok: boolean; temporary_password?: string }> {
+  const res = await apiFetch<{ ok: boolean; temporary_password?: string }>(`/admin/passports/${encodeURIComponent(id)}/reset-password`, {
+    method: "POST",
+    body: password ? { password } : {},
+  });
+  return res.data;
 }
 
 export async function createPassportBan(id: string, input: { reason: string; expires_at?: string | null; expires_in_seconds?: number }): Promise<{ ban: PlayerBan; ended_presences: number }> {

@@ -1153,6 +1153,12 @@ func (m *Memory) UpdateOfflinePassword(ctx context.Context, id string, passwordH
 	credential.FailedAttempts = 0
 	credential.LockedUntil = nil
 	m.credentialsByPlayer[passportID] = credential
+	cachePrefix := passportID + "\x00"
+	for key := range m.portalAuthCache {
+		if strings.HasPrefix(key, cachePrefix) {
+			delete(m.portalAuthCache, key)
+		}
+	}
 	return nil
 }
 
@@ -1412,6 +1418,24 @@ func (m *Memory) GetPortalLink(ctx context.Context, tokenHash string) (auth.Port
 	return link, nil
 }
 
+func (m *Memory) ListPortalLinksForPassport(ctx context.Context, passportID string) []auth.PortalLink {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	links := make([]auth.PortalLink, 0)
+	for _, link := range m.portalLinksByToken {
+		if link.PlayerID == passportID {
+			links = append(links, link)
+		}
+	}
+	sort.Slice(links, func(i, j int) bool {
+		return links[i].CreatedAt.After(links[j].CreatedAt)
+	})
+	if len(links) > 100 {
+		links = links[:100]
+	}
+	return links
+}
+
 func (m *Memory) MarkPortalLinkUsed(ctx context.Context, tokenHash string, now time.Time) (auth.PortalLink, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1420,10 +1444,29 @@ func (m *Memory) MarkPortalLinkUsed(ctx context.Context, tokenHash string, now t
 		return auth.PortalLink{}, fmt.Errorf("portal link not found: %w", ErrNotFound)
 	}
 	now = now.UTC()
+	if link.Status != auth.PortalLinkActive || !now.Before(link.ExpiresAt) {
+		return auth.PortalLink{}, fmt.Errorf("portal link is not active: %w", ErrNotFound)
+	}
 	link.Status = auth.PortalLinkUsed
 	link.UsedAt = &now
 	m.portalLinksByToken[tokenHash] = link
 	return link, nil
+}
+
+func (m *Memory) RevokePortalLink(ctx context.Context, id string, now time.Time) (auth.PortalLink, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for tokenHash, link := range m.portalLinksByToken {
+		if link.ID != id || link.Status != auth.PortalLinkActive {
+			continue
+		}
+		now = now.UTC()
+		link.Status = auth.PortalLinkRevoked
+		link.RevokedAt = &now
+		m.portalLinksByToken[tokenHash] = link
+		return link, nil
+	}
+	return auth.PortalLink{}, fmt.Errorf("active portal link not found: %w", ErrNotFound)
 }
 
 func (m *Memory) AppendAuditEvent(ctx context.Context, event audit.Event) (audit.Event, error) {

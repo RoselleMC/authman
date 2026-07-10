@@ -58,6 +58,11 @@ data class DownstreamTransferResult(
     val target: DownstreamTarget,
 )
 
+data class PortalLinkResult(
+    val url: String,
+    val expiresAt: String,
+)
+
 data class NodeAction(
     val id: String,
     val type: String,

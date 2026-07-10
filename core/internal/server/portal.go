@@ -507,7 +507,8 @@ func (s *Server) handlePortalLinkLogin(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "portal_link.not_found", "portal link was not found"))
 		return
 	}
-	switch result := link.Verify(req.Token, time.Now()); result {
+	now := time.Now()
+	switch result := link.Verify(req.Token, now); result {
 	case auth.PortalLinkVerifyOK:
 	default:
 		s.audit(r, audit.ActorPlayer, link.PlayerID, audit.TargetPortalSession, link.ID, "passport.session.link_login_failure", map[string]any{
@@ -522,13 +523,20 @@ func (s *Server) handlePortalLinkLogin(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "passport.not_found", "passport not found"))
 		return
 	}
-	profile, err := s.store.GetPrimaryProfileForPassport(r.Context(), passport.ID)
+	if passport.Status != identity.PassportStatusActive || portalLinkKind(passport) != link.Kind {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "passport.locked", "passport is not active"))
+		return
+	}
+	profile, err := s.portalLinkProfile(r.Context(), passport.ID, link.SuggestedProfileID)
 	if err != nil {
-		api.WriteError(w, api.NewError(http.StatusForbidden, "profile.none", "passport has no profile"))
+		api.WriteError(w, api.NewError(http.StatusForbidden, "profile.none", "portal link has no active profile"))
+		return
+	}
+	if _, err := s.markPortalLinkUsed(r.Context(), req.Token, now); err != nil {
+		api.WriteError(w, s.portalLinkUseError(r.Context(), req.Token, now))
 		return
 	}
 	player := identity.PlayerFromPassportProfile(passport, profile)
-	now := time.Now()
 	s.recordPassportProfileSeen(r, passport, profile, link.ServerID, now)
 	session, sessionToken, csrfToken, err := auth.NewSession(auth.SessionPlayer, passport.ID, 24*time.Hour, now)
 	if err != nil {
@@ -538,10 +546,6 @@ func (s *Server) handlePortalLinkLogin(w http.ResponseWriter, r *http.Request) {
 	session.SelectedProfileID = profile.ID
 	if err := s.saveSession(r.Context(), session); err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.session_failed", "failed to save session"))
-		return
-	}
-	if _, err := s.markPortalLinkUsed(r.Context(), req.Token); err != nil {
-		api.WriteError(w, api.NewError(http.StatusUnauthorized, "portal_link.not_found", "portal link cannot be used"))
 		return
 	}
 	setSessionCookie(w, r, playerSessionCookie, sessionToken, session.ExpiresAt)
@@ -626,7 +630,19 @@ func (s *Server) getPortalLink(ctx context.Context, token string) (auth.PortalLi
 	return s.store.GetPortalLink(ctx, auth.HashToken("portal-link", token))
 }
 
-func (s *Server) markPortalLinkUsed(ctx context.Context, token string) (auth.PortalLink, error) {
+func (s *Server) markPortalLinkUsed(ctx context.Context, token string, now time.Time) (auth.PortalLink, error) {
 	key := auth.HashToken("portal-link", strings.TrimSpace(token))
-	return s.store.MarkPortalLinkUsed(ctx, key, time.Now())
+	return s.store.MarkPortalLinkUsed(ctx, key, now)
+}
+
+func (s *Server) portalLinkUseError(ctx context.Context, token string, now time.Time) *api.Error {
+	link, err := s.getPortalLink(ctx, token)
+	if err != nil {
+		return api.NewError(http.StatusNotFound, "portal_link.not_found", "portal link was not found")
+	}
+	result := link.Verify(token, now)
+	if result == auth.PortalLinkVerifyOK {
+		result = auth.PortalLinkVerifyNotFound
+	}
+	return api.NewError(http.StatusUnauthorized, "portal_link."+string(result), "portal link cannot be used")
 }

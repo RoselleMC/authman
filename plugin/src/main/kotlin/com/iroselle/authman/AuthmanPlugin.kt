@@ -16,6 +16,7 @@ import com.iroselle.authman.model.DownstreamServerOption
 import com.iroselle.authman.model.DownstreamStatusReport
 import com.iroselle.authman.model.NodeAction
 import com.iroselle.authman.model.NodeActionAck
+import com.iroselle.authman.model.PortalLinkResult
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
@@ -291,6 +292,22 @@ class AuthmanPlugin @Inject constructor(
             remoteIp = remoteIp,
         )
         return "Renamed ${player.username}'s current Authman profile to $nextName. The player must leave and rejoin before downstream servers see the new name."
+    }
+
+    fun createPortalLink(playerName: String): PortalLinkResult {
+        if (coreAccessRevoked) {
+            throw IllegalStateException("Authman Core connection is revoked")
+        }
+        val player = server.getPlayer(playerName).orElse(null)
+            ?: server.allPlayers.firstOrNull {
+                it.username.equals(playerName, ignoreCase = true) || it.uniqueId.toString().equals(playerName, ignoreCase = true)
+            }
+            ?: throw IllegalArgumentException("player is not online: $playerName")
+        return client.createPortalLink(
+            profileId = player.uniqueId.toString(),
+            username = player.username,
+            serverId = config.serverId,
+        )
     }
 
     private fun resolveTransferTarget(ref: String): DownstreamServerOption? {

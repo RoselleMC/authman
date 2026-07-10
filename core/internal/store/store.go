@@ -366,7 +366,9 @@ type PlayerStore interface {
 	DeleteSession(ctx context.Context, id string) error
 	SavePortalLink(ctx context.Context, link auth.PortalLink) error
 	GetPortalLink(ctx context.Context, tokenHash string) (auth.PortalLink, error)
+	ListPortalLinksForPassport(ctx context.Context, passportID string) []auth.PortalLink
 	MarkPortalLinkUsed(ctx context.Context, tokenHash string, now time.Time) (auth.PortalLink, error)
+	RevokePortalLink(ctx context.Context, id string, now time.Time) (auth.PortalLink, error)
 	AppendAuditEvent(ctx context.Context, event audit.Event) (audit.Event, error)
 	GetAuditEvent(ctx context.Context, id string) (audit.Event, error)
 	ListAuditEvents(ctx context.Context, limit int) []audit.Event

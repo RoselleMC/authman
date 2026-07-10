@@ -10,6 +10,7 @@ services:
       AUTHMAN_EXTERNAL_HTTP_ADDR: ":8080"
       AUTHMAN_DATABASE_URL: "postgres://authman:authman@postgres:5432/authman?sslmode=disable"
       AUTHMAN_PUBLIC_BASE_URL: "${AUTHMAN_PUBLIC_BASE_URL:-http://localhost:18081}"
+      AUTHMAN_PLAYER_PORTAL_BASE_URL: "${AUTHMAN_PLAYER_PORTAL_BASE_URL:-http://localhost:18082}"
       AUTHMAN_DEFAULT_LOCALE: "zh"
       AUTHMAN_ADMIN_USERNAME: "admin"
       AUTHMAN_ADMIN_EMAIL: "admin@authman.local"

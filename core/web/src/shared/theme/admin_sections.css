@@ -97,6 +97,7 @@
 .presence-row:last-child, .ban-row:last-child { border-bottom: 0; }
 .presence-row strong, .ban-row strong { font-size: 13.5px; font-weight: 620; color: var(--color-text); }
 .presence-row p, .ban-row p { margin: 3px 0 0; }
+.portal-link-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .form-grid.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .file-drop {
   min-height: 42px;

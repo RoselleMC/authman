@@ -447,6 +447,7 @@ func (s *Server) handleAdminPassportDetail(w http.ResponseWriter, r *http.Reques
 	}
 	data := passportDetailData(passport, profiles, credential, presences, bans, profileBans, eventData)
 	data["skin"] = s.passportSkinData(r.Context(), passport)
+	data["portal_links"] = portalLinkRows(s.store.ListPortalLinksForPassport(r.Context(), passport.ID))
 	api.WriteJSON(w, http.StatusOK, data, nil)
 }
 
@@ -1059,18 +1060,25 @@ func (s *Server) handleAdminSetPlayerLocked(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleAdminResetOfflinePassword(w http.ResponseWriter, r *http.Request) {
-	session, authErr := s.requireAdmin(r, true)
+	session, authErr := s.requireAdminPermission(r, true, "players.password.reset")
 	if authErr != nil {
 		api.WriteError(w, authErr)
 		return
 	}
-	player, err := s.store.GetPlayerByID(r.Context(), r.PathValue("id"))
+	targetID := strings.TrimSpace(r.PathValue("id"))
+	passport, err := s.store.GetPassportByID(r.Context(), targetID)
 	if err != nil {
-		api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
-		return
+		player, playerErr := s.store.GetPlayerByID(r.Context(), targetID)
+		if playerErr == nil {
+			passport, err = s.store.GetPassportForProfile(r.Context(), player.ID)
+		}
+		if err != nil || playerErr != nil {
+			api.WriteError(w, api.NewError(http.StatusNotFound, "passport.not_found", "passport not found"))
+			return
+		}
 	}
-	if player.Kind != identity.PlayerKindOffline {
-		api.WriteError(w, api.NewError(http.StatusBadRequest, "player.not_offline", "password reset is only available for offline players"))
+	if passport.Kind != identity.PassportKindOffline {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "passport.not_offline", "password reset is only available for offline passports"))
 		return
 	}
 	var req resetPasswordRequest
@@ -1080,8 +1088,14 @@ func (s *Server) handleAdminResetOfflinePassword(w http.ResponseWriter, r *http.
 			return
 		}
 	}
+	generated := false
 	if req.Password == "" {
-		req.Password = "temporary reset password 123"
+		req.Password, err = auth.NewOpaqueToken(18)
+		if err != nil {
+			api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.token_failed", "failed to generate temporary password"))
+			return
+		}
+		generated = true
 	}
 	passwordHash, err := auth.HashPassword(req.Password, s.passwordParams)
 	if err != nil {
@@ -1093,12 +1107,16 @@ func (s *Server) handleAdminResetOfflinePassword(w http.ResponseWriter, r *http.
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "password_recovery.encrypt_failed", "failed to encrypt recoverable password"))
 		return
 	}
-	if err := s.store.UpdateOfflinePassword(r.Context(), player.ID, passwordHash, encryptedPassword, keyFingerprint); err != nil {
+	if err := s.store.UpdatePassportPassword(r.Context(), passport.ID, passwordHash, encryptedPassword, keyFingerprint); err != nil {
 		api.WriteError(w, api.NewError(http.StatusNotFound, "auth.credential_not_found", "offline credential not found"))
 		return
 	}
-	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, player.ID, "offline.password.reset", nil)
-	api.WriteJSON(w, http.StatusOK, map[string]any{"reset_token_hint": "temporary-password-set"}, nil)
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, passport.ID, "offline.password.reset", nil)
+	data := map[string]any{"ok": true}
+	if generated {
+		data["temporary_password"] = req.Password
+	}
+	api.WriteJSON(w, http.StatusOK, data, nil)
 }
 
 func (s *Server) handleAdminAuditEvents(w http.ResponseWriter, r *http.Request) {

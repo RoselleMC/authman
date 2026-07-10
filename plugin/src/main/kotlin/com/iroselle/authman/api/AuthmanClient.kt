@@ -16,6 +16,7 @@ import com.iroselle.authman.model.NodeAction
 import com.iroselle.authman.model.NodeActionAck
 import com.iroselle.authman.model.NodePresenceCheckRequest
 import com.iroselle.authman.model.NodePresenceCheckResult
+import com.iroselle.authman.model.PortalLinkResult
 import com.iroselle.authman.model.ResolvedPlayer
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -157,6 +158,26 @@ class AuthmanClient(
             throw AuthmanHttpException("rename profile", response)
         }
         return response.jsonData().obj("profile").string("protocol_name")
+    }
+
+    fun createPortalLink(profileId: String, username: String, serverId: String): PortalLinkResult {
+        val response = post(
+            "/api/node/portal-links",
+            mapOf(
+                "profile_id" to profileId,
+                "username" to username,
+                "server_id" to serverId,
+                "ttl" to "10m",
+            ),
+        )
+        if (!response.ok) {
+            throw AuthmanHttpException("create portal link", response)
+        }
+        val link = response.jsonData().obj("link")
+        return PortalLinkResult(
+            url = link.string("url"),
+            expiresAt = link.string("expires_at"),
+        )
     }
 
     fun heartbeat(pluginVersion: String, velocityVersion: String, status: DownstreamStatusReport): HeartbeatResult {

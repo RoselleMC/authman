@@ -34,6 +34,7 @@ const limboBlueprintSelectColumns = "id, name, description, filename, content_ty
 const profileSkinSelectColumns = "profile_id, model, skin_png, skin_content_type, skin_sha256, COALESCE(cape_png, ''::bytea), COALESCE(cape_content_type, ''), COALESCE(cape_sha256, ''), COALESCE(elytra_png, ''::bytea), COALESCE(elytra_content_type, ''), COALESCE(elytra_sha256, ''), created_at, updated_at"
 const passportSkinSelectColumns = "passport_id, model, skin_png, skin_content_type, skin_sha256, COALESCE(cape_png, ''::bytea), COALESCE(cape_content_type, ''), COALESCE(cape_sha256, ''), COALESCE(elytra_png, ''::bytea), COALESCE(elytra_content_type, ''), COALESCE(elytra_sha256, ''), created_at, updated_at"
 const externalAPITokenSelectColumns = "id, name, token_hash, token_fingerprint, status, created_by, call_count, last_used_at, last_used_ip, last_used_path, created_at, updated_at"
+const portalLinkSelectColumns = "id, kind, player_id, suggested_profile_id, server_id, issued_by_node_id, token_hash, status, created_at, expires_at, used_at, revoked_at"
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*Postgres, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -1260,7 +1261,12 @@ func (p *Postgres) RecordPlayerSeen(ctx context.Context, passportID string, prof
 
 func (p *Postgres) UpdatePassportPassword(ctx context.Context, passportID string, passwordHash string, encryptedPassword string, keyFingerprint string) error {
 	passportID = p.resolvePassportIDForCredential(ctx, passportID)
-	tag, err := p.pool.Exec(ctx, `
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `
 		UPDATE offline_passport_credentials
 		SET password_hash = $2,
 			encrypted_password = $3,
@@ -1276,7 +1282,10 @@ func (p *Postgres) UpdatePassportPassword(ctx context.Context, passportID string
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("passport credential not found: %w", ErrNotFound)
 	}
-	return nil
+	if _, err := tx.Exec(ctx, `DELETE FROM portal_auth_cache WHERE passport_id = $1`, passportID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (p *Postgres) SetPassportPasswordRecovery(ctx context.Context, passportID string, encryptedPassword string, keyFingerprint string) error {
@@ -1550,18 +1559,19 @@ func (p *Postgres) DeleteSession(ctx context.Context, id string) error {
 
 func (p *Postgres) SavePortalLink(ctx context.Context, link auth.PortalLink) error {
 	_, err := p.pool.Exec(ctx, `
-		INSERT INTO portal_login_links (id, kind, player_id, server_id, token_hash, status, created_at, expires_at, used_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO portal_login_links (id, kind, player_id, suggested_profile_id, server_id, issued_by_node_id, token_hash, status, created_at, expires_at, used_at, revoked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (id) DO UPDATE
 		SET status = EXCLUDED.status,
-			used_at = EXCLUDED.used_at
-	`, link.ID, link.Kind, link.PlayerID, link.ServerID, link.TokenHash, link.Status, link.CreatedAt, link.ExpiresAt, link.UsedAt)
+			used_at = EXCLUDED.used_at,
+			revoked_at = EXCLUDED.revoked_at
+	`, link.ID, link.Kind, link.PlayerID, nullString(link.SuggestedProfileID), nullString(link.ServerID), nullString(link.IssuedByNodeID), link.TokenHash, link.Status, link.CreatedAt, link.ExpiresAt, link.UsedAt, link.RevokedAt)
 	return err
 }
 
 func (p *Postgres) GetPortalLink(ctx context.Context, tokenHash string) (auth.PortalLink, error) {
 	link, err := scanPortalLinkRow(p.pool.QueryRow(ctx, `
-		SELECT id, kind, player_id, server_id, token_hash, status, created_at, expires_at, used_at
+		SELECT `+portalLinkSelectColumns+`
 		FROM portal_login_links
 		WHERE token_hash = $1
 	`, tokenHash))
@@ -1571,15 +1581,50 @@ func (p *Postgres) GetPortalLink(ctx context.Context, tokenHash string) (auth.Po
 	return link, err
 }
 
+func (p *Postgres) ListPortalLinksForPassport(ctx context.Context, passportID string) []auth.PortalLink {
+	rows, err := p.pool.Query(ctx, `
+		SELECT `+portalLinkSelectColumns+`
+		FROM portal_login_links
+		WHERE player_id = $1
+		ORDER BY created_at DESC
+		LIMIT 100
+	`, passportID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	links := make([]auth.PortalLink, 0)
+	for rows.Next() {
+		link, scanErr := scanPortalLinkRow(rows)
+		if scanErr == nil {
+			links = append(links, link)
+		}
+	}
+	return links
+}
+
 func (p *Postgres) MarkPortalLinkUsed(ctx context.Context, tokenHash string, now time.Time) (auth.PortalLink, error) {
 	link, err := scanPortalLinkRow(p.pool.QueryRow(ctx, `
 		UPDATE portal_login_links
 		SET status = $2, used_at = $3
-		WHERE token_hash = $1
-		RETURNING id, kind, player_id, server_id, token_hash, status, created_at, expires_at, used_at
-	`, tokenHash, auth.PortalLinkUsed, now.UTC()))
+		WHERE token_hash = $1 AND status = $4 AND expires_at > $3
+		RETURNING `+portalLinkSelectColumns+`
+	`, tokenHash, auth.PortalLinkUsed, now.UTC(), auth.PortalLinkActive))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return auth.PortalLink{}, fmt.Errorf("portal link not found: %w", ErrNotFound)
+		return auth.PortalLink{}, fmt.Errorf("active portal link not found: %w", ErrNotFound)
+	}
+	return link, err
+}
+
+func (p *Postgres) RevokePortalLink(ctx context.Context, id string, now time.Time) (auth.PortalLink, error) {
+	link, err := scanPortalLinkRow(p.pool.QueryRow(ctx, `
+		UPDATE portal_login_links
+		SET status = $2, revoked_at = $3
+		WHERE id = $1 AND status = $4
+		RETURNING `+portalLinkSelectColumns+`
+	`, id, auth.PortalLinkRevoked, now.UTC(), auth.PortalLinkActive))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.PortalLink{}, fmt.Errorf("active portal link not found: %w", ErrNotFound)
 	}
 	return link, err
 }
@@ -4157,19 +4202,34 @@ func scanPortalLinkRow(row playerScanner) (auth.PortalLink, error) {
 	var link auth.PortalLink
 	var kind string
 	var status string
+	var suggestedProfileID *string
+	var serverID *string
+	var issuedByNodeID *string
 	err := row.Scan(
 		&link.ID,
 		&kind,
 		&link.PlayerID,
-		&link.ServerID,
+		&suggestedProfileID,
+		&serverID,
+		&issuedByNodeID,
 		&link.TokenHash,
 		&status,
 		&link.CreatedAt,
 		&link.ExpiresAt,
 		&link.UsedAt,
+		&link.RevokedAt,
 	)
 	link.Kind = auth.PortalLinkKind(kind)
 	link.Status = auth.PortalLinkStatus(status)
+	if suggestedProfileID != nil {
+		link.SuggestedProfileID = *suggestedProfileID
+	}
+	if serverID != nil {
+		link.ServerID = *serverID
+	}
+	if issuedByNodeID != nil {
+		link.IssuedByNodeID = *issuedByNodeID
+	}
 	return link, err
 }
 
@@ -4395,16 +4455,23 @@ CREATE TABLE IF NOT EXISTS portal_login_links (
 	id text PRIMARY KEY,
 	kind text NOT NULL CHECK (kind IN ('premium', 'offline')),
 	player_id text NOT NULL,
+	suggested_profile_id text,
 	server_id text,
+	issued_by_node_id text,
 	token_hash text NOT NULL UNIQUE,
 	status text NOT NULL CHECK (status IN ('active', 'used', 'revoked')),
 	created_at timestamptz NOT NULL DEFAULT now(),
 	expires_at timestamptz NOT NULL,
-	used_at timestamptz
+	used_at timestamptz,
+	revoked_at timestamptz
 );
 
+ALTER TABLE portal_login_links ADD COLUMN IF NOT EXISTS suggested_profile_id text;
+ALTER TABLE portal_login_links ADD COLUMN IF NOT EXISTS issued_by_node_id text;
+ALTER TABLE portal_login_links ADD COLUMN IF NOT EXISTS revoked_at timestamptz;
 CREATE INDEX IF NOT EXISTS portal_login_links_token_hash_idx ON portal_login_links (token_hash);
 CREATE INDEX IF NOT EXISTS portal_login_links_expires_at_idx ON portal_login_links (expires_at);
+CREATE INDEX IF NOT EXISTS portal_login_links_player_idx ON portal_login_links (player_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS audit_events (
 	id bigserial PRIMARY KEY,

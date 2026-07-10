@@ -17,6 +17,7 @@ type Config struct {
 	ExternalHTTPAddr          string
 	DatabaseURL               string
 	PublicBaseURL             string
+	PlayerPortalBaseURL       string
 	HTTPBasePath              string
 	WebRoot                   string
 	DefaultLocale             string
@@ -44,6 +45,7 @@ func Load() (Config, error) {
 		ExternalHTTPAddr:          envString("AUTHMAN_EXTERNAL_HTTP_ADDR", ""),
 		DatabaseURL:               envString("AUTHMAN_DATABASE_URL", ""),
 		PublicBaseURL:             envString("AUTHMAN_PUBLIC_BASE_URL", "http://localhost:8080"),
+		PlayerPortalBaseURL:       envString("AUTHMAN_PLAYER_PORTAL_BASE_URL", ""),
 		HTTPBasePath:              httpBasePath(),
 		WebRoot:                   envString("AUTHMAN_CORE_WEB_ROOT", ""),
 		DefaultLocale:             envString("AUTHMAN_DEFAULT_LOCALE", "zh"),
@@ -69,6 +71,9 @@ func Load() (Config, error) {
 	}
 	if cfg.PublicBaseURL == "" {
 		return Config{}, fmt.Errorf("AUTHMAN_PUBLIC_BASE_URL must not be empty")
+	}
+	if cfg.PlayerPortalBaseURL == "" {
+		cfg.PlayerPortalBaseURL = cfg.PublicBaseURL
 	}
 	return cfg, nil
 }

@@ -274,11 +274,27 @@ func (s *Server) handleAdminRotateNode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminDisableNode(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireAdmin(r, true); err != nil {
-		api.WriteError(w, err)
+	session, authErr := s.requireAdminPermission(r, true, "nodes.write")
+	if authErr != nil {
+		api.WriteError(w, authErr)
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, nil, nil)
+	id := strings.TrimSpace(r.PathValue("id"))
+	target, err := s.nodes.Get(r.Context(), id)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "node.not_found", "node not found"))
+		return
+	}
+	if err := s.nodes.Delete(r.Context(), id); err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "node.not_found", "node not found"))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetNode, id, "node.disable", map[string]any{
+		"name":                 target.Name,
+		"instance_fingerprint": target.InstanceFingerprint,
+	})
+	s.pushNodeRevoked(id)
+	api.WriteJSON(w, http.StatusOK, map[string]any{"ok": true}, nil)
 }
 
 func (s *Server) handleAdminDeleteNode(w http.ResponseWriter, r *http.Request) {
@@ -590,8 +606,7 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 	}
 	username := strings.TrimSpace(req.Username)
 	serverID := strings.TrimSpace(req.ServerID)
-	remoteIP := strings.TrimSpace(req.RemoteIP)
-	profile, ipFallback, err := s.verifyLimboMojangSession(r.Context(), username, serverID, remoteIP)
+	profile, err := s.verifyLimboMojangSession(r.Context(), username, serverID)
 	if err != nil {
 		s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "limbo.session.verify_failure", map[string]any{
 			"username":        req.Username,
@@ -642,7 +657,6 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 		"requested_host":       req.RequestedHost,
 		"protocol":             req.ProtocolVersion,
 		"verification_by":      "mojang",
-		"ip_fallback":          ipFallback,
 		"passport_preexisting": passportPreexisting,
 	})
 	properties := make([]identity.ProfileProperty, 0, len(profile.Properties))
@@ -662,28 +676,11 @@ func (s *Server) handleNodeVerifyLimboSession(w http.ResponseWriter, r *http.Req
 	}, nil)
 }
 
-func (s *Server) verifyLimboMojangSession(ctx context.Context, username string, serverID string, remoteIP string) (yggdrasil.Profile, bool, error) {
-	profile, err := s.mojangVerifier.HasJoined(ctx, yggdrasil.HasJoinedRequest{
-		Username: username,
-		ServerID: serverID,
-		IP:       remoteIP,
-	})
-	if err == nil || remoteIP == "" || !errors.Is(err, yggdrasil.ErrProfileNotFound) {
-		return profile, false, err
-	}
-	fallbackProfile, fallbackErr := s.mojangVerifier.HasJoined(ctx, yggdrasil.HasJoinedRequest{
+func (s *Server) verifyLimboMojangSession(ctx context.Context, username string, serverID string) (yggdrasil.Profile, error) {
+	return s.mojangVerifier.HasJoined(ctx, yggdrasil.HasJoinedRequest{
 		Username: username,
 		ServerID: serverID,
 	})
-	if fallbackErr == nil {
-		s.logger.Info("limbo premium session verified after retry without remote IP", "username", username, "server_id", serverID, "remote_ip", remoteIP)
-		return fallbackProfile, true, nil
-	}
-	if errors.Is(fallbackErr, yggdrasil.ErrProfileNotFound) {
-		return yggdrasil.Profile{}, false, err
-	}
-	s.logger.Warn("limbo premium session retry without remote IP failed", "username", username, "server_id", serverID, "remote_ip", remoteIP, "err", fallbackErr)
-	return yggdrasil.Profile{}, false, fallbackErr
 }
 
 func (s *Server) handleNodeResolveLimboLoginPolicy(w http.ResponseWriter, r *http.Request) {
@@ -2100,15 +2097,20 @@ func boolFromAnyServer(value any, fallback bool) bool {
 }
 
 type createPortalLinkRequest struct {
-	Username string `json:"username"`
-	ServerID string `json:"server_id"`
-	TTL      string `json:"ttl"`
+	ProfileID string `json:"profile_id"`
+	Username  string `json:"username"`
+	ServerID  string `json:"server_id"`
+	TTL       string `json:"ttl"`
 }
 
 func (s *Server) handleNodeCreatePortalLink(w http.ResponseWriter, r *http.Request) {
-	node, nodeErr := s.requireNode(r)
+	currentNode, nodeErr := s.requireNode(r)
 	if nodeErr != nil {
 		api.WriteError(w, nodeErr)
+		return
+	}
+	if !node.IsDownstreamVelocity(currentNode.Mode) {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "node.kind_forbidden", "only downstream nodes can create portal links"))
 		return
 	}
 	var req createPortalLinkRequest
@@ -2116,55 +2118,91 @@ func (s *Server) handleNodeCreatePortalLink(w http.ResponseWriter, r *http.Reque
 		api.WriteError(w, err)
 		return
 	}
-	player, err := s.store.GetOfflinePlayer(r.Context(), normalizeNodeUsername(req.Username))
+	var player identity.Player
+	var err error
+	if profileID := strings.TrimSpace(req.ProfileID); profileID != "" {
+		profile, profileErr := s.store.GetProfileByID(r.Context(), profileID)
+		if profileErr == nil {
+			passport, passportErr := s.store.GetPassportForProfile(r.Context(), profile.ID)
+			if passportErr == nil {
+				player = identity.PlayerFromPassportProfile(passport, profile)
+			} else {
+				err = passportErr
+			}
+		} else {
+			err = profileErr
+		}
+	} else {
+		player, err = s.store.GetPlayerByProtocolName(r.Context(), strings.TrimSpace(req.Username))
+	}
 	if err != nil {
-		s.audit(r, audit.ActorNode, node.ID, audit.TargetPlayer, strings.TrimSpace(req.Username), "portal_link.create_failure", map[string]any{
-			"reason":    "player_not_found",
-			"username":  strings.TrimSpace(req.Username),
-			"server_id": req.ServerID,
+		s.audit(r, audit.ActorNode, currentNode.ID, audit.TargetPlayer, strings.TrimSpace(req.ProfileID), "portal_link.create_failure", map[string]any{
+			"reason":     "profile_not_found_or_ambiguous",
+			"profile_id": strings.TrimSpace(req.ProfileID),
+			"username":   strings.TrimSpace(req.Username),
+			"server_id":  currentNode.ServerID,
 		})
-		api.WriteError(w, api.NewError(http.StatusNotFound, "player.not_found", "player not found"))
+		api.WriteError(w, api.NewError(http.StatusNotFound, "profile.not_found", "profile was not found or the protocol name is ambiguous"))
+		return
+	}
+	if username := strings.TrimSpace(req.Username); username != "" && !strings.EqualFold(username, player.ProtocolName) {
+		api.WriteError(w, api.NewError(http.StatusConflict, "profile.identity_mismatch", "profile id and protocol name do not identify the same profile"))
 		return
 	}
 	passport, err := s.store.GetPassportForProfile(r.Context(), player.ID)
 	if err != nil {
-		s.audit(r, audit.ActorNode, node.ID, audit.TargetPlayer, player.ID, "portal_link.create_failure", playerEventDetails(player, map[string]any{
+		s.audit(r, audit.ActorNode, currentNode.ID, audit.TargetPlayer, player.ID, "portal_link.create_failure", playerEventDetails(player, map[string]any{
 			"reason":    "passport_not_found",
-			"server_id": req.ServerID,
+			"server_id": currentNode.ServerID,
 		}))
 		api.WriteError(w, api.NewError(http.StatusNotFound, "passport.not_found", "passport not found"))
 		return
 	}
-	ttl := 10 * time.Minute
-	if req.TTL != "" {
-		if parsed, err := time.ParseDuration(req.TTL); err == nil && parsed > 0 && parsed <= time.Hour {
-			ttl = parsed
-		}
+	if passport.Status != identity.PassportStatusActive || player.Locked {
+		api.WriteError(w, api.NewError(http.StatusForbidden, "passport.locked", "passport or profile is not active"))
+		return
 	}
-	link, rawToken, err := auth.NewPortalLink(auth.PortalLinkOffline, passport.ID, req.ServerID, ttl, time.Now())
+	ttl, ttlErr := portalLinkTTL(req.TTL, 0)
+	if ttlErr != nil {
+		api.WriteError(w, ttlErr)
+		return
+	}
+	serverID := strings.TrimSpace(currentNode.ServerID)
+	if serverID == "" {
+		serverID = strings.TrimSpace(req.ServerID)
+	}
+	linkKind := auth.PortalLinkOffline
+	if passport.Kind == identity.PassportKindPremium {
+		linkKind = auth.PortalLinkPremium
+	}
+	link, rawToken, err := auth.NewPortalLink(linkKind, passport.ID, serverID, ttl, time.Now())
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "portal_link.create_failed", "failed to create portal link"))
 		return
 	}
+	link.SuggestedProfileID = player.ID
+	link.IssuedByNodeID = currentNode.ID
 	if err := s.store.SavePortalLink(r.Context(), link); err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "portal_link.create_failed", "failed to save portal link"))
 		return
 	}
-	s.audit(r, audit.ActorNode, node.ID, audit.TargetPlayer, passport.ID, "portal_link.create", map[string]any{
-		"server_id":     req.ServerID,
+	s.audit(r, audit.ActorNode, currentNode.ID, audit.TargetPlayer, passport.ID, "portal_link.create", map[string]any{
+		"server_id":     serverID,
 		"expires_at":    link.ExpiresAt,
 		"profile_id":    player.ID,
 		"protocol_name": player.ProtocolName,
 	})
 	api.WriteJSON(w, http.StatusCreated, map[string]any{
 		"link": map[string]any{
-			"id":         link.ID,
-			"kind":       link.Kind,
-			"player_id":  link.PlayerID,
-			"server_id":  link.ServerID,
-			"expires_at": link.ExpiresAt,
-			"url":        s.cfg.PublicBaseURL + "/portal/link#token=" + rawToken,
-			"token":      rawToken,
+			"id":                   link.ID,
+			"kind":                 link.Kind,
+			"passport_id":          link.PlayerID,
+			"player_id":            link.PlayerID,
+			"suggested_profile_id": link.SuggestedProfileID,
+			"server_id":            link.ServerID,
+			"expires_at":           link.ExpiresAt,
+			"url":                  s.playerPortalLinkURL(rawToken),
+			"token":                rawToken,
 		},
 	}, nil)
 }

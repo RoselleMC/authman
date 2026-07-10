@@ -22,8 +22,8 @@
   --radius-full: 999px;
 
   /* Type */
-  --font-sans: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Cascadia Code", monospace;
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", monospace;
   --font-size-xs: 11.5px;
   --font-size-sm: 13px;
   --font-size-md: 14px;

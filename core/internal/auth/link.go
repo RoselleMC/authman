@@ -18,15 +18,18 @@ const (
 )
 
 type PortalLink struct {
-	ID        string
-	Kind      PortalLinkKind
-	PlayerID  string
-	ServerID  string
-	TokenHash string
-	Status    PortalLinkStatus
-	CreatedAt time.Time
-	ExpiresAt time.Time
-	UsedAt    *time.Time
+	ID                 string
+	Kind               PortalLinkKind
+	PlayerID           string
+	SuggestedProfileID string
+	ServerID           string
+	IssuedByNodeID     string
+	TokenHash          string
+	Status             PortalLinkStatus
+	CreatedAt          time.Time
+	ExpiresAt          time.Time
+	UsedAt             *time.Time
+	RevokedAt          *time.Time
 }
 
 func NewPortalLink(kind PortalLinkKind, playerID string, serverID string, ttl time.Duration, now time.Time) (PortalLink, string, error) {

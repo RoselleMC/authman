@@ -57,6 +57,7 @@ type Server struct {
 	mojangVerifier *mojang.SessionVerifier
 	webAuthn       *webauthn.WebAuthn
 	ipGeo          *ipGeoResolver
+	ipGeoRefreshMu sync.Mutex
 	passportLocks  keyedMutex
 	nodeEvents     *nodeEventHub
 }
@@ -213,8 +214,8 @@ func (s *Server) reloadIPGeoSettings(ctx context.Context) {
 		s.ipGeo = newIPGeoResolver()
 	}
 	settings := s.ipGeoSettings(ctx)
-	routes := routesByIDs(s.allMojangRoutes(ctx), settings.EnabledRouteIDs)
-	s.ipGeo.configure(routes, time.Duration(settings.CacheTTLSeconds)*time.Second, time.Duration(settings.RequestTimeoutSeconds)*time.Second)
+	s.ipGeo.configure(time.Duration(settings.CacheTTLSeconds)*time.Second, time.Duration(settings.RequestTimeoutSeconds)*time.Second)
+	s.reloadIPGeoSources(ctx)
 }
 
 func (s *Server) Handler() http.Handler {
@@ -376,6 +377,14 @@ func (s *Server) routes() {
 	s.coreMux.HandleFunc("PUT /api/admin/settings/mojang", s.handleAdminUpdateMojangSettings)
 	s.coreMux.HandleFunc("GET /api/admin/settings/ip-geo", s.handleAdminIPGeoSettings)
 	s.coreMux.HandleFunc("PUT /api/admin/settings/ip-geo", s.handleAdminUpdateIPGeoSettings)
+	s.coreMux.HandleFunc("GET /api/admin/ip-geo/catalog", s.handleAdminIPGeoCatalog)
+	s.coreMux.HandleFunc("GET /api/admin/ip-geo/sources", s.handleAdminIPGeoSources)
+	s.coreMux.HandleFunc("POST /api/admin/ip-geo/sources", s.handleAdminCreateIPGeoSource)
+	s.coreMux.HandleFunc("POST /api/admin/ip-geo/sources/upload", s.handleAdminUploadIPGeoSource)
+	s.coreMux.HandleFunc("PUT /api/admin/ip-geo/sources/{id}", s.handleAdminUpdateIPGeoSource)
+	s.coreMux.HandleFunc("DELETE /api/admin/ip-geo/sources/{id}", s.handleAdminDeleteIPGeoSource)
+	s.coreMux.HandleFunc("POST /api/admin/ip-geo/sources/{id}/refresh", s.handleAdminRefreshIPGeoSource)
+	s.coreMux.HandleFunc("POST /api/admin/ip-geo/lookup", s.handleAdminIPGeoLookup)
 	s.coreMux.HandleFunc("GET /api/admin/settings/communication", s.handleAdminNodeCommunicationSettings)
 	s.coreMux.HandleFunc("PUT /api/admin/settings/communication", s.handleAdminUpdateNodeCommunicationSettings)
 	s.coreMux.HandleFunc("GET /api/admin/settings/branding", s.handleAdminBrandingSettings)

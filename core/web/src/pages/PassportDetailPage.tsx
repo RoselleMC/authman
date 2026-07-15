@@ -16,7 +16,6 @@ import {
   Field,
   Icon,
   Input,
-  IPLocation,
   Select,
   SecretReveal,
   StatusBadge,
@@ -31,6 +30,7 @@ import {
   type ListColumn,
 } from "@authman/shared";
 import { AuditEventList } from "../components/AuditEventList";
+import { RefreshableIPLocation } from "../components/RefreshableIPLocation";
 import {
   bindProfile,
   createPassportPortalLink,
@@ -401,7 +401,7 @@ export function PassportDetailPage() {
                   <DefRow k={t("common.username")}>{p.username}</DefRow>
                   <DefRow k={t("admin.presences.onlineState")}><StatusBadge status={p.online ? "online" : "offline_status"} /></DefRow>
                   <DefRow k={t("admin.players.col.lastSeen")}>{formatAbsTime(p.last_seen_at)}</DefRow>
-                  <DefRow k={t("admin.players.col.lastSeenIp")}><IPLocation ip={p.last_seen_ip} geo={p.last_seen_geo} /></DefRow>
+                  <DefRow k={t("admin.players.col.lastSeenIp")}><RefreshableIPLocation ip={p.last_seen_ip} geo={p.last_seen_geo} /></DefRow>
                 </DefList>
               </Card>
               <Card title={t("admin.player.portalLink.history")}>

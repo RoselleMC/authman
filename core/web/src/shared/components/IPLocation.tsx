@@ -20,9 +20,12 @@ interface Props {
   ip?: string | null;
   geo?: IPGeo | null;
   compact?: boolean;
+  onRefresh?: () => void;
+  refreshing?: boolean;
+  refreshLabel?: string;
 }
 
-export function IPLocation({ ip, geo, compact = false }: Props) {
+export function IPLocation({ ip, geo, compact = false, onRefresh, refreshing = false, refreshLabel }: Props) {
   const { locale, t } = useI18n();
   const displayIP = ip || geo?.ip || "";
   if (!displayIP) return <span className="muted-cell">{t("common.none")}</span>;
@@ -32,15 +35,37 @@ export function IPLocation({ ip, geo, compact = false }: Props) {
   const countryCode = geo?.country_code?.toLowerCase();
   const title = [displayIP, parts.join(", "), geo?.isp, geo?.asn].filter(Boolean).join(" · ");
   const localNetwork = countryCode === "un" || countryCode === "local";
+  const flag = localNetwork ? (
+    <span className="ip-location__flag ip-location__flag--local" aria-hidden="true">
+      <Icon name="globe" size={14} />
+    </span>
+  ) : countryCode ? (
+    <img className="ip-location__flag" src={countryFlagUrl(countryCode)} alt="" aria-hidden="true" />
+  ) : (
+    <span className="ip-location__flag ip-location__flag--unknown" aria-hidden="true">
+      <Icon name="globe" size={14} />
+    </span>
+  );
+  const label = refreshLabel ?? t("geo.refresh.action");
   return (
     <span className="ip-location" title={title}>
-      {localNetwork ? (
-        <span className="ip-location__flag ip-location__flag--local" aria-hidden="true">
-          <Icon name="globe" size={14} />
-        </span>
-      ) : countryCode ? (
-        <img className="ip-location__flag" src={countryFlagUrl(countryCode)} alt="" aria-hidden="true" />
-      ) : null}
+      {onRefresh ? (
+        <button
+          type="button"
+          className="ip-location__refresh"
+          onClick={(event) => {
+            event.stopPropagation();
+            onRefresh();
+          }}
+          disabled={refreshing}
+          aria-label={label}
+          title={label}
+          aria-busy={refreshing}
+          data-testid="ip-location-refresh"
+        >
+          {flag}
+        </button>
+      ) : countryCode ? flag : null}
       <span className="ip-location__main">
         <code className="mono">{displayIP}</code>
         {!compact ? <span className="ip-location__place">{location}</span> : null}

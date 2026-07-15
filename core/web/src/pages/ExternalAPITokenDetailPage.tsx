@@ -25,6 +25,7 @@ import {
 } from "@authman/shared";
 import { deleteExternalAPITokenRecord, fetchExternalAPIToken, revokeExternalAPIToken, updateExternalAPIToken, type ExternalAPIToken } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
+import { RefreshableIPLocation } from "../components/RefreshableIPLocation";
 
 function ExternalTokenStatusBadge({ status }: { status: ExternalAPIToken["status"] }) {
   const { t } = useI18n();
@@ -168,7 +169,7 @@ export function ExternalAPITokenDetailPage() {
               <ConfigRow k={t("admin.settings.externalApi.col.status")} v={<ExternalTokenStatusBadge status={token.status} />} />
               <ConfigRow k={t("admin.settings.externalApi.col.calls")} v={token.call_count.toLocaleString()} />
               <ConfigRow k={t("admin.settings.externalApi.col.lastUsed")} v={formatMaybeTime(token.last_used_at)} />
-              <ConfigRow k={t("admin.settings.externalApi.col.lastIP")} v={token.last_used_ip || "—"} />
+              <ConfigRow k={t("admin.settings.externalApi.col.lastIP")} v={<RefreshableIPLocation ip={token.last_used_ip} />} />
               <ConfigRow k={t("admin.settings.externalApi.col.lastPath")} v={<span className="mono-inline">{token.last_used_path || "—"}</span>} />
               <ConfigRow k={t("admin.settings.externalApi.col.created")} v={formatMaybeTime(token.created_at)} />
               <ConfigRow k={t("admin.settings.externalApi.detail.updated")} v={formatMaybeTime(token.updated_at)} />

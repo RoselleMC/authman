@@ -34,6 +34,7 @@ type Memory struct {
 	portalLinksByToken   map[string]auth.PortalLink
 	auditEvents          []audit.Event
 	mojangRoutes         map[string]mojang.Route
+	ipGeoSources         map[string]IPGeoSource
 	systemSettings       map[string]map[string]any
 	presencesByID        map[string]PlayerPresence
 	bansByID             map[string]PlayerBan
@@ -72,6 +73,7 @@ func NewMemory() *Memory {
 		sessionsByID:         make(map[string]auth.Session),
 		portalLinksByToken:   make(map[string]auth.PortalLink),
 		mojangRoutes:         make(map[string]mojang.Route),
+		ipGeoSources:         make(map[string]IPGeoSource),
 		systemSettings:       make(map[string]map[string]any),
 		presencesByID:        make(map[string]PlayerPresence),
 		bansByID:             make(map[string]PlayerBan),
@@ -1628,6 +1630,60 @@ func (m *Memory) DeleteMojangRoute(ctx context.Context, id string) error {
 	}
 	delete(m.mojangRoutes, id)
 	return nil
+}
+
+func (m *Memory) ListIPGeoSources(ctx context.Context) []IPGeoSource {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]IPGeoSource, 0, len(m.ipGeoSources))
+	for _, source := range m.ipGeoSources {
+		out = append(out, cloneIPGeoSource(source))
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out
+}
+
+func (m *Memory) GetIPGeoSource(ctx context.Context, id string) (IPGeoSource, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	source, ok := m.ipGeoSources[strings.TrimSpace(id)]
+	if !ok {
+		return IPGeoSource{}, fmt.Errorf("IP geolocation source not found: %w", ErrNotFound)
+	}
+	return cloneIPGeoSource(source), nil
+}
+
+func (m *Memory) UpsertIPGeoSource(ctx context.Context, source IPGeoSource) (IPGeoSource, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	source.Fields = append([]string{}, source.Fields...)
+	now := time.Now().UTC()
+	if existing, ok := m.ipGeoSources[source.ID]; ok {
+		source.CreatedAt = existing.CreatedAt
+	} else if source.CreatedAt.IsZero() {
+		source.CreatedAt = now
+	}
+	source.UpdatedAt = now
+	m.ipGeoSources[source.ID] = cloneIPGeoSource(source)
+	return cloneIPGeoSource(source), nil
+}
+
+func (m *Memory) DeleteIPGeoSource(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id = strings.TrimSpace(id)
+	if _, ok := m.ipGeoSources[id]; !ok {
+		return fmt.Errorf("IP geolocation source not found: %w", ErrNotFound)
+	}
+	delete(m.ipGeoSources, id)
+	return nil
+}
+
+func cloneIPGeoSource(source IPGeoSource) IPGeoSource {
+	source.Fields = append([]string(nil), source.Fields...)
+	return source
 }
 
 func (m *Memory) ListProfilePresences(ctx context.Context, profileID string) []PlayerPresence {

@@ -20,6 +20,7 @@ type Config struct {
 	PlayerPortalBaseURL       string
 	HTTPBasePath              string
 	WebRoot                   string
+	IPGeoDataDir              string
 	DefaultLocale             string
 	AdminUsername             string
 	AdminEmail                string
@@ -48,6 +49,7 @@ func Load() (Config, error) {
 		PlayerPortalBaseURL:       envString("AUTHMAN_PLAYER_PORTAL_BASE_URL", ""),
 		HTTPBasePath:              httpBasePath(),
 		WebRoot:                   envString("AUTHMAN_CORE_WEB_ROOT", ""),
+		IPGeoDataDir:              envString("AUTHMAN_IP_GEO_DATA_DIR", "data/ipgeo"),
 		DefaultLocale:             envString("AUTHMAN_DEFAULT_LOCALE", "zh"),
 		AdminUsername:             envString("AUTHMAN_ADMIN_USERNAME", "admin"),
 		AdminEmail:                envString("AUTHMAN_ADMIN_EMAIL", ""),

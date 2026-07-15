@@ -1,53 +1,68 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/RoselleMC/authman/core/internal/identity"
-	"github.com/RoselleMC/authman/core/internal/mojang"
-	"golang.org/x/net/proxy"
 )
 
+type ipGeoLookupEvidence struct {
+	SourceID   string
+	SourceName string
+	DataFamily string
+	Weight     int
+	Status     string
+	Geo        *identity.IPGeo
+	Error      string
+}
+
+type ipGeoLookupResult struct {
+	Geo      *identity.IPGeo
+	Provider string
+	Cached   bool
+	Evidence []ipGeoLookupEvidence
+}
+
 type ipGeoCacheEntry struct {
-	geo       *identity.IPGeo
+	result    ipGeoLookupResult
 	expiresAt time.Time
 }
 
 type ipGeoResolver struct {
-	mu             sync.Mutex
-	entries        map[string]ipGeoCacheEntry
-	client         *http.Client
-	routeCooldowns map[string]time.Time
-	cacheTTL       time.Duration
-	timeout        time.Duration
-	routes         []mojang.Route
-	cursor         int
-	now            func() time.Time
+	mu            sync.RWMutex
+	entries       map[string]ipGeoCacheEntry
+	readers       []ipGeoDatabaseReader
+	cacheTTL      time.Duration
+	timeout       time.Duration
+	now           func() time.Time
+	external      func(context.Context, string) ipGeoLookupResult
+	externalBatch func(context.Context, []string) map[string]ipGeoLookupResult
 }
 
 func newIPGeoResolver() *ipGeoResolver {
 	return &ipGeoResolver{
-		entries:        map[string]ipGeoCacheEntry{},
-		client:         &http.Client{Timeout: 3 * time.Second},
-		routeCooldowns: map[string]time.Time{},
-		now:            time.Now,
+		entries: map[string]ipGeoCacheEntry{},
+		now:     time.Now,
 	}
 }
 
 func (r *ipGeoResolver) lookup(ctx context.Context, ip string) *identity.IPGeo {
+	return r.lookupDetailed(ctx, ip).Geo
+}
+
+func (r *ipGeoResolver) lookupLocalOnly(ip string) *identity.IPGeo {
 	ip = strings.TrimSpace(ip)
-	if ip == "" {
-		return nil
-	}
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
 		return nil
@@ -55,49 +70,235 @@ func (r *ipGeoResolver) lookup(ctx context.Context, ip string) *identity.IPGeo {
 	if !publicIP(ip) {
 		return localNetworkGeo(ip)
 	}
-	now := r.nowTime()
-	r.mu.Lock()
-	if entry, ok := r.entries[ip]; ok && now.Before(entry.expiresAt) {
-		r.mu.Unlock()
-		return cloneGeo(entry.geo)
-	}
-	r.mu.Unlock()
 
-	geo := r.fetch(ctx, ip)
+	now := r.nowTime()
+	r.mu.RLock()
+	entry, cached := r.entries[ip]
+	r.mu.RUnlock()
+	if cached && now.Before(entry.expiresAt) {
+		return cloneGeo(entry.result.Geo)
+	}
+	result := r.lookupLocal(parsed)
+	if result.Geo == nil {
+		return nil
+	}
+	r.cacheResult(ip, result, now)
+	return cloneGeo(result.Geo)
+}
+
+func (r *ipGeoResolver) lookupBatch(ctx context.Context, ips []string) map[string]*identity.IPGeo {
+	resolved := make(map[string]*identity.IPGeo, len(ips))
+	unresolved := make([]string, 0, len(ips))
+	seen := make(map[string]struct{}, len(ips))
+	for _, raw := range ips {
+		ip := strings.TrimSpace(raw)
+		if ip == "" {
+			continue
+		}
+		if _, ok := seen[ip]; ok {
+			continue
+		}
+		seen[ip] = struct{}{}
+		if geo := r.lookupLocalOnly(ip); geo != nil {
+			resolved[ip] = geo
+			continue
+		}
+		if publicIP(ip) {
+			unresolved = append(unresolved, ip)
+		}
+	}
+
+	for start := 0; start < len(unresolved); start += 100 {
+		end := min(start+100, len(unresolved))
+		batchIPs := unresolved[start:end]
+		var batch map[string]ipGeoLookupResult
+		switch {
+		case r.externalBatch != nil:
+			batch = r.externalBatch(ctx, batchIPs)
+		case r.external != nil:
+			batch = make(map[string]ipGeoLookupResult, len(batchIPs))
+			for _, ip := range batchIPs {
+				batch[ip] = r.external(ctx, ip)
+			}
+		default:
+			batch = r.fetchExternalBatch(ctx, batchIPs)
+		}
+		now := r.nowTime()
+		for _, ip := range batchIPs {
+			result := batch[ip]
+			if result.Geo == nil {
+				continue
+			}
+			r.cacheResult(ip, result, now)
+			resolved[ip] = cloneGeo(result.Geo)
+		}
+	}
+	return resolved
+}
+
+func (r *ipGeoResolver) lookupDetailed(ctx context.Context, ip string) ipGeoLookupResult {
+	ip = strings.TrimSpace(ip)
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return ipGeoLookupResult{}
+	}
+	if !publicIP(ip) {
+		return ipGeoLookupResult{Geo: localNetworkGeo(ip), Provider: "local_network"}
+	}
+
+	now := r.nowTime()
+	r.mu.RLock()
+	entry, cached := r.entries[ip]
+	r.mu.RUnlock()
+	if cached && now.Before(entry.expiresAt) {
+		result := cloneIPGeoLookupResult(entry.result)
+		result.Cached = true
+		return result
+	}
+
+	result := r.resolveFresh(ctx, ip, parsed)
+	if result.Geo == nil {
+		// Failures deliberately remain uncached so the next request retries.
+		return result
+	}
+
+	r.cacheResult(ip, result, now)
+	return result
+}
+
+// refreshDetailed deliberately bypasses the resolver cache. A failed refresh
+// leaves the last successful cached value intact.
+func (r *ipGeoResolver) refreshDetailed(ctx context.Context, ip string) ipGeoLookupResult {
+	ip = strings.TrimSpace(ip)
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return ipGeoLookupResult{}
+	}
+	if !publicIP(ip) {
+		return ipGeoLookupResult{Geo: localNetworkGeo(ip), Provider: "local_network"}
+	}
+
+	result := r.resolveFresh(ctx, ip, parsed)
+	if result.Geo != nil {
+		r.cacheResult(ip, result, r.nowTime())
+	}
+	return result
+}
+
+func (r *ipGeoResolver) resolveFresh(ctx context.Context, ip string, parsed net.IP) ipGeoLookupResult {
+	result := r.lookupLocal(parsed)
+	if result.Geo == nil {
+		fetchExternal := r.fetchExternal
+		if r.external != nil {
+			fetchExternal = r.external
+		}
+		fallback := fetchExternal(ctx, ip)
+		fallback.Evidence = append(result.Evidence, fallback.Evidence...)
+		result = fallback
+	}
+	return result
+}
+
+func (r *ipGeoResolver) cacheResult(ip string, result ipGeoLookupResult, now time.Time) {
+	r.mu.RLock()
 	cacheTTL := r.cacheTTL
+	r.mu.RUnlock()
 	if cacheTTL <= 0 {
 		cacheTTL = 24 * time.Hour
 	}
 	r.mu.Lock()
-	r.entries[ip] = ipGeoCacheEntry{geo: cloneGeo(geo), expiresAt: now.Add(cacheTTL)}
+	r.entries[ip] = ipGeoCacheEntry{result: cloneIPGeoLookupResult(result), expiresAt: now.Add(cacheTTL)}
 	r.mu.Unlock()
-	return geo
 }
 
-func (r *ipGeoResolver) fetch(ctx context.Context, ip string) *identity.IPGeo {
-	now := r.nowTime()
-	routes := r.executionRoutes(now)
-	if len(routes) == 0 {
-		routes = []mojang.Route{{ID: "direct", Kind: mojang.RouteDirect, Weight: 1}}
+func (r *ipGeoResolver) fetchExternal(ctx context.Context, ip string) ipGeoLookupResult {
+	client := r.externalClient()
+	type localizedResponse struct {
+		locale string
+		value  ipAPIResponse
+	}
+	responses := make(chan localizedResponse, 2)
+	for _, locale := range []string{"en", "zh-CN"} {
+		go func(locale string) {
+			responses <- localizedResponse{locale: locale, value: fetchIPAPILocale(ctx, client, ip, locale)}
+		}(locale)
 	}
 	var en, zh ipAPIResponse
-	for _, route := range routes {
-		client, err := r.clientForRoute(route)
-		if err != nil {
-			r.cooldownRoute(route, 30*time.Second, now)
-			continue
-		}
-		en = r.fetchLocale(ctx, client, ip, "en")
-		zh = r.fetchLocale(ctx, client, ip, "zh-CN")
-		if en.status == "success" || zh.status == "success" {
-			break
-		}
-		if cooldown := geoCooldownFor(en, zh); cooldown > 0 {
-			r.cooldownRoute(route, cooldown, now)
+	for range 2 {
+		response := <-responses
+		if response.locale == "zh-CN" {
+			zh = response.value
+		} else {
+			en = response.value
 		}
 	}
+	return ipAPIResult(ip, en, zh)
+}
+
+func (r *ipGeoResolver) fetchExternalBatch(ctx context.Context, ips []string) map[string]ipGeoLookupResult {
+	results := make(map[string]ipGeoLookupResult, len(ips))
+	if len(ips) == 0 {
+		return results
+	}
+	type localizedBatch struct {
+		locale string
+		values map[string]ipAPIResponse
+		err    error
+	}
+	responses := make(chan localizedBatch, 2)
+	client := r.externalClient()
+	for _, locale := range []string{"en", "zh-CN"} {
+		go func(locale string) {
+			values, err := fetchIPAPIBatchLocale(ctx, client, ips, locale)
+			responses <- localizedBatch{locale: locale, values: values, err: err}
+		}(locale)
+	}
+	var enValues, zhValues map[string]ipAPIResponse
+	var enErr, zhErr error
+	for range 2 {
+		response := <-responses
+		if response.locale == "zh-CN" {
+			zhValues, zhErr = response.values, response.err
+		} else {
+			enValues, enErr = response.values, response.err
+		}
+	}
+	for _, ip := range ips {
+		en := enValues[ip]
+		zh := zhValues[ip]
+		if en.status == "" && enErr != nil {
+			en = ipAPIResponse{status: "fail", message: enErr.Error()}
+		}
+		if zh.status == "" && zhErr != nil {
+			zh = ipAPIResponse{status: "fail", message: zhErr.Error()}
+		}
+		results[ip] = ipAPIResult(ip, en, zh)
+	}
+	return results
+}
+
+func (r *ipGeoResolver) externalClient() *http.Client {
+	r.mu.RLock()
+	timeout := r.timeout
+	r.mu.RUnlock()
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return &http.Client{Timeout: timeout, Transport: transport}
+}
+
+func ipAPIResult(ip string, en ipAPIResponse, zh ipAPIResponse) ipGeoLookupResult {
 	if en.status != "success" && zh.status != "success" {
-		return nil
+		reason := strings.TrimSpace(en.message)
+		if reason == "" {
+			reason = strings.TrimSpace(zh.message)
+		}
+		return ipGeoLookupResult{
+			Provider: "ip-api.com",
+			Evidence: []ipGeoLookupEvidence{{SourceID: "external:ip-api.com", SourceName: "ip-api.com", Status: "error", Error: reason}},
+		}
 	}
 	base := en
 	if base.status != "success" {
@@ -116,15 +317,52 @@ func (r *ipGeoResolver) fetch(ctx context.Context, ip string) *identity.IPGeo {
 	if zh.status == "success" {
 		geo.Locales["zh"] = identity.IPGeoLocale{Country: zh.country, Region: zh.regionName, City: zh.city}
 	}
-	return geo
+	return ipGeoLookupResult{
+		Geo:      geo,
+		Provider: "ip-api.com",
+		Evidence: []ipGeoLookupEvidence{{SourceID: "external:ip-api.com", SourceName: "ip-api.com", Status: "fallback", Geo: cloneGeo(geo)}},
+	}
 }
 
-func (r *ipGeoResolver) fetchLocale(ctx context.Context, client *http.Client, ip string, lang string) ipAPIResponse {
-	u := url.URL{
-		Scheme: "http",
-		Host:   "ip-api.com",
-		Path:   "/json/" + ip,
+func fetchIPAPIBatchLocale(ctx context.Context, client *http.Client, ips []string, lang string) (map[string]ipAPIResponse, error) {
+	payload, err := json.Marshal(ips)
+	if err != nil {
+		return nil, err
 	}
+	u := url.URL{Scheme: "http", Host: "ip-api.com", Path: "/batch"}
+	q := u.Query()
+	q.Set("lang", lang)
+	q.Set("fields", "status,message,query,country,countryCode,regionName,city,isp,as")
+	u.RawQuery = q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Authman-IPGeo/1")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http_%d", resp.StatusCode)
+	}
+	var response []ipAPIResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(&response); err != nil {
+		return nil, err
+	}
+	values := make(map[string]ipAPIResponse, len(response))
+	for _, item := range response {
+		if ip := strings.TrimSpace(item.query); ip != "" {
+			values[ip] = item
+		}
+	}
+	return values, nil
+}
+
+func fetchIPAPILocale(ctx context.Context, client *http.Client, ip string, lang string) ipAPIResponse {
+	u := url.URL{Scheme: "http", Host: "ip-api.com", Path: "/json/" + ip}
 	q := u.Query()
 	q.Set("lang", lang)
 	q.Set("fields", "status,message,query,country,countryCode,regionName,city,isp,as")
@@ -135,98 +373,41 @@ func (r *ipGeoResolver) fetchLocale(ctx context.Context, client *http.Client, ip
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return ipAPIResponse{status: "fail", message: err.Error(), routeError: true}
+		return ipAPIResponse{status: "fail", message: err.Error()}
 	}
 	defer resp.Body.Close()
-	retryAfter := geoRetryAfter(resp)
 	if resp.StatusCode != http.StatusOK {
-		return ipAPIResponse{status: "fail", message: fmt.Sprintf("http_%d", resp.StatusCode), retryAfter: retryAfter}
+		return ipAPIResponse{status: "fail", message: fmt.Sprintf("http_%d", resp.StatusCode)}
 	}
 	var out ipAPIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return ipAPIResponse{status: "fail", message: err.Error(), routeError: true, retryAfter: retryAfter}
+		return ipAPIResponse{status: "fail", message: err.Error()}
 	}
-	out.retryAfter = retryAfter
 	return out
 }
 
-func (r *ipGeoResolver) configure(routes []mojang.Route, cacheTTL time.Duration, timeout time.Duration) {
+func (r *ipGeoResolver) configure(cacheTTL time.Duration, timeout time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.routes = append([]mojang.Route(nil), routes...)
 	r.cacheTTL = cacheTTL
 	r.timeout = timeout
 }
 
-func (r *ipGeoResolver) executionRoutes(now time.Time) []mojang.Route {
+func (r *ipGeoResolver) replaceReaders(readers []ipGeoDatabaseReader) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	routes := make([]mojang.Route, 0, len(r.routes))
-	weighted := make([]mojang.Route, 0, len(r.routes))
-	for _, route := range r.routes {
-		if route.Disabled {
-			continue
-		}
-		key := geoRouteKey(route)
-		if until, ok := r.routeCooldowns[key]; ok {
-			if until.After(now) {
-				continue
-			}
-			delete(r.routeCooldowns, key)
-		}
-		weight := route.Weight
-		if weight <= 0 {
-			weight = 1
-		}
-		for i := 0; i < weight; i++ {
-			weighted = append(weighted, route)
-		}
+	old := r.readers
+	r.readers = readers
+	r.entries = map[string]ipGeoCacheEntry{}
+	for _, reader := range old {
+		_ = reader.reader.Close()
 	}
-	if len(weighted) == 0 {
-		return routes
-	}
-	start := r.cursor % len(weighted)
-	r.cursor = (r.cursor + 1) % len(weighted)
-	routes = append(routes, weighted[start:]...)
-	routes = append(routes, weighted[:start]...)
-	return routes
+	r.mu.Unlock()
 }
 
-func (r *ipGeoResolver) clientForRoute(route mojang.Route) (*http.Client, error) {
-	timeout := r.timeout
-	if timeout <= 0 {
-		timeout = 3 * time.Second
-	}
-	transport := &http.Transport{}
-	switch route.Kind {
-	case mojang.RouteDirect, "":
-	case mojang.RouteHTTP:
-		proxyURL, err := url.Parse(route.URL)
-		if err != nil {
-			return nil, err
-		}
-		transport.Proxy = http.ProxyURL(proxyURL)
-	case mojang.RouteSOCKS5:
-		address := route.URL
-		var auth *proxy.Auth
-		if parsed, err := url.Parse(route.URL); err == nil && parsed.Scheme != "" {
-			address = parsed.Host
-			if parsed.User != nil {
-				auth = &proxy.Auth{User: parsed.User.Username()}
-				auth.Password, _ = parsed.User.Password()
-			}
-		}
-		dialer, err := proxy.SOCKS5("tcp", address, auth, proxy.Direct)
-		if err != nil {
-			return nil, err
-		}
-		transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-			return dialer.Dial(network, address)
-		}
-	default:
-		return nil, fmt.Errorf("unsupported geo route kind %s", route.Kind)
-	}
-	return &http.Client{Timeout: timeout, Transport: transport}, nil
+func (r *ipGeoResolver) clearCache() {
+	r.mu.Lock()
+	r.entries = map[string]ipGeoCacheEntry{}
+	r.mu.Unlock()
 }
 
 func (r *ipGeoResolver) nowTime() time.Time {
@@ -234,67 +415,6 @@ func (r *ipGeoResolver) nowTime() time.Time {
 		return time.Now().UTC()
 	}
 	return r.now().UTC()
-}
-
-func (r *ipGeoResolver) cooldownRoute(route mojang.Route, cooldown time.Duration, now time.Time) {
-	if cooldown <= 0 {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.hasRouteFallbackLocked(route, now) {
-		return
-	}
-	if r.routeCooldowns == nil {
-		r.routeCooldowns = map[string]time.Time{}
-	}
-	r.routeCooldowns[geoRouteKey(route)] = now.Add(cooldown)
-}
-
-func (r *ipGeoResolver) hasRouteFallbackLocked(failed mojang.Route, now time.Time) bool {
-	failedKey := geoRouteKey(failed)
-	for _, route := range r.routes {
-		if route.Disabled || geoRouteKey(route) == failedKey {
-			continue
-		}
-		if until, ok := r.routeCooldowns[geoRouteKey(route)]; ok && until.After(now) {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
-func geoRouteKey(route mojang.Route) string {
-	if strings.TrimSpace(route.ID) != "" {
-		return strings.TrimSpace(route.ID)
-	}
-	return string(route.Kind) + "|" + strings.TrimSpace(route.URL)
-}
-
-func geoCooldownFor(responses ...ipAPIResponse) time.Duration {
-	var cooldown time.Duration
-	for _, response := range responses {
-		if response.retryAfter > cooldown {
-			cooldown = response.retryAfter
-		}
-		if response.routeError && cooldown == 0 {
-			cooldown = 30 * time.Second
-		}
-	}
-	return cooldown
-}
-
-func geoRetryAfter(resp *http.Response) time.Duration {
-	remaining := strings.TrimSpace(resp.Header.Get("X-Rl"))
-	if remaining != "0" {
-		return 0
-	}
-	ttlSeconds, _ := strconv.Atoi(strings.TrimSpace(resp.Header.Get("X-Ttl")))
-	if ttlSeconds <= 0 {
-		ttlSeconds = 60
-	}
-	return time.Duration(ttlSeconds) * time.Second
 }
 
 type ipAPIResponse struct {
@@ -307,8 +427,6 @@ type ipAPIResponse struct {
 	city        string
 	isp         string
 	asn         string
-	retryAfter  time.Duration
-	routeError  bool
 }
 
 func (r *ipAPIResponse) UnmarshalJSON(raw []byte) error {
@@ -338,12 +456,38 @@ func (r *ipAPIResponse) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+var nonPublicIPPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001:2::/48"),
+	netip.MustParsePrefix("2001:10::/28"),
+	netip.MustParsePrefix("2001:20::/28"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("3fff::/20"),
+}
+
 func publicIP(raw string) bool {
-	ip := net.ParseIP(strings.TrimSpace(raw))
-	if ip == nil {
+	address, err := netip.ParseAddr(strings.TrimSpace(raw))
+	if err != nil {
 		return false
 	}
-	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified())
+	address = address.Unmap()
+	if !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() {
+		return false
+	}
+	for _, prefix := range nonPublicIPPrefixes {
+		if prefix.Contains(address) {
+			return false
+		}
+	}
+	return true
 }
 
 func localNetworkGeo(ip string) *identity.IPGeo {
@@ -367,4 +511,13 @@ func cloneGeo(geo *identity.IPGeo) *identity.IPGeo {
 		out.Locales[key] = value
 	}
 	return &out
+}
+
+func cloneIPGeoLookupResult(result ipGeoLookupResult) ipGeoLookupResult {
+	result.Geo = cloneGeo(result.Geo)
+	result.Evidence = append([]ipGeoLookupEvidence(nil), result.Evidence...)
+	for index := range result.Evidence {
+		result.Evidence[index].Geo = cloneGeo(result.Evidence[index].Geo)
+	}
+	return result
 }

@@ -15,7 +15,6 @@ import {
   Field,
   Icon,
   Input,
-  IPLocation,
   Select,
   StatusBadge,
   Tabs,
@@ -29,6 +28,7 @@ import { bindProfile, createProfileBan, deleteProfile, deleteProfileSkin, extend
 import { AuditEventList } from "../components/AuditEventList";
 import { ErrorBlock } from "../components/ErrorBlock";
 import { MinecraftSkinPreview } from "../components/MinecraftSkinPreview";
+import { RefreshableIPLocation } from "../components/RefreshableIPLocation";
 
 type DialogState = null | "status" | "rename" | "bind" | "unbind" | "ban" | "extendBan" | "revokeBan";
 type DetailTab = "overview" | "skin" | "audit";
@@ -287,7 +287,7 @@ export function ProfileDetailPage() {
                   <DefRow k={t("admin.presences.onlineState")}><StatusBadge status={p.online ? "online" : "offline_status"} /></DefRow>
                   <DefRow k={t("admin.profiles.skinSource")}>{p.skin_source}</DefRow>
                   <DefRow k={t("admin.players.col.lastSeen")}>{formatAbsTime(p.last_seen_at)}</DefRow>
-                  <DefRow k={t("admin.players.col.lastSeenIp")}><IPLocation ip={p.last_seen_ip} geo={p.last_seen_geo} /></DefRow>
+                  <DefRow k={t("admin.players.col.lastSeenIp")}><RefreshableIPLocation ip={p.last_seen_ip} geo={p.last_seen_geo} /></DefRow>
                 </DefList>
               </Card>
               <Card title={t("admin.profiles.passport")}>
@@ -309,9 +309,13 @@ export function ProfileDetailPage() {
                       <div key={presence.id} className="presence-row">
                         <div>
                           <strong>{presence.server_id}</strong>
-                          <p className="muted-cell">
-                            {presence.node_id || "—"} · {presence.remote_addr || "—"} · {formatAbsTime(presence.connected_at)}
-                          </p>
+                          <div className="muted-cell presence-row__meta">
+                            <span>{presence.node_id || "—"}</span>
+                            <span>·</span>
+                            <RefreshableIPLocation ip={presence.remote_addr} compact />
+                            <span>·</span>
+                            <span>{formatAbsTime(presence.connected_at)}</span>
+                          </div>
                         </div>
                         <Button
                           size="sm"

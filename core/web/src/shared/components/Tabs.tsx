@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
 
 export interface TabItem<T extends string = string> {
@@ -15,8 +15,15 @@ interface Props<T extends string = string> {
 }
 
 export function Tabs<T extends string = string>({ value, onChange, tabs }: Props<T>) {
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const activeTab = listRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [value]);
+
   return (
-    <div className="tabs" role="tablist">
+    <div ref={listRef} className="tabs" role="tablist">
       {tabs.map((tab) => (
         <button
           key={tab.value}

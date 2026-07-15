@@ -304,6 +304,59 @@ type ExternalAPIToken struct {
 	UpdatedAt        time.Time
 }
 
+type IPGeoSourceType string
+
+const (
+	IPGeoSourceUpload        IPGeoSourceType = "upload"
+	IPGeoSourceURL           IPGeoSourceType = "url"
+	IPGeoSourceGitHubRelease IPGeoSourceType = "github_release"
+)
+
+type IPGeoSourceStatus string
+
+const (
+	IPGeoSourcePending  IPGeoSourceStatus = "pending"
+	IPGeoSourceUpdating IPGeoSourceStatus = "updating"
+	IPGeoSourceReady    IPGeoSourceStatus = "ready"
+	IPGeoSourceError    IPGeoSourceStatus = "error"
+)
+
+type IPGeoSource struct {
+	ID                  string
+	CatalogID           string
+	Name                string
+	Type                IPGeoSourceType
+	Format              string
+	DataFamily          string
+	SourceURL           string
+	GitHubRepository    string
+	AssetPattern        string
+	Homepage            string
+	License             string
+	Enabled             bool
+	Weight              int
+	AutoUpdate          bool
+	UpdateIntervalHours int
+	StorageFilename     string
+	OriginalFilename    string
+	ContentType         string
+	SHA256              string
+	SizeBytes           int64
+	Version             string
+	ETag                string
+	LastModified        string
+	Status              IPGeoSourceStatus
+	LastError           string
+	Fields              []string
+	SupportsIPv4        bool
+	SupportsIPv6        bool
+	LastCheckedAt       *time.Time
+	LastUpdatedAt       *time.Time
+	NextCheckAt         *time.Time
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
 type PlayerStore interface {
 	CreateOfflinePassportProfile(ctx context.Context, rawName string, protocolName string, passwordHash string, encryptedPassword string, keyFingerprint string) (identity.PassportProfile, error)
 	CreateOfflinePassport(ctx context.Context, rawName string, passwordHash string, encryptedPassword string, keyFingerprint string) (identity.Passport, error)
@@ -377,6 +430,10 @@ type PlayerStore interface {
 	GetMojangRoute(ctx context.Context, id string) (mojang.Route, error)
 	UpsertMojangRoute(ctx context.Context, route mojang.Route) (mojang.Route, error)
 	DeleteMojangRoute(ctx context.Context, id string) error
+	ListIPGeoSources(ctx context.Context) []IPGeoSource
+	GetIPGeoSource(ctx context.Context, id string) (IPGeoSource, error)
+	UpsertIPGeoSource(ctx context.Context, source IPGeoSource) (IPGeoSource, error)
+	DeleteIPGeoSource(ctx context.Context, id string) error
 	GetSystemSetting(ctx context.Context, key string) (map[string]any, error)
 	SetSystemSetting(ctx context.Context, key string, value map[string]any) error
 	ListProfilePresences(ctx context.Context, profileID string) []PlayerPresence

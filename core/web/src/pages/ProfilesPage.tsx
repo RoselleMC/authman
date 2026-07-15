@@ -12,7 +12,6 @@ import {
   ErrorState,
   Field,
   Icon,
-  IPLocation,
   Input,
   PageHeader,
   PageShell,
@@ -27,6 +26,7 @@ import { createProfile, deleteProfile, fetchProfiles, type IdentityListFilters, 
 import { createProfileBan, revokeBan, updateProfileStatus } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 import { BanDurationFields, BanStateCell, LockUntilCell, durationSeconds, isValidDuration, type DurationUnit } from "../components/PlayerStateCells";
+import { RefreshableIPLocation } from "../components/RefreshableIPLocation";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
 
@@ -149,7 +149,7 @@ export function ProfilesPage() {
     { key: "online", header: t("admin.presences.onlineState"), minWidth: "120px", render: (r) => <StatusBadge status={r.online ? "online" : "offline_status"} />, sortable: true, sortValue: (r) => r.online },
     { key: "ban", header: t("admin.bans.heading"), minWidth: "180px", defaultVisible: false, render: (r) => <BanStateCell ban={r.active_ban} />, sortable: true, sortValue: (r) => r.ban_expires_at ?? "" },
     { key: "lockedUntil", header: t("admin.player.lockedUntil"), minWidth: "180px", defaultVisible: false, render: (r) => <LockUntilCell lockedUntil={r.locked_until} />, sortable: true, sortValue: (r) => r.locked_until ?? "" },
-    { key: "lastSeenIp", header: t("admin.players.col.lastSeenIp"), minWidth: "220px", defaultVisible: false, render: (r) => <IPLocation ip={r.last_seen_ip} geo={r.last_seen_geo} /> },
+    { key: "lastSeenIp", header: t("admin.players.col.lastSeenIp"), minWidth: "220px", defaultVisible: false, render: (r) => <RefreshableIPLocation ip={r.last_seen_ip} geo={r.last_seen_geo} /> },
     { key: "open", header: "", mandatory: true, width: "44px", minWidth: "44px", align: "right", sticky: "right", render: () => <Icon name="chevronRight" size={16} /> },
   ];
 

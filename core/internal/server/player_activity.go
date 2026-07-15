@@ -19,6 +19,7 @@ const presenceReconcileBatchLimit = 500
 
 func (s *Server) StartBackground(ctx context.Context) {
 	s.startPresenceReconcileLoop(ctx)
+	s.startIPGeoUpdateLoop(ctx)
 }
 
 func (s *Server) startPresenceReconcileLoop(ctx context.Context) {

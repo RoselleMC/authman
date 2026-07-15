@@ -7,7 +7,6 @@ import {
   DefRow,
   ErrorState,
   Icon,
-  IPLocation,
   PageShell,
   coerceAuditEvent,
   formatAbsTime,
@@ -15,6 +14,7 @@ import {
   useI18n,
 } from "@authman/shared";
 import { fetchAuditEvent } from "../api/admin";
+import { RefreshableIPLocation } from "../components/RefreshableIPLocation";
 
 export function AuditDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
@@ -78,7 +78,7 @@ export function AuditDetailPage() {
             ))}
             {contextKeys.map((key) => (
               <DefRow key={key} k={t(`admin.audit.field.${key}`, key)}>
-                {key === "client_ip" ? <IPLocation ip={event.client_ip} geo={event.client_geo} /> : renderAuditValue(details[key])}
+                {key === "client_ip" ? <RefreshableIPLocation ip={event.client_ip} geo={event.client_geo} /> : renderAuditValue(details[key], key)}
               </DefRow>
             ))}
           </DefList>
@@ -87,7 +87,7 @@ export function AuditDetailPage() {
           {detailEntries.length ? (
             <DefList>
               {detailEntries.map(([key, value]) => (
-                <DefRow key={key} k={key}>{renderAuditValue(value)}</DefRow>
+                <DefRow key={key} k={key}>{renderAuditValue(value, key)}</DefRow>
               ))}
             </DefList>
           ) : (
@@ -99,8 +99,11 @@ export function AuditDetailPage() {
   );
 }
 
-function renderAuditValue(value: unknown) {
+function renderAuditValue(value: unknown, key = "") {
   if (value == null || value === "") return <span className="muted-cell">—</span>;
+  if (typeof value === "string" && (key === "ip" || key.endsWith("_ip") || key.endsWith("_addr"))) {
+    return <RefreshableIPLocation ip={value} />;
+  }
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return <Copyable value={String(value)} truncate={48} />;
   }

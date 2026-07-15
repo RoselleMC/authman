@@ -12,7 +12,6 @@ import {
   ErrorState,
   Field,
   Icon,
-  IPLocation,
   Input,
   PageHeader,
   PageShell,
@@ -28,6 +27,7 @@ import {
 import { createOfflinePassport, createPassportBan, deletePassport, fetchPassports, revokeBan, updatePassportStatus, type IdentityListFilters, type PassportRow } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
 import { BanDurationFields, BanStateCell, LockUntilCell, durationSeconds, isValidDuration, type DurationUnit } from "../components/PlayerStateCells";
+import { RefreshableIPLocation } from "../components/RefreshableIPLocation";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
 
@@ -186,7 +186,7 @@ export function PassportsPage() {
     { key: "lockedUntil", header: t("admin.player.lockedUntil"), minWidth: "180px", defaultVisible: false, render: (r) => <LockUntilCell lockedUntil={r.locked_until} />, sortable: true, sortValue: (r) => r.locked_until ?? "" },
     { key: "uuid", header: "UUID", minWidth: "300px", defaultVisible: false, render: (r) => <Copyable value={r.uuid} />, sortable: true, sortValue: (r) => r.uuid },
     { key: "lastSeen", header: t("admin.players.col.lastSeen"), minWidth: "150px", render: (r) => <span className="muted-cell">{formatRelativeTime(r.last_seen_at)}</span>, sortable: true, sortValue: (r) => r.last_seen_at ?? "" },
-    { key: "lastSeenIp", header: t("admin.players.col.lastSeenIp"), minWidth: "220px", defaultVisible: false, render: (r) => <IPLocation ip={r.last_seen_ip} geo={r.last_seen_geo} /> },
+    { key: "lastSeenIp", header: t("admin.players.col.lastSeenIp"), minWidth: "220px", defaultVisible: false, render: (r) => <RefreshableIPLocation ip={r.last_seen_ip} geo={r.last_seen_geo} /> },
     { key: "open", header: "", mandatory: true, width: "44px", minWidth: "44px", align: "right", sticky: "right", render: () => <Icon name="chevronRight" size={16} /> },
   ];
 

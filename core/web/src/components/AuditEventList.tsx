@@ -5,7 +5,6 @@ import {
   AdvancedList,
   EmptyState,
   Icon,
-  IPLocation,
   coerceAuditEvent,
   cx,
   formatAbsTime,
@@ -17,6 +16,7 @@ import {
 } from "@authman/shared";
 import { fetchAuditEvents, type AuditFilters } from "../api/admin";
 import { useSession } from "../auth/SessionContext";
+import { RefreshableIPLocation } from "./RefreshableIPLocation";
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
@@ -123,7 +123,7 @@ export function AuditEventList({ baseFilters, filterable = true, title, testId =
       header: t("admin.audit.col.ip"),
       minWidth: "220px",
       defaultVisible: true,
-      render: (ev) => <IPLocation ip={ev.client_ip} geo={ev.client_geo} />,
+      render: (ev) => <RefreshableIPLocation ip={ev.client_ip} geo={ev.client_geo} />,
     },
     {
       key: "details",
@@ -193,7 +193,7 @@ function auditEventHint(ev: SafeAuditEvent) {
 }
 
 function auditDetailsSummary(details: Record<string, unknown>) {
-  const keys = ["protocol_name", "username", "raw_offline_name", "server_id", "server_slug", "reason", "path", "client_ip"];
+  const keys = ["protocol_name", "username", "raw_offline_name", "server_id", "server_slug", "reason", "path"];
   const parts: string[] = [];
   for (const key of keys) {
     const value = stringValue(details[key]);

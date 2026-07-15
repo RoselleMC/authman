@@ -17,6 +17,7 @@ import {
   Field,
   Icon,
   Input,
+  IPLocation,
   LoadingState,
   PageHeader,
   PageShell,
@@ -35,14 +36,17 @@ import {
   type ListColumn,
   type SafeAdminUser,
 } from "@authman/shared";
+import { RefreshableIPLocation } from "../components/RefreshableIPLocation";
 import {
   createAdminRole,
   createAdminUser,
   createExternalAPIToken,
+  createIPGeoSource,
   deleteExternalAPITokenRecord,
   deleteAdminPasskey,
   deleteAdminUserPasskey,
   deleteAdminRole,
+  deleteIPGeoSource,
   disableAdminUserTOTP,
   disableAdminTOTP,
   fetchBrandingSettings,
@@ -52,6 +56,8 @@ import {
   fetchAdminUsers,
   fetchExternalAPITokens,
   fetchIPGeoSettings,
+  fetchIPGeoCatalog,
+  fetchIPGeoSources,
   fetchMojangSettings,
   fetchNodeCommunicationSettings,
   fetchPasswordRecoveryKeyStatus,
@@ -60,6 +66,9 @@ import {
   downloadPasswordRecoveryPrivateKey,
   registerAdminPasskey,
   factoryResetSystem,
+  lookupIPGeo,
+  refreshIPGeo,
+  refreshIPGeoSource,
   revokeExternalAPIToken,
   sendSMTPTest,
   startAdminTOTP,
@@ -72,15 +81,21 @@ import {
   updateBrandingSettings,
   updateExternalAPIToken,
   updateIPGeoSettings,
+  updateIPGeoSource,
   updateMojangSettings,
   updateNodeCommunicationSettings,
   updateSMTPSettings,
+  uploadIPGeoSource,
   type AdminAccountSecurity,
   type AdminPermission,
   type AdminRole,
   type BrandingSettings,
   type ExternalAPIToken,
   type IPGeoSettings,
+  type IPGeoCatalogEntry,
+  type IPGeoLookupResult,
+  type IPGeoSource,
+  type IPGeoSourceInput,
   type ListFilters,
   type MojangRuntimeSettings,
   type NodeCommunicationSettings,
@@ -1413,7 +1428,7 @@ function ExternalAPITokensPanel() {
       key: "last_used_ip",
       header: t("admin.settings.externalApi.col.lastIP"),
       minWidth: "150px",
-      render: (row) => row.last_used_ip || "—",
+      render: (row) => <RefreshableIPLocation ip={row.last_used_ip} compact />,
     },
     {
       key: "last_used_path",
@@ -1641,11 +1656,24 @@ function IPGeoSettingsPanel() {
   const toast = useToast();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["settings.ipGeo"], queryFn: fetchIPGeoSettings });
+  const sourcesQ = useQuery({ queryKey: ["settings.ipGeo.sources"], queryFn: fetchIPGeoSources });
+  const catalogQ = useQuery({ queryKey: ["settings.ipGeo.catalog"], queryFn: fetchIPGeoCatalog });
   const [form, setForm] = useState<IPGeoSettings | null>(null);
+  const [dialog, setDialog] = useState<"add" | "upload" | "edit" | null>(null);
+  const [editing, setEditing] = useState<IPGeoSource | null>(null);
+  const [deleteSource, setDeleteSource] = useState<IPGeoSource | null>(null);
+  const [sourceDraft, setSourceDraft] = useState<IPGeoSourceDraft>(emptyIPGeoSourceDraft());
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [lookupIP, setLookupIP] = useState("");
+  const [lookupResult, setLookupResult] = useState<IPGeoLookupResult | null>(null);
 
   useEffect(() => {
     if (q.data) setForm(q.data);
   }, [q.data]);
+
+  async function refreshSources() {
+    await qc.invalidateQueries({ queryKey: ["settings.ipGeo.sources"] });
+  }
 
   const save = useMutation({
     mutationFn: () => updateIPGeoSettings(form!),
@@ -1656,8 +1684,118 @@ function IPGeoSettingsPanel() {
     },
   });
 
+  const createSource = useMutation({
+    mutationFn: (input: IPGeoSourceInput) => createIPGeoSource(input),
+    onSuccess: (source) => {
+      setDialog(null);
+      toast.push({
+        tone: source.status === "error" ? "warning" : "success",
+        title: t(source.status === "error" ? "admin.settings.geo.source.createdWithError" : "admin.settings.geo.source.created"),
+      });
+    },
+    onSettled: refreshSources,
+  });
+
+  const updateSource = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: IPGeoSourceInput }) => updateIPGeoSource(id, input),
+    onSuccess: () => {
+      setDialog(null);
+      setEditing(null);
+      toast.push({ tone: "success", title: t("admin.settings.geo.source.saved") });
+    },
+    onSettled: refreshSources,
+  });
+
+  const uploadSource = useMutation({
+    mutationFn: () => uploadIPGeoSource({
+      file: uploadFile!,
+      name: sourceDraft.name.trim() || undefined,
+      format: sourceDraft.format || undefined,
+      data_family: sourceDraft.data_family.trim() || undefined,
+      enabled: sourceDraft.enabled,
+      weight: sourceDraft.weight,
+    }),
+    onSuccess: async () => {
+      setDialog(null);
+      setUploadFile(null);
+      toast.push({ tone: "success", title: t("admin.settings.geo.source.uploaded") });
+      await refreshSources();
+    },
+  });
+
+  const toggleSource = useMutation({
+    mutationFn: ({ source, enabled }: { source: IPGeoSource; enabled: boolean }) => updateIPGeoSource(source.id, { enabled }),
+    onSuccess: refreshSources,
+  });
+
+  const refreshSource = useMutation({
+    mutationFn: (source: IPGeoSource) => refreshIPGeoSource(source.id),
+    onSuccess: (source) => {
+      toast.push({ tone: "success", title: t("admin.settings.geo.source.refreshed").replace("{name}", source.name) });
+    },
+    onSettled: refreshSources,
+  });
+
+  const removeSource = useMutation({
+    mutationFn: (source: IPGeoSource) => deleteIPGeoSource(source.id),
+    onSuccess: async () => {
+      setDeleteSource(null);
+      toast.push({ tone: "success", title: t("admin.settings.geo.source.deleted") });
+      await refreshSources();
+    },
+  });
+
+  const lookup = useMutation({
+    mutationFn: (forceRefresh: boolean) => forceRefresh ? refreshIPGeo(lookupIP.trim()) : lookupIPGeo(lookupIP.trim()),
+    onSuccess: (result, forceRefresh) => {
+      setLookupResult(result);
+      if (forceRefresh) toast.push({ tone: "success", title: t("geo.refresh.success"), msg: result.ip });
+    },
+    onError: (_error, forceRefresh) => {
+      if (forceRefresh) toast.push({ tone: "danger", title: t("geo.refresh.failed"), msg: t("geo.refresh.kept") });
+    },
+  });
+
+  function openAdd() {
+    setEditing(null);
+    setSourceDraft(emptyIPGeoSourceDraft());
+    setDialog("add");
+  }
+
+  function openUpload() {
+    setEditing(null);
+    setSourceDraft({ ...emptyIPGeoSourceDraft(), mode: "upload", auto_update: false });
+    setUploadFile(null);
+    setDialog("upload");
+  }
+
+  function openEdit(source: IPGeoSource) {
+    setEditing(source);
+    setSourceDraft(ipGeoSourceDraft(source));
+    setDialog("edit");
+  }
+
+  function submitSource() {
+    if (dialog === "upload") {
+      uploadSource.mutate();
+      return;
+    }
+    const input = ipGeoSourceInput(sourceDraft);
+    if (dialog === "edit" && editing) {
+      updateSource.mutate({ id: editing.id, input });
+    } else {
+      createSource.mutate(input);
+    }
+  }
+
   if (q.error) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
-  if (q.isLoading || !form) return <LoadingState />;
+  if (sourcesQ.error) return <ErrorState error={sourcesQ.error} onRetry={() => sourcesQ.refetch()} />;
+  if (q.isLoading || sourcesQ.isLoading || !form) return <LoadingState />;
+
+  const sources = sourcesQ.data ?? [];
+  const readySources = sources.filter((source) => source.enabled && source.status === "ready");
+  const sourcePending = createSource.isPending || updateSource.isPending || uploadSource.isPending;
+  const sourceError = createSource.error ?? updateSource.error ?? uploadSource.error;
 
   return (
     <SettingsStack>
@@ -1665,10 +1803,10 @@ function IPGeoSettingsPanel() {
         title={t("admin.settings.geo")}
         actions={<Button variant="primary" icon="check" loading={save.isPending} onClick={() => save.mutate()}>{t("common.save")}</Button>}
       >
-        <p className="muted-cell">{t("admin.settings.geo.desc")}</p>
+        <p className="section-copy">{t("admin.settings.geo.desc")}</p>
         <div className="settings-form-grid">
           <Field label={t("admin.settings.geo.provider")}>
-            <Input value={form.provider} readOnly data-testid="ip-geo-provider" />
+            <Input value={t("admin.settings.geo.provider.value")} readOnly data-testid="ip-geo-provider" />
           </Field>
           <Field label={t("admin.settings.geo.cacheTTL")}>
             <Input type="number" min={60} max={604800} value={form.cache_ttl_seconds} onChange={(e) => setForm({ ...form, cache_ttl_seconds: Number(e.target.value) || 86400 })} />
@@ -1677,17 +1815,442 @@ function IPGeoSettingsPanel() {
             <Input type="number" min={1} max={30} value={form.request_timeout_seconds} onChange={(e) => setForm({ ...form, request_timeout_seconds: Number(e.target.value) || 3 })} />
           </Field>
         </div>
+        <Alert tone={readySources.length > 0 ? "success" : "warning"}>
+          {readySources.length > 0
+            ? t("admin.settings.geo.localReady").replace("{count}", String(readySources.length))
+            : t("admin.settings.geo.fallbackOnly")}
+        </Alert>
       </Card>
-      <Card title={t("admin.settings.proxySelection")}>
-        <p className="muted-cell">{t("admin.settings.geo.routes.desc")}</p>
-        <RouteSelection
-          routes={form.available_routes}
-          selected={form.enabled_route_ids}
-          onChange={(enabled_route_ids) => setForm({ ...form, enabled_route_ids })}
-        />
+
+      <Card
+        title={t("admin.settings.geo.sources")}
+        actions={
+          <>
+            <Button variant="secondary" size="sm" icon="plus" onClick={openAdd} data-testid="ip-geo-add-source">
+              {t("admin.settings.geo.source.add")}
+            </Button>
+            <Button variant="secondary" size="sm" icon="upload" onClick={openUpload} data-testid="ip-geo-upload-source">
+              {t("admin.settings.geo.source.upload")}
+            </Button>
+          </>
+        }
+      >
+        <p className="section-copy">{t("admin.settings.geo.sources.desc")}</p>
+        {sources.length === 0 ? (
+          <EmptyState icon="database" title={t("admin.settings.geo.sources.empty")} />
+        ) : (
+          <div className="geo-source-list" data-testid="ip-geo-source-list">
+            {sources.map((source) => {
+              const isRefreshing = refreshSource.isPending && refreshSource.variables?.id === source.id;
+              const isToggling = toggleSource.isPending && toggleSource.variables?.source.id === source.id;
+              return (
+                <div className="geo-source-row" key={source.id} data-testid={`ip-geo-source-${source.id}`}>
+                  <span className="geo-source-row__icon"><Icon name="database" size={18} /></span>
+                  <div className="geo-source-row__copy">
+                    <div className="geo-source-row__title">
+                      <strong>{source.name}</strong>
+                      <Badge tone={ipGeoStatusTone(source.status)} dot>{t(`admin.settings.geo.status.${source.status}`)}</Badge>
+                      <Badge tone="neutral">{source.format.toUpperCase() || t("admin.settings.geo.format.auto")}</Badge>
+                      <Badge tone="info">{source.data_family}</Badge>
+                    </div>
+                    <div className="geo-source-row__meta">
+                      <span>{ipGeoSourceTypeLabel(t, source.type)}</span>
+                      <span>{formatIPGeoBytes(source.size_bytes)}</span>
+                      <span>IPv4 {source.supports_ipv4 ? "✓" : "—"} · IPv6 {source.supports_ipv6 ? "✓" : "—"}</span>
+                      <span>{source.last_updated_at ? `${t("common.updated")} ${formatAbsTime(source.last_updated_at)}` : t("admin.settings.geo.neverUpdated")}</span>
+                      {source.license ? <span>{source.license}</span> : null}
+                    </div>
+                    {source.last_error ? <div className="geo-source-row__error">{source.last_error}</div> : null}
+                  </div>
+                  <div className="geo-source-row__weight" title={t("admin.settings.geo.weight.hint")}>
+                    <span>{t("admin.settings.geo.weight")}</span>
+                    <strong>{source.weight}</strong>
+                  </div>
+                  <label className="toggle-row geo-source-row__toggle">
+                    <input
+                      type="checkbox"
+                      checked={source.enabled}
+                      disabled={isToggling}
+                      onChange={(event) => toggleSource.mutate({ source, enabled: event.target.checked })}
+                      aria-label={t("admin.settings.geo.source.enabled")}
+                    />
+                    <span>{source.enabled ? t("status.enabled") : t("status.disabled")}</span>
+                  </label>
+                  <div className="geo-source-row__actions">
+                    {source.type !== "upload" ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon="refresh"
+                        loading={isRefreshing}
+                        onClick={() => refreshSource.mutate(source)}
+                        title={t("common.refresh")}
+                        aria-label={t("common.refresh")}
+                      />
+                    ) : null}
+                    <Button variant="ghost" size="sm" icon="settings" onClick={() => openEdit(source)} title={t("common.edit")} aria-label={t("common.edit")} />
+                    <Button variant="ghost" size="sm" icon="trash" onClick={() => setDeleteSource(source)} title={t("common.delete")} aria-label={t("common.delete")} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </Card>
+
+      <Card
+        title={t("admin.settings.geo.lookup")}
+        actions={
+          <Button variant="secondary" icon="search" loading={lookup.isPending} disabled={!lookupIP.trim()} onClick={() => lookup.mutate(false)} data-testid="ip-geo-lookup-submit">
+            {t("admin.settings.geo.lookup.run")}
+          </Button>
+        }
+      >
+        <div className="geo-lookup-input">
+          <Field label={t("admin.settings.geo.lookup.ip")} hint={t("admin.settings.geo.lookup.hint")}>
+            <Input value={lookupIP} onChange={(event) => setLookupIP(event.target.value)} placeholder="8.8.8.8" mono data-testid="ip-geo-lookup-ip" />
+          </Field>
+        </div>
+        {lookup.error ? <Alert tone="danger">{String(lookup.error)}</Alert> : null}
+        {lookupResult ? <IPGeoLookupView result={lookupResult} refreshing={lookup.isPending} onRefresh={() => lookup.mutate(true)} /> : null}
+      </Card>
+
+      <IPGeoSourceDialog
+        open={dialog !== null}
+        mode={dialog}
+        draft={sourceDraft}
+        onChange={setSourceDraft}
+        catalog={catalogQ.data ?? []}
+        catalogLoading={catalogQ.isLoading}
+        uploadFile={uploadFile}
+        onUploadFile={setUploadFile}
+        error={sourceError}
+        loading={sourcePending}
+        onClose={() => !sourcePending && setDialog(null)}
+        onSubmit={submitSource}
+      />
+      <ConfirmDialog
+        open={Boolean(deleteSource)}
+        title={t("admin.settings.geo.source.delete.title")}
+        body={t("admin.settings.geo.source.delete.desc").replace("{name}", deleteSource?.name ?? "")}
+        confirmLabel={t("common.delete")}
+        destructive
+        loading={removeSource.isPending}
+        onCancel={() => setDeleteSource(null)}
+        onConfirm={() => deleteSource && removeSource.mutate(deleteSource)}
+      />
     </SettingsStack>
   );
+}
+
+type IPGeoSourceDraft = {
+  mode: "catalog" | "github_release" | "url" | "upload";
+  catalog_id: string;
+  name: string;
+  format: string;
+  data_family: string;
+  source_url: string;
+  github_repository: string;
+  asset_pattern: string;
+  enabled: boolean;
+  weight: number;
+  auto_update: boolean;
+  update_interval_hours: number;
+};
+
+function emptyIPGeoSourceDraft(): IPGeoSourceDraft {
+  return {
+    mode: "catalog",
+    catalog_id: "",
+    name: "",
+    format: "",
+    data_family: "",
+    source_url: "",
+    github_repository: "",
+    asset_pattern: "*.mmdb",
+    enabled: true,
+    weight: 1,
+    auto_update: true,
+    update_interval_hours: 24,
+  };
+}
+
+function ipGeoSourceDraft(source: IPGeoSource): IPGeoSourceDraft {
+  return {
+    mode: source.type === "upload" ? "upload" : source.type,
+    catalog_id: source.catalog_id ?? "",
+    name: source.name,
+    format: source.format,
+    data_family: source.data_family,
+    source_url: source.source_url,
+    github_repository: source.github_repository,
+    asset_pattern: source.asset_pattern,
+    enabled: source.enabled,
+    weight: source.weight,
+    auto_update: source.auto_update,
+    update_interval_hours: source.update_interval_hours,
+  };
+}
+
+function ipGeoSourceInput(draft: IPGeoSourceDraft): IPGeoSourceInput {
+  if (draft.mode === "catalog") {
+    return {
+      catalog_id: draft.catalog_id,
+      enabled: draft.enabled,
+      weight: draft.weight,
+      auto_update: draft.auto_update,
+      update_interval_hours: draft.update_interval_hours,
+    };
+  }
+  return {
+    name: draft.name.trim(),
+    type: draft.mode === "upload" ? undefined : draft.mode,
+    format: draft.format || undefined,
+    data_family: draft.data_family.trim() || undefined,
+    source_url: draft.mode === "url" ? draft.source_url.trim() : undefined,
+    github_repository: draft.mode === "github_release" ? draft.github_repository.trim() : undefined,
+    asset_pattern: draft.mode === "github_release" ? draft.asset_pattern.trim() : undefined,
+    enabled: draft.enabled,
+    weight: draft.weight,
+    auto_update: draft.mode === "upload" ? false : draft.auto_update,
+    update_interval_hours: draft.update_interval_hours,
+  };
+}
+
+function IPGeoSourceDialog({
+  open,
+  mode,
+  draft,
+  onChange,
+  catalog,
+  catalogLoading,
+  uploadFile,
+  onUploadFile,
+  error,
+  loading,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  mode: "add" | "upload" | "edit" | null;
+  draft: IPGeoSourceDraft;
+  onChange: (draft: IPGeoSourceDraft) => void;
+  catalog: IPGeoCatalogEntry[];
+  catalogLoading: boolean;
+  uploadFile: File | null;
+  onUploadFile: (file: File | null) => void;
+  error: Error | null;
+  loading: boolean;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  const { t } = useI18n();
+  const selectedCatalog = catalog.find((entry) => entry.id === draft.catalog_id);
+  const set = <K extends keyof IPGeoSourceDraft>(key: K, value: IPGeoSourceDraft[K]) => onChange({ ...draft, [key]: value });
+  const isUpload = mode === "upload";
+  const isEditUpload = mode === "edit" && draft.mode === "upload";
+  const ready = isUpload
+    ? Boolean(uploadFile)
+    : draft.mode === "catalog"
+      ? Boolean(draft.catalog_id)
+      : Boolean(draft.name.trim()) && (draft.mode === "url" ? Boolean(draft.source_url.trim()) : Boolean(draft.github_repository.trim() && draft.asset_pattern.trim()));
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      icon={isUpload ? "upload" : "database"}
+      iconTone="primary"
+      title={isUpload ? t("admin.settings.geo.source.upload") : mode === "edit" ? t("admin.settings.geo.source.edit") : t("admin.settings.geo.source.add")}
+      desc={isUpload ? t("admin.settings.geo.upload.desc") : t("admin.settings.geo.source.dialog.desc")}
+      size="lg"
+      testId="ip-geo-source-dialog"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={loading}>{t("common.cancel")}</Button>
+          <Button variant="primary" icon={isUpload ? "upload" : "check"} loading={loading} disabled={!ready} onClick={onSubmit} data-testid="ip-geo-source-submit">
+            {isUpload ? t("admin.settings.geo.source.upload") : t("common.save")}
+          </Button>
+        </>
+      }
+    >
+      <div className="dialog-form">
+        {mode === "add" ? (
+          <Field label={t("admin.settings.geo.source.kind")}>
+            <Select
+              value={draft.mode}
+              onChange={(value) => onChange({ ...emptyIPGeoSourceDraft(), mode: value as IPGeoSourceDraft["mode"] })}
+              options={[
+                { value: "catalog", label: t("admin.settings.geo.source.kind.catalog") },
+                { value: "github_release", label: t("admin.settings.geo.source.kind.github") },
+                { value: "url", label: t("admin.settings.geo.source.kind.url") },
+              ]}
+              testId="ip-geo-source-kind"
+            />
+          </Field>
+        ) : null}
+
+        {draft.mode === "catalog" ? (
+          <>
+            <Field label={t("admin.settings.geo.catalog.entry")} hint={selectedCatalog?.description}>
+              <Select
+                value={draft.catalog_id}
+                disabled={catalogLoading}
+                placeholder={t("admin.settings.geo.catalog.choose")}
+                onChange={(value) => {
+                  const entry = catalog.find((item) => item.id === value);
+                  onChange({
+                    ...draft,
+                    catalog_id: value,
+                    format: entry?.format ?? draft.format,
+                    data_family: entry?.data_family ?? draft.data_family,
+                    update_interval_hours: entry?.update_interval_hours ?? draft.update_interval_hours,
+                  });
+                }}
+                options={catalog.map((entry) => ({ value: entry.id, label: entry.name }))}
+                testId="ip-geo-catalog-entry"
+              />
+            </Field>
+            {selectedCatalog ? (
+              <div className="geo-catalog-summary">
+                <div><span>{t("admin.settings.geo.dataFamily")}</span><strong>{selectedCatalog.data_family}</strong></div>
+                <div><span>{t("admin.settings.geo.scope")}</span><strong>{selectedCatalog.scope}</strong></div>
+                <div><span>{t("admin.settings.geo.license")}</span><strong>{selectedCatalog.license}</strong></div>
+                <a href={selectedCatalog.homepage} target="_blank" rel="noreferrer">{t("admin.settings.geo.catalog.homepage")}</a>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <Field label={t("admin.settings.geo.source.name")}>
+              <Input value={draft.name} onChange={(event) => set("name", event.target.value)} data-testid="ip-geo-source-name" />
+            </Field>
+            {isUpload ? (
+              <Field label={t("admin.settings.geo.source.file")} hint={t("admin.settings.geo.upload.formats")}>
+                <input className="input geo-file-input" type="file" accept=".mmdb,.ipdb,.awdb,.xdb,.dat,.db,.czdb,.txt,.gz,.zip,.tgz" onChange={(event) => onUploadFile(event.target.files?.[0] ?? null)} data-testid="ip-geo-source-file" />
+              </Field>
+            ) : null}
+            {draft.mode === "url" ? (
+              <Field label={t("admin.settings.geo.source.url")}>
+                <Input value={draft.source_url} onChange={(event) => set("source_url", event.target.value)} placeholder="https://example.com/database.mmdb" mono data-testid="ip-geo-source-url" />
+              </Field>
+            ) : null}
+            {draft.mode === "github_release" ? (
+              <div className="settings-form-grid">
+                <Field label={t("admin.settings.geo.source.repository")}>
+                  <Input value={draft.github_repository} onChange={(event) => set("github_repository", event.target.value)} placeholder="owner/repository" mono data-testid="ip-geo-source-repository" />
+                </Field>
+                <Field label={t("admin.settings.geo.source.asset")} hint={t("admin.settings.geo.source.asset.hint")}>
+                  <Input value={draft.asset_pattern} onChange={(event) => set("asset_pattern", event.target.value)} placeholder="*.mmdb" mono data-testid="ip-geo-source-asset" />
+                </Field>
+              </div>
+            ) : null}
+            <div className="settings-form-grid">
+              <Field label={t("admin.settings.geo.format")}>
+                <Select value={draft.format} onChange={(value) => set("format", value)} options={ipGeoFormatOptions(t)} testId="ip-geo-source-format" />
+              </Field>
+              <Field label={t("admin.settings.geo.dataFamily")} hint={t("admin.settings.geo.dataFamily.hint")}>
+                <Input value={draft.data_family} onChange={(event) => set("data_family", event.target.value)} placeholder="independent-provider" mono data-testid="ip-geo-source-family" />
+              </Field>
+            </div>
+          </>
+        )}
+
+        <div className="settings-form-grid">
+          <Field label={t("admin.settings.geo.weight")} hint={t("admin.settings.geo.weight.hint")}>
+            <Input type="number" min={1} max={100} value={draft.weight} onChange={(event) => set("weight", Math.max(1, Math.min(100, Number(event.target.value) || 1)))} data-testid="ip-geo-source-weight" />
+          </Field>
+          {!isUpload && !isEditUpload ? (
+            <Field label={t("admin.settings.geo.updateInterval")} hint={t("admin.settings.geo.updateInterval.hint")}>
+              <Input type="number" min={1} max={8760} value={draft.update_interval_hours} disabled={!draft.auto_update} onChange={(event) => set("update_interval_hours", Math.max(1, Number(event.target.value) || 24))} data-testid="ip-geo-source-interval" />
+            </Field>
+          ) : null}
+        </div>
+        <div className="geo-source-dialog-toggles">
+          <label className="toggle-row">
+            <input type="checkbox" checked={draft.enabled} onChange={(event) => set("enabled", event.target.checked)} />
+            <span>{t("admin.settings.geo.source.enabled")}</span>
+          </label>
+          {!isUpload && !isEditUpload ? (
+            <label className="toggle-row">
+              <input type="checkbox" checked={draft.auto_update} onChange={(event) => set("auto_update", event.target.checked)} />
+              <span>{t("admin.settings.geo.source.autoUpdate")}</span>
+            </label>
+          ) : null}
+        </div>
+        {error ? <Alert tone="danger">{String(error)}</Alert> : null}
+      </div>
+    </Dialog>
+  );
+}
+
+function IPGeoLookupView({ result, refreshing, onRefresh }: { result: IPGeoLookupResult; refreshing: boolean; onRefresh: () => void }) {
+  const { t } = useI18n();
+  const refreshProps = { onRefresh, refreshing, refreshLabel: t("geo.refresh.action") };
+  return (
+    <div className="geo-lookup-result" data-testid="ip-geo-lookup-result">
+      <div className="geo-lookup-result__summary">
+        {result.geo ? <IPLocation ip={result.ip} geo={result.geo} {...refreshProps} /> : <span className="muted-cell">{t("geo.unknown")}</span>}
+        <div>
+          <Badge tone={result.provider === "local_database" ? "success" : result.geo ? "warning" : "danger"} dot>
+            {result.provider === "local_database" ? t("admin.settings.geo.provider.local") : result.provider === "ip-api.com" ? t("admin.settings.geo.provider.fallback") : t("common.failed")}
+          </Badge>
+          {result.cached ? <Badge tone="neutral">{t("admin.settings.geo.lookup.cached")}</Badge> : null}
+        </div>
+      </div>
+      <div className="geo-evidence-list">
+        {result.evidence.map((item, index) => (
+          <div className="geo-evidence-row" key={`${item.source_id}-${index}`}>
+            <div>
+              <strong>{item.source_name}</strong>
+              <span>{item.data_family || item.source_id}{item.weight ? ` · ${t("admin.settings.geo.weight")} ${item.weight}` : ""}</span>
+            </div>
+            {item.geo ? <IPLocation ip={result.ip} geo={item.geo} compact {...refreshProps} /> : <span className="muted-cell">{item.error || t("admin.settings.geo.lookup.noMatch")}</span>}
+            <Badge tone={item.status === "hit" ? "success" : item.status === "fallback" ? "warning" : item.status === "error" ? "danger" : "neutral"}>
+              {t(`admin.settings.geo.evidence.${item.status}`)}
+            </Badge>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ipGeoFormatOptions(t: (key: string) => string) {
+  return [
+    { value: "", label: t("admin.settings.geo.format.auto") },
+    { value: "mmdb", label: "MMDB" },
+    { value: "ipdb", label: "IPDB" },
+    { value: "awdb", label: "AWDB" },
+    { value: "ip2region", label: "IP2Region XDB" },
+    { value: "qqwry", label: "QQWry DAT" },
+    { value: "zxinc", label: "ZXinc DB" },
+    { value: "czdb", label: "CZDB" },
+    { value: "plain", label: "Plain TXT" },
+  ];
+}
+
+function ipGeoStatusTone(status: IPGeoSource["status"]): "success" | "warning" | "danger" | "neutral" {
+  if (status === "ready") return "success";
+  if (status === "error") return "danger";
+  if (status === "updating") return "warning";
+  return "neutral";
+}
+
+function ipGeoSourceTypeLabel(t: (key: string) => string, type: IPGeoSource["type"]): string {
+  return t(`admin.settings.geo.source.type.${type}`);
+}
+
+function formatIPGeoBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "—";
+  const units = ["B", "KiB", "MiB", "GiB"];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
 }
 
 function CommunicationSettingsPanel() {

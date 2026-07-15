@@ -35,6 +35,7 @@ const profileSkinSelectColumns = "profile_id, model, skin_png, skin_content_type
 const passportSkinSelectColumns = "passport_id, model, skin_png, skin_content_type, skin_sha256, COALESCE(cape_png, ''::bytea), COALESCE(cape_content_type, ''), COALESCE(cape_sha256, ''), COALESCE(elytra_png, ''::bytea), COALESCE(elytra_content_type, ''), COALESCE(elytra_sha256, ''), created_at, updated_at"
 const externalAPITokenSelectColumns = "id, name, token_hash, token_fingerprint, status, created_by, call_count, last_used_at, last_used_ip, last_used_path, created_at, updated_at"
 const portalLinkSelectColumns = "id, kind, player_id, suggested_profile_id, server_id, issued_by_node_id, token_hash, status, created_at, expires_at, used_at, revoked_at"
+const ipGeoSourceSelectColumns = "id, catalog_id, name, source_type, format, data_family, source_url, github_repository, asset_pattern, homepage, license, enabled, weight, auto_update, update_interval_hours, storage_filename, original_filename, content_type, sha256, size_bytes, version, etag, last_modified, status, last_error, fields, supports_ipv4, supports_ipv6, last_checked_at, last_updated_at, next_check_at, created_at, updated_at"
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*Postgres, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -2154,6 +2155,101 @@ func (p *Postgres) DeleteMojangRoute(ctx context.Context, id string) error {
 	return nil
 }
 
+func (p *Postgres) ListIPGeoSources(ctx context.Context) []IPGeoSource {
+	rows, err := p.pool.Query(ctx, `SELECT `+ipGeoSourceSelectColumns+` FROM ip_geo_sources ORDER BY created_at ASC`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	sources := make([]IPGeoSource, 0)
+	for rows.Next() {
+		source, err := scanIPGeoSourceRow(rows)
+		if err == nil {
+			sources = append(sources, source)
+		}
+	}
+	return sources
+}
+
+func (p *Postgres) GetIPGeoSource(ctx context.Context, id string) (IPGeoSource, error) {
+	source, err := scanIPGeoSourceRow(p.pool.QueryRow(ctx, `
+		SELECT `+ipGeoSourceSelectColumns+`
+		FROM ip_geo_sources
+		WHERE id = $1
+	`, strings.TrimSpace(id)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return IPGeoSource{}, fmt.Errorf("IP geolocation source not found: %w", ErrNotFound)
+	}
+	return source, err
+}
+
+func (p *Postgres) UpsertIPGeoSource(ctx context.Context, source IPGeoSource) (IPGeoSource, error) {
+	fields := append([]string{}, source.Fields...)
+	return scanIPGeoSourceRow(p.pool.QueryRow(ctx, `
+		INSERT INTO ip_geo_sources (
+			id, catalog_id, name, source_type, format, data_family, source_url, github_repository, asset_pattern, homepage, license,
+			enabled, weight, auto_update, update_interval_hours, storage_filename, original_filename,
+			content_type, sha256, size_bytes, version, etag, last_modified, status, last_error, fields,
+			supports_ipv4, supports_ipv6, last_checked_at, last_updated_at, next_check_at, created_at, updated_at
+		)
+		VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+			$12, $13, $14, $15, $16, $17,
+			$18, $19, $20, $21, $22, $23, $24, $25, $26,
+			$27, $28, $29, $30, $31, COALESCE(NULLIF($32, '0001-01-01 00:00:00+00'::timestamptz), now()), now()
+		)
+		ON CONFLICT (id) DO UPDATE SET
+			catalog_id = EXCLUDED.catalog_id,
+			name = EXCLUDED.name,
+			source_type = EXCLUDED.source_type,
+			format = EXCLUDED.format,
+			data_family = EXCLUDED.data_family,
+			source_url = EXCLUDED.source_url,
+			github_repository = EXCLUDED.github_repository,
+			asset_pattern = EXCLUDED.asset_pattern,
+			homepage = EXCLUDED.homepage,
+			license = EXCLUDED.license,
+			enabled = EXCLUDED.enabled,
+			weight = EXCLUDED.weight,
+			auto_update = EXCLUDED.auto_update,
+			update_interval_hours = EXCLUDED.update_interval_hours,
+			storage_filename = EXCLUDED.storage_filename,
+			original_filename = EXCLUDED.original_filename,
+			content_type = EXCLUDED.content_type,
+			sha256 = EXCLUDED.sha256,
+			size_bytes = EXCLUDED.size_bytes,
+			version = EXCLUDED.version,
+			etag = EXCLUDED.etag,
+			last_modified = EXCLUDED.last_modified,
+			status = EXCLUDED.status,
+			last_error = EXCLUDED.last_error,
+			fields = EXCLUDED.fields,
+			supports_ipv4 = EXCLUDED.supports_ipv4,
+			supports_ipv6 = EXCLUDED.supports_ipv6,
+			last_checked_at = EXCLUDED.last_checked_at,
+			last_updated_at = EXCLUDED.last_updated_at,
+			next_check_at = EXCLUDED.next_check_at,
+			updated_at = now()
+		RETURNING `+ipGeoSourceSelectColumns+`
+	`,
+		source.ID, source.CatalogID, source.Name, source.Type, source.Format, source.DataFamily, source.SourceURL, source.GitHubRepository, source.AssetPattern, source.Homepage, source.License,
+		source.Enabled, source.Weight, source.AutoUpdate, source.UpdateIntervalHours, source.StorageFilename, source.OriginalFilename,
+		source.ContentType, source.SHA256, source.SizeBytes, source.Version, source.ETag, source.LastModified, source.Status, source.LastError, fields,
+		source.SupportsIPv4, source.SupportsIPv6, source.LastCheckedAt, source.LastUpdatedAt, source.NextCheckAt, source.CreatedAt,
+	))
+}
+
+func (p *Postgres) DeleteIPGeoSource(ctx context.Context, id string) error {
+	tag, err := p.pool.Exec(ctx, `DELETE FROM ip_geo_sources WHERE id = $1`, strings.TrimSpace(id))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("IP geolocation source not found: %w", ErrNotFound)
+	}
+	return nil
+}
+
 func (p *Postgres) GetSystemSetting(ctx context.Context, key string) (map[string]any, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -3936,6 +4032,20 @@ func scanMojangRouteRow(row playerScanner) (mojang.Route, error) {
 	return route, err
 }
 
+func scanIPGeoSourceRow(row playerScanner) (IPGeoSource, error) {
+	var source IPGeoSource
+	err := row.Scan(
+		&source.ID, &source.CatalogID, &source.Name, &source.Type, &source.Format, &source.DataFamily,
+		&source.SourceURL, &source.GitHubRepository, &source.AssetPattern, &source.Homepage, &source.License, &source.Enabled, &source.Weight,
+		&source.AutoUpdate, &source.UpdateIntervalHours, &source.StorageFilename, &source.OriginalFilename,
+		&source.ContentType, &source.SHA256, &source.SizeBytes, &source.Version, &source.ETag,
+		&source.LastModified, &source.Status, &source.LastError, &source.Fields, &source.SupportsIPv4,
+		&source.SupportsIPv6, &source.LastCheckedAt, &source.LastUpdatedAt, &source.NextCheckAt,
+		&source.CreatedAt, &source.UpdatedAt,
+	)
+	return source, err
+}
+
 func scanPresenceRow(row playerScanner) (PlayerPresence, error) {
 	var presence PlayerPresence
 	err := row.Scan(
@@ -4682,6 +4792,45 @@ CREATE TABLE IF NOT EXISTS system_settings (
 	value jsonb NOT NULL DEFAULT '{}'::jsonb,
 	updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS ip_geo_sources (
+	id text PRIMARY KEY,
+	catalog_id text NOT NULL DEFAULT '',
+	name text NOT NULL,
+	source_type text NOT NULL CHECK (source_type IN ('upload', 'url', 'github_release')),
+	format text NOT NULL DEFAULT '',
+	data_family text NOT NULL DEFAULT '',
+	source_url text NOT NULL DEFAULT '',
+	github_repository text NOT NULL DEFAULT '',
+	asset_pattern text NOT NULL DEFAULT '',
+	homepage text NOT NULL DEFAULT '',
+	license text NOT NULL DEFAULT '',
+	enabled boolean NOT NULL DEFAULT true,
+	weight integer NOT NULL DEFAULT 1 CHECK (weight BETWEEN 1 AND 100),
+	auto_update boolean NOT NULL DEFAULT false,
+	update_interval_hours integer NOT NULL DEFAULT 24 CHECK (update_interval_hours BETWEEN 1 AND 8760),
+	storage_filename text NOT NULL DEFAULT '',
+	original_filename text NOT NULL DEFAULT '',
+	content_type text NOT NULL DEFAULT '',
+	sha256 text NOT NULL DEFAULT '',
+	size_bytes bigint NOT NULL DEFAULT 0,
+	version text NOT NULL DEFAULT '',
+	etag text NOT NULL DEFAULT '',
+	last_modified text NOT NULL DEFAULT '',
+	status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'updating', 'ready', 'error')),
+	last_error text NOT NULL DEFAULT '',
+	fields text[] NOT NULL DEFAULT ARRAY[]::text[],
+	supports_ipv4 boolean NOT NULL DEFAULT false,
+	supports_ipv6 boolean NOT NULL DEFAULT false,
+	last_checked_at timestamptz,
+	last_updated_at timestamptz,
+	next_check_at timestamptz,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ip_geo_sources_due_idx
+	ON ip_geo_sources (next_check_at)
+	WHERE auto_update = true;
 
 CREATE TABLE IF NOT EXISTS passport_premium_textures (
 	passport_id text PRIMARY KEY REFERENCES passports(uuid) ON DELETE CASCADE,

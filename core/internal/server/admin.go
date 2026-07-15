@@ -63,10 +63,9 @@ type mojangRuntimeSettingsRequest struct {
 }
 
 type ipGeoSettingsRequest struct {
-	EnabledRouteIDs       []string `json:"enabled_route_ids"`
-	CacheTTLSeconds       int      `json:"cache_ttl_seconds"`
-	RequestTimeoutSeconds int      `json:"request_timeout_seconds"`
-	Provider              string   `json:"provider"`
+	CacheTTLSeconds       int    `json:"cache_ttl_seconds"`
+	RequestTimeoutSeconds int    `json:"request_timeout_seconds"`
+	Provider              string `json:"provider"`
 }
 
 type downstreamServerRequest struct {
@@ -364,11 +363,19 @@ func (s *Server) handleAdminPassports(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := make([]map[string]any, 0, len(passports))
+	missingGeoIPs := make([]string, 0, len(passports))
+	for _, passport := range passports {
+		if passport.LastSeenGeo == nil && strings.TrimSpace(passport.LastSeenIP) != "" {
+			missingGeoIPs = append(missingGeoIPs, passport.LastSeenIP)
+		}
+	}
+	resolvedGeos := s.lookupIPGeoBatch(r.Context(), missingGeoIPs)
 	now := time.Now()
 	for _, passport := range passports {
 		profiles := s.store.ListProfilesForPassport(r.Context(), passport.ID)
 		presences := s.store.ListPassportPresences(r.Context(), passport.ID)
 		row := passportRowData(passport, profiles, presences)
+		enrichResolvedIPGeo(row, passport.LastSeenIP, passport.LastSeenGeo, resolvedGeos)
 		s.enrichPassportRow(r.Context(), row, passport, now)
 		data = append(data, row)
 	}
@@ -411,6 +418,7 @@ func (s *Server) handleAdminCreateOfflinePassport(w http.ResponseWriter, r *http
 		"passport_id": passport.ID,
 	})
 	row := passportRowData(passport, s.store.ListProfilesForPassport(r.Context(), passport.ID), s.store.ListPassportPresences(r.Context(), passport.ID))
+	s.enrichMissingIPGeo(r.Context(), row, passport.LastSeenIP, passport.LastSeenGeo)
 	s.enrichPassportRow(r.Context(), row, passport, time.Now())
 	api.WriteJSON(w, http.StatusCreated, row, nil)
 }
@@ -446,6 +454,14 @@ func (s *Server) handleAdminPassportDetail(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	data := passportDetailData(passport, profiles, credential, presences, bans, profileBans, eventData)
+	s.enrichMissingIPGeo(r.Context(), data, passport.LastSeenIP, passport.LastSeenGeo)
+	if rows, ok := data["profiles"].([]map[string]any); ok {
+		for index, profile := range profiles {
+			if index < len(rows) {
+				s.enrichMissingIPGeo(r.Context(), rows[index], profile.LastSeenIP, profile.LastSeenGeo)
+			}
+		}
+	}
 	data["skin"] = s.passportSkinData(r.Context(), passport)
 	data["portal_links"] = portalLinkRows(s.store.ListPortalLinksForPassport(r.Context(), passport.ID))
 	api.WriteJSON(w, http.StatusOK, data, nil)
@@ -528,6 +544,13 @@ func (s *Server) handleAdminProfiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := make([]map[string]any, 0, len(profiles))
+	missingGeoIPs := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		if profile.LastSeenGeo == nil && strings.TrimSpace(profile.LastSeenIP) != "" {
+			missingGeoIPs = append(missingGeoIPs, profile.LastSeenIP)
+		}
+	}
+	resolvedGeos := s.lookupIPGeoBatch(r.Context(), missingGeoIPs)
 	now := time.Now()
 	for _, profile := range profiles {
 		var passport *identity.Passport
@@ -535,6 +558,7 @@ func (s *Server) handleAdminProfiles(w http.ResponseWriter, r *http.Request) {
 			passport = &p
 		}
 		row := profileRowData(profile, passport, s.store.ListProfilePresences(r.Context(), profile.ID))
+		enrichResolvedIPGeo(row, profile.LastSeenIP, profile.LastSeenGeo, resolvedGeos)
 		s.enrichProfileRow(r.Context(), row, profile, passport, now)
 		data = append(data, row)
 	}
@@ -622,6 +646,7 @@ func (s *Server) handleAdminProfileDetail(w http.ResponseWriter, r *http.Request
 	presences := s.store.ListProfilePresences(r.Context(), profile.ID)
 	bans := s.store.ListBans(r.Context(), store.BanScopeProfile, profile.ID, true, time.Now())
 	data := profileDetailData(profile, passport, presences, bans, eventData)
+	s.enrichMissingIPGeo(r.Context(), data, profile.LastSeenIP, profile.LastSeenGeo)
 	data["skin"] = s.profileSkinData(r.Context(), profile, passport)
 	api.WriteJSON(w, http.StatusOK, data, nil)
 }
@@ -1159,9 +1184,18 @@ func (s *Server) handleAdminAuditEvents(w http.ResponseWriter, r *http.Request) 
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "audit.query_failed", "failed to query audit events"))
 		return
 	}
+	missingGeoIPs := make([]string, 0, len(events))
+	for _, event := range events {
+		if event.Details["client_geo"] == nil {
+			if ip := detailText(event.Details["client_ip"]); ip != "" {
+				missingGeoIPs = append(missingGeoIPs, ip)
+			}
+		}
+	}
+	resolvedGeos := s.lookupIPGeoBatch(r.Context(), missingGeoIPs)
 	data := make([]map[string]any, 0, len(events))
 	for _, event := range events {
-		data = append(data, auditEventData(event))
+		data = append(data, auditEventDataWithGeo(event, resolvedGeos[detailText(event.Details["client_ip"])]))
 	}
 	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), total, params))
 }
@@ -1181,7 +1215,7 @@ func (s *Server) handleAdminAuditEventDetail(w http.ResponseWriter, r *http.Requ
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "audit.query_failed", "failed to query audit event"))
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, auditEventData(event), nil)
+	api.WriteJSON(w, http.StatusOK, s.auditEventData(r.Context(), event), nil)
 }
 
 func (s *Server) handleAdminMojangRoutes(w http.ResponseWriter, r *http.Request) {
@@ -1397,7 +1431,7 @@ func (s *Server) handleAdminIPGeoSettings(w http.ResponseWriter, r *http.Request
 		return
 	}
 	settings := s.ipGeoSettings(r.Context())
-	api.WriteJSON(w, http.StatusOK, ipGeoSettingsData(settings, s.allMojangRoutes(r.Context())), nil)
+	api.WriteJSON(w, http.StatusOK, ipGeoSettingsData(settings), nil)
 }
 
 func (s *Server) handleAdminUpdateIPGeoSettings(w http.ResponseWriter, r *http.Request) {
@@ -1418,7 +1452,7 @@ func (s *Server) handleAdminUpdateIPGeoSettings(w http.ResponseWriter, r *http.R
 	}
 	s.reloadIPGeoSettings(r.Context())
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, "ip_geo", "settings.ip_geo.update", ipGeoSettingsMap(settings))
-	api.WriteJSON(w, http.StatusOK, ipGeoSettingsData(settings, s.allMojangRoutes(r.Context())), nil)
+	api.WriteJSON(w, http.StatusOK, ipGeoSettingsData(settings), nil)
 }
 
 func (s *Server) handleAdminBrandingSettings(w http.ResponseWriter, r *http.Request) {
@@ -1579,7 +1613,6 @@ type mojangRuntimeSettings struct {
 }
 
 type ipGeoSettings struct {
-	EnabledRouteIDs       []string
 	CacheTTLSeconds       int
 	RequestTimeoutSeconds int
 	Provider              string
@@ -1630,7 +1663,6 @@ func (s *Server) ipGeoSettings(ctx context.Context) ipGeoSettings {
 		return defaults
 	}
 	return normalizeIPGeoSettings(ipGeoSettingsRequest{
-		EnabledRouteIDs:       stringList(raw["enabled_route_ids"]),
 		CacheTTLSeconds:       intValue(raw["cache_ttl_seconds"], defaults.CacheTTLSeconds),
 		RequestTimeoutSeconds: intValue(raw["request_timeout_seconds"], defaults.RequestTimeoutSeconds),
 		Provider:              stringValue(raw["provider"], defaults.Provider),
@@ -1690,12 +1722,11 @@ func normalizeMojangSettings(req mojangRuntimeSettingsRequest, timeout time.Dura
 
 func normalizeIPGeoSettings(req ipGeoSettingsRequest) ipGeoSettings {
 	settings := ipGeoSettings{
-		EnabledRouteIDs:       cleanIDs(req.EnabledRouteIDs),
 		CacheTTLSeconds:       req.CacheTTLSeconds,
 		RequestTimeoutSeconds: req.RequestTimeoutSeconds,
 		Provider:              strings.TrimSpace(req.Provider),
 	}
-	if settings.Provider == "" {
+	if !strings.EqualFold(settings.Provider, "ip-api.com") {
 		settings.Provider = "ip-api.com"
 	}
 	if settings.CacheTTLSeconds <= 0 {
@@ -1750,19 +1781,17 @@ func mojangSettingsMap(settings mojangRuntimeSettings) map[string]any {
 	}
 }
 
-func ipGeoSettingsData(settings ipGeoSettings, routes []mojang.Route) map[string]any {
+func ipGeoSettingsData(settings ipGeoSettings) map[string]any {
 	return map[string]any{
-		"enabled_route_ids":       settings.EnabledRouteIDs,
 		"cache_ttl_seconds":       settings.CacheTTLSeconds,
 		"request_timeout_seconds": settings.RequestTimeoutSeconds,
 		"provider":                settings.Provider,
-		"available_routes":        routeChoiceData(routes),
+		"mode":                    "local_database_with_direct_fallback",
 	}
 }
 
 func ipGeoSettingsMap(settings ipGeoSettings) map[string]any {
 	return map[string]any{
-		"enabled_route_ids":       settings.EnabledRouteIDs,
 		"cache_ttl_seconds":       settings.CacheTTLSeconds,
 		"request_timeout_seconds": settings.RequestTimeoutSeconds,
 		"provider":                settings.Provider,
@@ -2151,9 +2180,17 @@ func (s *Server) handleAdminListDownstreamServerPrivilegedPassports(w http.Respo
 		return
 	}
 	data := make([]map[string]any, 0, len(rows))
+	missingGeoIPs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.Passport.LastSeenGeo == nil && strings.TrimSpace(row.Passport.LastSeenIP) != "" {
+			missingGeoIPs = append(missingGeoIPs, row.Passport.LastSeenIP)
+		}
+	}
+	resolvedGeos := s.lookupIPGeoBatch(r.Context(), missingGeoIPs)
 	now := time.Now()
 	for _, row := range rows {
 		item := downstreamServerPrivilegedPassportData(row, s.store.ListProfilesForPassport(r.Context(), row.Passport.ID), s.store.ListPassportPresences(r.Context(), row.Passport.ID))
+		enrichResolvedIPGeo(item, row.Passport.LastSeenIP, row.Passport.LastSeenGeo, resolvedGeos)
 		s.enrichPassportRow(r.Context(), item, row.Passport, now)
 		data = append(data, item)
 	}
@@ -2192,6 +2229,7 @@ func (s *Server) handleAdminAddDownstreamServerPrivilegedPassport(w http.Respons
 	})
 	s.pushAllNodeSync(r.Context(), "server.privileged_passport.add")
 	item := downstreamServerPrivilegedPassportData(allow, s.store.ListProfilesForPassport(r.Context(), allow.Passport.ID), s.store.ListPassportPresences(r.Context(), allow.Passport.ID))
+	s.enrichMissingIPGeo(r.Context(), item, allow.Passport.LastSeenIP, allow.Passport.LastSeenGeo)
 	s.enrichPassportRow(r.Context(), item, allow.Passport, time.Now())
 	api.WriteJSON(w, http.StatusCreated, item, nil)
 }
@@ -3124,8 +3162,26 @@ func randomServerID(prefix string) (string, error) {
 	return prefix + "-" + strings.ToLower(token), nil
 }
 
-func auditEventData(event audit.Event) map[string]any {
+func (s *Server) auditEventData(ctx context.Context, event audit.Event) map[string]any {
 	clientIP := detailText(event.Details["client_ip"])
+	var resolved *identity.IPGeo
+	if event.Details["client_geo"] == nil && clientIP != "" && s.ipGeo != nil {
+		resolved = s.ipGeo.lookup(ctx, clientIP)
+	}
+	return auditEventDataWithGeo(event, resolved)
+}
+
+func auditEventDataWithGeo(event audit.Event, resolved *identity.IPGeo) map[string]any {
+	clientIP := detailText(event.Details["client_ip"])
+	details := make(map[string]any, len(event.Details))
+	for key, value := range event.Details {
+		details[key] = value
+	}
+	clientGeo := details["client_geo"]
+	if clientGeo == nil && resolved != nil {
+		clientGeo = resolved
+		details["client_geo"] = resolved
+	}
 	return map[string]any{
 		"id":             event.ID,
 		"occurred_at":    event.Occurred,
@@ -3143,8 +3199,8 @@ func auditEventData(event audit.Event) map[string]any {
 		"type":           event.Type,
 		"event_type":     event.Type,
 		"client_ip":      emptyStringNil(clientIP),
-		"client_geo":     event.Details["client_geo"],
-		"details":        event.Details,
+		"client_geo":     clientGeo,
+		"details":        details,
 	}
 }
 
@@ -3244,6 +3300,24 @@ func (s *Server) enrichProfileRow(ctx context.Context, row map[string]any, profi
 	if ban, ok := firstActiveBan(s.store.ListBans(ctx, store.BanScopeProfile, profile.ID, false, now), now); ok {
 		row["active_ban"] = banRows([]store.PlayerBan{ban})[0]
 		row["ban_expires_at"] = ban.ExpiresAt
+	}
+}
+
+func (s *Server) enrichMissingIPGeo(ctx context.Context, row map[string]any, ip string, existing *identity.IPGeo) {
+	if existing != nil || s.ipGeo == nil || strings.TrimSpace(ip) == "" {
+		return
+	}
+	if geo := s.ipGeo.lookup(ctx, ip); geo != nil {
+		row["last_seen_geo"] = geo
+	}
+}
+
+func enrichResolvedIPGeo(row map[string]any, ip string, existing *identity.IPGeo, resolved map[string]*identity.IPGeo) {
+	if existing != nil || len(resolved) == 0 {
+		return
+	}
+	if geo := resolved[strings.TrimSpace(ip)]; geo != nil {
+		row["last_seen_geo"] = geo
 	}
 }
 
@@ -3461,7 +3535,7 @@ func (s *Server) auditWithClientIP(r *http.Request, ipOverride string, actorType
 	}
 	if _, ok := details["client_geo"]; !ok {
 		if ip := detailText(details["client_ip"]); ip != "" {
-			if geo := s.lookupIPGeo(r.Context(), ip); geo != nil {
+			if geo := s.lookupLocalIPGeo(ip); geo != nil {
 				details["client_geo"] = geo
 			}
 		}
@@ -3490,7 +3564,7 @@ func clientIP(r *http.Request) string {
 }
 
 func normalizeClientIPValue(value string) string {
-	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(strings.TrimSpace(value), "/")
 	if value == "" {
 		return ""
 	}
@@ -3509,7 +3583,7 @@ func (s *Server) requestIPGeoWithClientIP(r *http.Request, ipOverride string) (s
 	if ip == "" {
 		ip = clientIP(r)
 	}
-	return ip, s.lookupIPGeo(r.Context(), ip)
+	return ip, s.lookupLocalIPGeo(ip)
 }
 
 func (s *Server) lookupIPGeo(ctx context.Context, ip string) *identity.IPGeo {
@@ -3517,6 +3591,20 @@ func (s *Server) lookupIPGeo(ctx context.Context, ip string) *identity.IPGeo {
 		return nil
 	}
 	return s.ipGeo.lookup(ctx, ip)
+}
+
+func (s *Server) lookupIPGeoBatch(ctx context.Context, ips []string) map[string]*identity.IPGeo {
+	if s.ipGeo == nil || len(ips) == 0 {
+		return map[string]*identity.IPGeo{}
+	}
+	return s.ipGeo.lookupBatch(ctx, ips)
+}
+
+func (s *Server) lookupLocalIPGeo(ip string) *identity.IPGeo {
+	if s.ipGeo == nil {
+		return nil
+	}
+	return s.ipGeo.lookupLocalOnly(ip)
 }
 
 func detailText(value any) string {

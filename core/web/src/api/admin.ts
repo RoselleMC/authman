@@ -784,11 +784,10 @@ export async function updateMojangSettings(input: MojangRuntimeSettings): Promis
 }
 
 export interface IPGeoSettings {
-  enabled_route_ids: string[];
   cache_ttl_seconds: number;
   request_timeout_seconds: number;
   provider: string;
-  available_routes: RouteChoice[];
+  mode: "local_database_with_direct_fallback";
 }
 
 export async function fetchIPGeoSettings(): Promise<IPGeoSettings> {
@@ -797,9 +796,143 @@ export async function fetchIPGeoSettings(): Promise<IPGeoSettings> {
 }
 
 export async function updateIPGeoSettings(input: IPGeoSettings): Promise<IPGeoSettings> {
-  const { available_routes: _availableRoutes, ...body } = input;
+  const { mode: _mode, ...body } = input;
   const res = await apiFetch<IPGeoSettings>("/admin/settings/ip-geo", { method: "PUT", body });
   return res.data;
+}
+
+export type IPGeoSourceType = "upload" | "url" | "github_release";
+export type IPGeoSourceStatus = "pending" | "updating" | "ready" | "error";
+
+export interface IPGeoSource {
+  id: string;
+  catalog_id?: string | null;
+  name: string;
+  type: IPGeoSourceType;
+  format: string;
+  data_family: string;
+  source_url: string;
+  github_repository: string;
+  asset_pattern: string;
+  homepage: string;
+  license: string;
+  enabled: boolean;
+  weight: number;
+  auto_update: boolean;
+  update_interval_hours: number;
+  original_filename: string;
+  sha256: string;
+  size_bytes: number;
+  version: string;
+  status: IPGeoSourceStatus;
+  last_error?: string | null;
+  fields: string[];
+  supports_ipv4: boolean;
+  supports_ipv6: boolean;
+  last_checked_at?: string | null;
+  last_updated_at?: string | null;
+  next_check_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IPGeoCatalogEntry {
+  id: string;
+  name: string;
+  description: string;
+  type: "url" | "github_release";
+  format: string;
+  data_family: string;
+  source_url: string;
+  github_repository: string;
+  asset_pattern: string;
+  homepage: string;
+  license: string;
+  update_interval_hours: number;
+  scope: string;
+}
+
+export interface IPGeoSourceInput {
+  catalog_id?: string;
+  name?: string;
+  type?: "url" | "github_release";
+  format?: string;
+  data_family?: string;
+  source_url?: string;
+  github_repository?: string;
+  asset_pattern?: string;
+  enabled?: boolean;
+  weight?: number;
+  auto_update?: boolean;
+  update_interval_hours?: number;
+}
+
+export interface IPGeoLookupEvidence {
+  source_id: string;
+  source_name: string;
+  data_family: string;
+  weight: number;
+  status: "hit" | "no_match" | "error" | "fallback";
+  geo: import("@authman/shared").IPGeo | null;
+  error?: string | null;
+}
+
+export interface IPGeoLookupResult {
+  ip: string;
+  provider: string;
+  cached: boolean;
+  geo: import("@authman/shared").IPGeo | null;
+  evidence: IPGeoLookupEvidence[];
+}
+
+export async function fetchIPGeoSources(): Promise<IPGeoSource[]> {
+  const res = await apiFetch<IPGeoSource[]>("/admin/ip-geo/sources");
+  return res.data;
+}
+
+export async function fetchIPGeoCatalog(): Promise<IPGeoCatalogEntry[]> {
+  const res = await apiFetch<IPGeoCatalogEntry[]>("/admin/ip-geo/catalog");
+  return res.data;
+}
+
+export async function createIPGeoSource(input: IPGeoSourceInput): Promise<IPGeoSource> {
+  const res = await apiFetch<IPGeoSource>("/admin/ip-geo/sources", { method: "POST", body: input });
+  return res.data;
+}
+
+export async function updateIPGeoSource(id: string, input: IPGeoSourceInput): Promise<IPGeoSource> {
+  const res = await apiFetch<IPGeoSource>(`/admin/ip-geo/sources/${encodeURIComponent(id)}`, { method: "PUT", body: input });
+  return res.data;
+}
+
+export async function deleteIPGeoSource(id: string): Promise<void> {
+  await apiFetch<null>(`/admin/ip-geo/sources/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function refreshIPGeoSource(id: string): Promise<IPGeoSource> {
+  const res = await apiFetch<IPGeoSource>(`/admin/ip-geo/sources/${encodeURIComponent(id)}/refresh`, { method: "POST" });
+  return res.data;
+}
+
+export async function lookupIPGeo(ip: string): Promise<IPGeoLookupResult> {
+  const res = await apiFetch<IPGeoLookupResult>("/admin/ip-geo/lookup", { method: "POST", body: { ip } });
+  return res.data;
+}
+
+export async function refreshIPGeo(ip: string): Promise<IPGeoLookupResult> {
+  const res = await apiFetch<IPGeoLookupResult>("/admin/ip-geo/lookup", { method: "POST", body: { ip, refresh: true } });
+  return res.data;
+}
+
+export async function uploadIPGeoSource(input: { file: File; name?: string; format?: string; data_family?: string; enabled?: boolean; weight?: number }): Promise<IPGeoSource> {
+  const form = new FormData();
+  form.append("file", input.file);
+  if (input.name) form.append("name", input.name);
+  if (input.format) form.append("format", input.format);
+  if (input.data_family) form.append("data_family", input.data_family);
+  form.append("enabled", String(input.enabled ?? true));
+  form.append("weight", String(input.weight ?? 1));
+  return multipartFetch<IPGeoSource>("/admin/ip-geo/sources/upload", { method: "POST", body: form });
 }
 
 export interface NodeCommunicationSettings {

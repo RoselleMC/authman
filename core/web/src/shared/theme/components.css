@@ -218,6 +218,26 @@
   color: var(--color-primary);
   background: color-mix(in srgb, var(--color-primary-soft) 82%, var(--color-surface));
 }
+.ip-location__flag--unknown {
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--color-text-subtle);
+  background: var(--color-surface-muted);
+}
+.ip-location__refresh {
+  appearance: none; width: 22px; height: 22px; padding: 2px; margin: -2px;
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  color: inherit; background: transparent; border: 0; border-radius: 999px; cursor: pointer;
+}
+.ip-location__refresh:hover:not(:disabled) {
+  background: var(--color-surface-muted);
+  box-shadow: 0 0 0 1px var(--color-border);
+}
+.ip-location__refresh:focus-visible {
+  outline: 2px solid var(--color-primary); outline-offset: 2px;
+}
+.ip-location__refresh:disabled {
+  cursor: wait; opacity: .55;
+}
 .ip-location__main {
   display: inline-flex; flex-direction: column; gap: 2px; min-width: 0;
 }
@@ -493,13 +513,17 @@
 .chip .chip-count { font-family: var(--font-mono); font-size: var(--font-size-xs); opacity: .7; }
 
 /* ---------- Tabs ---------- */
-.tabs { display: flex; gap: var(--space-1); border-bottom: 1px solid var(--color-border); }
+.tabs {
+  display: flex; gap: var(--space-1); max-width: 100%;
+  overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain;
+  border-bottom: 1px solid var(--color-border); scrollbar-width: thin;
+}
 .tab {
   appearance: none; background: transparent; border: 0; cursor: pointer;
   font-family: var(--font-sans); font-size: var(--font-size-md); font-weight: 520;
   color: var(--color-text-muted); padding: var(--space-3) var(--space-3);
   margin-bottom: -1px; border-bottom: 2px solid transparent; transition: color .12s, border-color .12s;
-  display: inline-flex; align-items: center; gap: 7px;
+  display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto; white-space: nowrap;
 }
 .tab:hover { color: var(--color-text); }
 .tab[aria-selected="true"] { color: var(--color-primary); border-bottom-color: var(--color-primary); }

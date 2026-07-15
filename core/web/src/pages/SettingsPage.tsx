@@ -2187,13 +2187,20 @@ function IPGeoSourceDialog({
 function IPGeoLookupView({ result, refreshing, onRefresh }: { result: IPGeoLookupResult; refreshing: boolean; onRefresh: () => void }) {
   const { t } = useI18n();
   const refreshProps = { onRefresh, refreshing, refreshLabel: t("geo.refresh.action") };
+  const providerLabel = result.provider === "local_database"
+    ? t("admin.settings.geo.provider.local")
+    : result.provider === "ip-api.com"
+      ? t("admin.settings.geo.provider.fallback")
+      : result.provider === "local_network"
+        ? t("geo.local")
+        : t("common.failed");
   return (
     <div className="geo-lookup-result" data-testid="ip-geo-lookup-result">
       <div className="geo-lookup-result__summary">
         {result.geo ? <IPLocation ip={result.ip} geo={result.geo} {...refreshProps} /> : <span className="muted-cell">{t("geo.unknown")}</span>}
         <div>
-          <Badge tone={result.provider === "local_database" ? "success" : result.geo ? "warning" : "danger"} dot>
-            {result.provider === "local_database" ? t("admin.settings.geo.provider.local") : result.provider === "ip-api.com" ? t("admin.settings.geo.provider.fallback") : t("common.failed")}
+          <Badge tone={result.provider === "ip-api.com" ? "warning" : result.geo ? "success" : "danger"} dot>
+            {providerLabel}
           </Badge>
           {result.cached ? <Badge tone="neutral">{t("admin.settings.geo.lookup.cached")}</Badge> : null}
         </div>

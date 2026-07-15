@@ -365,9 +365,9 @@ func (s *Server) handleAdminIPGeoLookup(w http.ResponseWriter, r *http.Request) 
 		api.WriteError(w, err)
 		return
 	}
-	ip := normalizeClientIPValue(req.IP)
-	if net.ParseIP(ip) == nil || (!req.Refresh && !publicIP(ip)) {
-		api.WriteError(w, api.NewError(http.StatusBadRequest, "ip_geo.ip_invalid", "a public IPv4 or IPv6 address is required"))
+	ip, valid := normalizeIPGeoLookupIP(req.IP)
+	if !valid {
+		api.WriteError(w, api.NewError(http.StatusBadRequest, "ip_geo.ip_invalid", "a valid IPv4 or IPv6 address is required"))
 		return
 	}
 	var result ipGeoLookupResult
@@ -390,6 +390,11 @@ func (s *Server) handleAdminIPGeoLookup(w http.ResponseWriter, r *http.Request) 
 	}
 	data["evidence"] = evidence
 	api.WriteJSON(w, http.StatusOK, data, nil)
+}
+
+func normalizeIPGeoLookupIP(value string) (string, bool) {
+	ip := normalizeClientIPValue(value)
+	return ip, net.ParseIP(ip) != nil
 }
 
 func buildIPGeoSource(req ipGeoSourceRequest, existing *store.IPGeoSource) (store.IPGeoSource, error) {

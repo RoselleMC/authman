@@ -2,9 +2,10 @@ FROM golang:1.25-alpine AS build
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}
 WORKDIR /src
-COPY limbgo ./limbgo
-COPY authman ./authman
-WORKDIR /src/authman
+COPY go.mod ./
+COPY go.sum ./
+COPY internal ./internal
+COPY limbo ./limbo
 RUN go build -trimpath -ldflags="-s -w" -o /out/authman-limbo ./limbo/cmd/authman-limbo
 
 FROM alpine:3.21

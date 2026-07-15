@@ -3,7 +3,9 @@ module github.com/RoselleMC/authman
 go 1.25.0
 
 require (
+	github.com/Tnze/go-mc v1.20.2
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/maxmind/mmdbwriter v1.0.0
 	github.com/sjzar/ips v0.3.4
 	go.minekube.com/common v0.3.0
 	golang.org/x/crypto v0.52.0
@@ -11,12 +13,10 @@ require (
 )
 
 require (
-	github.com/Tnze/go-mc v1.20.2 // indirect
 	github.com/dilfish/awdb-golang/awdb-golang v1.0.20210701 // indirect
 	github.com/francoispqt/gojay v1.2.13 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-runewidth v0.0.14 // indirect
-	github.com/maxmind/mmdbwriter v1.0.0 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
 	github.com/oschwald/maxminddb-golang v1.12.0 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
@@ -29,7 +29,6 @@ require (
 )
 
 require (
-	github.com/RoselleMC/limbgo v0.0.0
 	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/go-webauthn/webauthn v0.17.4
@@ -47,5 +46,3 @@ require (
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 )
-
-replace github.com/RoselleMC/limbgo => ../limbgo

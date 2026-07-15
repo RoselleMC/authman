@@ -1,0 +1,858 @@
+{
+  "format_version": 1,
+  "protocol": 766,
+  "registries": [
+    {
+      "id": "minecraft:banner_pattern",
+      "entries": [
+        {
+          "key": "minecraft:base",
+          "value": "CggACGFzc2V0X2lkAA5taW5lY3JhZnQ6YmFzZQgAD3RyYW5zbGF0aW9uX2tleQAbYmxvY2subWluZWNyYWZ0LmJhbm5lci5iYXNlAA=="
+        },
+        {
+          "key": "minecraft:border",
+          "value": "CggACGFzc2V0X2lkABBtaW5lY3JhZnQ6Ym9yZGVyCAAPdHJhbnNsYXRpb25fa2V5AB1ibG9jay5taW5lY3JhZnQuYmFubmVyLmJvcmRlcgA="
+        },
+        {
+          "key": "minecraft:bricks",
+          "value": "CggACGFzc2V0X2lkABBtaW5lY3JhZnQ6YnJpY2tzCAAPdHJhbnNsYXRpb25fa2V5AB1ibG9jay5taW5lY3JhZnQuYmFubmVyLmJyaWNrcwA="
+        },
+        {
+          "key": "minecraft:circle",
+          "value": "CggACGFzc2V0X2lkABBtaW5lY3JhZnQ6Y2lyY2xlCAAPdHJhbnNsYXRpb25fa2V5AB1ibG9jay5taW5lY3JhZnQuYmFubmVyLmNpcmNsZQA="
+        },
+        {
+          "key": "minecraft:creeper",
+          "value": "CggACGFzc2V0X2lkABFtaW5lY3JhZnQ6Y3JlZXBlcggAD3RyYW5zbGF0aW9uX2tleQAeYmxvY2subWluZWNyYWZ0LmJhbm5lci5jcmVlcGVyAA=="
+        },
+        {
+          "key": "minecraft:cross",
+          "value": "CggACGFzc2V0X2lkAA9taW5lY3JhZnQ6Y3Jvc3MIAA90cmFuc2xhdGlvbl9rZXkAHGJsb2NrLm1pbmVjcmFmdC5iYW5uZXIuY3Jvc3MA"
+        },
+        {
+          "key": "minecraft:curly_border",
+          "value": "CggACGFzc2V0X2lkABZtaW5lY3JhZnQ6Y3VybHlfYm9yZGVyCAAPdHJhbnNsYXRpb25fa2V5ACNibG9jay5taW5lY3JhZnQuYmFubmVyLmN1cmx5X2JvcmRlcgA="
+        },
+        {
+          "key": "minecraft:diagonal_left",
+          "value": "CggACGFzc2V0X2lkABdtaW5lY3JhZnQ6ZGlhZ29uYWxfbGVmdAgAD3RyYW5zbGF0aW9uX2tleQAkYmxvY2subWluZWNyYWZ0LmJhbm5lci5kaWFnb25hbF9sZWZ0AA=="
+        },
+        {
+          "key": "minecraft:diagonal_right",
+          "value": "CggACGFzc2V0X2lkABhtaW5lY3JhZnQ6ZGlhZ29uYWxfcmlnaHQIAA90cmFuc2xhdGlvbl9rZXkAJWJsb2NrLm1pbmVjcmFmdC5iYW5uZXIuZGlhZ29uYWxfcmlnaHQA"
+        },
+        {
+          "key": "minecraft:diagonal_up_left",
+          "value": "CggACGFzc2V0X2lkABptaW5lY3JhZnQ6ZGlhZ29uYWxfdXBfbGVmdAgAD3RyYW5zbGF0aW9uX2tleQAnYmxvY2subWluZWNyYWZ0LmJhbm5lci5kaWFnb25hbF91cF9sZWZ0AA=="
+        },
+        {
+          "key": "minecraft:diagonal_up_right",
+          "value": "CggACGFzc2V0X2lkABttaW5lY3JhZnQ6ZGlhZ29uYWxfdXBfcmlnaHQIAA90cmFuc2xhdGlvbl9rZXkAKGJsb2NrLm1pbmVjcmFmdC5iYW5uZXIuZGlhZ29uYWxfdXBfcmlnaHQA"
+        },
+        {
+          "key": "minecraft:flower",
+          "value": "CggACGFzc2V0X2lkABBtaW5lY3JhZnQ6Zmxvd2VyCAAPdHJhbnNsYXRpb25fa2V5AB1ibG9jay5taW5lY3JhZnQuYmFubmVyLmZsb3dlcgA="
+        },
+        {
+          "key": "minecraft:globe",
+          "value": "CggACGFzc2V0X2lkAA9taW5lY3JhZnQ6Z2xvYmUIAA90cmFuc2xhdGlvbl9rZXkAHGJsb2NrLm1pbmVjcmFmdC5iYW5uZXIuZ2xvYmUA"
+        },
+        {
+          "key": "minecraft:gradient",
+          "value": "CggACGFzc2V0X2lkABJtaW5lY3JhZnQ6Z3JhZGllbnQIAA90cmFuc2xhdGlvbl9rZXkAH2Jsb2NrLm1pbmVjcmFmdC5iYW5uZXIuZ3JhZGllbnQA"
+        },
+        {
+          "key": "minecraft:gradient_up",
+          "value": "CggACGFzc2V0X2lkABVtaW5lY3JhZnQ6Z3JhZGllbnRfdXAIAA90cmFuc2xhdGlvbl9rZXkAImJsb2NrLm1pbmVjcmFmdC5iYW5uZXIuZ3JhZGllbnRfdXAA"
+        },
+        {
+          "key": "minecraft:half_horizontal",
+          "value": "CggACGFzc2V0X2lkABltaW5lY3JhZnQ6aGFsZl9ob3Jpem9udGFsCAAPdHJhbnNsYXRpb25fa2V5ACZibG9jay5taW5lY3JhZnQuYmFubmVyLmhhbGZfaG9yaXpvbnRhbAA="
+        },
+        {
+          "key": "minecraft:half_horizontal_bottom",
+          "value": "CggACGFzc2V0X2lkACBtaW5lY3JhZnQ6aGFsZl9ob3Jpem9udGFsX2JvdHRvbQgAD3RyYW5zbGF0aW9uX2tleQAtYmxvY2subWluZWNyYWZ0LmJhbm5lci5oYWxmX2hvcml6b250YWxfYm90dG9tAA=="
+        },
+        {
+          "key": "minecraft:half_vertical",
+          "value": "CggACGFzc2V0X2lkABdtaW5lY3JhZnQ6aGFsZl92ZXJ0aWNhbAgAD3RyYW5zbGF0aW9uX2tleQAkYmxvY2subWluZWNyYWZ0LmJhbm5lci5oYWxmX3ZlcnRpY2FsAA=="
+        },
+        {
+          "key": "minecraft:half_vertical_right",
+          "value": "CggACGFzc2V0X2lkAB1taW5lY3JhZnQ6aGFsZl92ZXJ0aWNhbF9yaWdodAgAD3RyYW5zbGF0aW9uX2tleQAqYmxvY2subWluZWNyYWZ0LmJhbm5lci5oYWxmX3ZlcnRpY2FsX3JpZ2h0AA=="
+        },
+        {
+          "key": "minecraft:mojang",
+          "value": "CggACGFzc2V0X2lkABBtaW5lY3JhZnQ6bW9qYW5nCAAPdHJhbnNsYXRpb25fa2V5AB1ibG9jay5taW5lY3JhZnQuYmFubmVyLm1vamFuZwA="
+        },
+        {
+          "key": "minecraft:piglin",
+          "value": "CggACGFzc2V0X2lkABBtaW5lY3JhZnQ6cGlnbGluCAAPdHJhbnNsYXRpb25fa2V5AB1ibG9jay5taW5lY3JhZnQuYmFubmVyLnBpZ2xpbgA="
+        },
+        {
+          "key": "minecraft:rhombus",
+          "value": "CggACGFzc2V0X2lkABFtaW5lY3JhZnQ6cmhvbWJ1cwgAD3RyYW5zbGF0aW9uX2tleQAeYmxvY2subWluZWNyYWZ0LmJhbm5lci5yaG9tYnVzAA=="
+        },
+        {
+          "key": "minecraft:skull",
+          "value": "CggACGFzc2V0X2lkAA9taW5lY3JhZnQ6c2t1bGwIAA90cmFuc2xhdGlvbl9rZXkAHGJsb2NrLm1pbmVjcmFmdC5iYW5uZXIuc2t1bGwA"
+        },
+        {
+          "key": "minecraft:small_stripes",
+          "value": "CggACGFzc2V0X2lkABdtaW5lY3JhZnQ6c21hbGxfc3RyaXBlcwgAD3RyYW5zbGF0aW9uX2tleQAkYmxvY2subWluZWNyYWZ0LmJhbm5lci5zbWFsbF9zdHJpcGVzAA=="
+        },
+        {
+          "key": "minecraft:square_bottom_left",
+          "value": "CggACGFzc2V0X2lkABxtaW5lY3JhZnQ6c3F1YXJlX2JvdHRvbV9sZWZ0CAAPdHJhbnNsYXRpb25fa2V5AClibG9jay5taW5lY3JhZnQuYmFubmVyLnNxdWFyZV9ib3R0b21fbGVmdAA="
+        },
+        {
+          "key": "minecraft:square_bottom_right",
+          "value": "CggACGFzc2V0X2lkAB1taW5lY3JhZnQ6c3F1YXJlX2JvdHRvbV9yaWdodAgAD3RyYW5zbGF0aW9uX2tleQAqYmxvY2subWluZWNyYWZ0LmJhbm5lci5zcXVhcmVfYm90dG9tX3JpZ2h0AA=="
+        },
+        {
+          "key": "minecraft:square_top_left",
+          "value": "CggACGFzc2V0X2lkABltaW5lY3JhZnQ6c3F1YXJlX3RvcF9sZWZ0CAAPdHJhbnNsYXRpb25fa2V5ACZibG9jay5taW5lY3JhZnQuYmFubmVyLnNxdWFyZV90b3BfbGVmdAA="
+        },
+        {
+          "key": "minecraft:square_top_right",
+          "value": "CggACGFzc2V0X2lkABptaW5lY3JhZnQ6c3F1YXJlX3RvcF9yaWdodAgAD3RyYW5zbGF0aW9uX2tleQAnYmxvY2subWluZWNyYWZ0LmJhbm5lci5zcXVhcmVfdG9wX3JpZ2h0AA=="
+        },
+        {
+          "key": "minecraft:straight_cross",
+          "value": "CggACGFzc2V0X2lkABhtaW5lY3JhZnQ6c3RyYWlnaHRfY3Jvc3MIAA90cmFuc2xhdGlvbl9rZXkAJWJsb2NrLm1pbmVjcmFmdC5iYW5uZXIuc3RyYWlnaHRfY3Jvc3MA"
+        },
+        {
+          "key": "minecraft:stripe_bottom",
+          "value": "CggACGFzc2V0X2lkABdtaW5lY3JhZnQ6c3RyaXBlX2JvdHRvbQgAD3RyYW5zbGF0aW9uX2tleQAkYmxvY2subWluZWNyYWZ0LmJhbm5lci5zdHJpcGVfYm90dG9tAA=="
+        },
+        {
+          "key": "minecraft:stripe_center",
+          "value": "CggACGFzc2V0X2lkABdtaW5lY3JhZnQ6c3RyaXBlX2NlbnRlcggAD3RyYW5zbGF0aW9uX2tleQAkYmxvY2subWluZWNyYWZ0LmJhbm5lci5zdHJpcGVfY2VudGVyAA=="
+        },
+        {
+          "key": "minecraft:stripe_downleft",
+          "value": "CggACGFzc2V0X2lkABltaW5lY3JhZnQ6c3RyaXBlX2Rvd25sZWZ0CAAPdHJhbnNsYXRpb25fa2V5ACZibG9jay5taW5lY3JhZnQuYmFubmVyLnN0cmlwZV9kb3dubGVmdAA="
+        },
+        {
+          "key": "minecraft:stripe_downright",
+          "value": "CggACGFzc2V0X2lkABptaW5lY3JhZnQ6c3RyaXBlX2Rvd25yaWdodAgAD3RyYW5zbGF0aW9uX2tleQAnYmxvY2subWluZWNyYWZ0LmJhbm5lci5zdHJpcGVfZG93bnJpZ2h0AA=="
+        },
+        {
+          "key": "minecraft:stripe_left",
+          "value": "CggACGFzc2V0X2lkABVtaW5lY3JhZnQ6c3RyaXBlX2xlZnQIAA90cmFuc2xhdGlvbl9rZXkAImJsb2NrLm1pbmVjcmFmdC5iYW5uZXIuc3RyaXBlX2xlZnQA"
+        },
+        {
+          "key": "minecraft:stripe_middle",
+          "value": "CggACGFzc2V0X2lkABdtaW5lY3JhZnQ6c3RyaXBlX21pZGRsZQgAD3RyYW5zbGF0aW9uX2tleQAkYmxvY2subWluZWNyYWZ0LmJhbm5lci5zdHJpcGVfbWlkZGxlAA=="
+        },
+        {
+          "key": "minecraft:stripe_right",
+          "value": "CggACGFzc2V0X2lkABZtaW5lY3JhZnQ6c3RyaXBlX3JpZ2h0CAAPdHJhbnNsYXRpb25fa2V5ACNibG9jay5taW5lY3JhZnQuYmFubmVyLnN0cmlwZV9yaWdodAA="
+        },
+        {
+          "key": "minecraft:stripe_top",
+          "value": "CggACGFzc2V0X2lkABRtaW5lY3JhZnQ6c3RyaXBlX3RvcAgAD3RyYW5zbGF0aW9uX2tleQAhYmxvY2subWluZWNyYWZ0LmJhbm5lci5zdHJpcGVfdG9wAA=="
+        },
+        {
+          "key": "minecraft:triangle_bottom",
+          "value": "CggACGFzc2V0X2lkABltaW5lY3JhZnQ6dHJpYW5nbGVfYm90dG9tCAAPdHJhbnNsYXRpb25fa2V5ACZibG9jay5taW5lY3JhZnQuYmFubmVyLnRyaWFuZ2xlX2JvdHRvbQA="
+        },
+        {
+          "key": "minecraft:triangle_top",
+          "value": "CggACGFzc2V0X2lkABZtaW5lY3JhZnQ6dHJpYW5nbGVfdG9wCAAPdHJhbnNsYXRpb25fa2V5ACNibG9jay5taW5lY3JhZnQuYmFubmVyLnRyaWFuZ2xlX3RvcAA="
+        },
+        {
+          "key": "minecraft:triangles_bottom",
+          "value": "CggACGFzc2V0X2lkABptaW5lY3JhZnQ6dHJpYW5nbGVzX2JvdHRvbQgAD3RyYW5zbGF0aW9uX2tleQAnYmxvY2subWluZWNyYWZ0LmJhbm5lci50cmlhbmdsZXNfYm90dG9tAA=="
+        },
+        {
+          "key": "minecraft:triangles_top",
+          "value": "CggACGFzc2V0X2lkABdtaW5lY3JhZnQ6dHJpYW5nbGVzX3RvcAgAD3RyYW5zbGF0aW9uX2tleQAkYmxvY2subWluZWNyYWZ0LmJhbm5lci50cmlhbmdsZXNfdG9wAA=="
+        }
+      ]
+    },
+    {
+      "id": "minecraft:chat_type",
+      "entries": [
+        {
+          "key": "minecraft:chat",
+          "value": "CgoABGNoYXQJAApwYXJhbWV0ZXJzCAAAAAIABnNlbmRlcgAHY29udGVudAgAD3RyYW5zbGF0aW9uX2tleQAOY2hhdC50eXBlLnRleHQACgAJbmFycmF0aW9uCQAKcGFyYW1ldGVycwgAAAACAAZzZW5kZXIAB2NvbnRlbnQIAA90cmFuc2xhdGlvbl9rZXkAFmNoYXQudHlwZS50ZXh0Lm5hcnJhdGUAAA=="
+        },
+        {
+          "key": "minecraft:emote_command",
+          "value": "CgoABGNoYXQJAApwYXJhbWV0ZXJzCAAAAAIABnNlbmRlcgAHY29udGVudAgAD3RyYW5zbGF0aW9uX2tleQAPY2hhdC50eXBlLmVtb3RlAAoACW5hcnJhdGlvbgkACnBhcmFtZXRlcnMIAAAAAgAGc2VuZGVyAAdjb250ZW50CAAPdHJhbnNsYXRpb25fa2V5AA9jaGF0LnR5cGUuZW1vdGUAAA=="
+        },
+        {
+          "key": "minecraft:msg_command_incoming",
+          "value": "CgoABGNoYXQJAApwYXJhbWV0ZXJzCAAAAAIABnNlbmRlcgAHY29udGVudAoABXN0eWxlCAAFY29sb3IABGdyYXkBAAZpdGFsaWMBAAgAD3RyYW5zbGF0aW9uX2tleQAhY29tbWFuZHMubWVzc2FnZS5kaXNwbGF5LmluY29taW5nAAoACW5hcnJhdGlvbgkACnBhcmFtZXRlcnMIAAAAAgAGc2VuZGVyAAdjb250ZW50CAAPdHJhbnNsYXRpb25fa2V5ABZjaGF0LnR5cGUudGV4dC5uYXJyYXRlAAA="
+        },
+        {
+          "key": "minecraft:msg_command_outgoing",
+          "value": "CgoABGNoYXQJAApwYXJhbWV0ZXJzCAAAAAIABnRhcmdldAAHY29udGVudAoABXN0eWxlCAAFY29sb3IABGdyYXkBAAZpdGFsaWMBAAgAD3RyYW5zbGF0aW9uX2tleQAhY29tbWFuZHMubWVzc2FnZS5kaXNwbGF5Lm91dGdvaW5nAAoACW5hcnJhdGlvbgkACnBhcmFtZXRlcnMIAAAAAgAGc2VuZGVyAAdjb250ZW50CAAPdHJhbnNsYXRpb25fa2V5ABZjaGF0LnR5cGUudGV4dC5uYXJyYXRlAAA="
+        },
+        {
+          "key": "minecraft:say_command",
+          "value": "CgoABGNoYXQJAApwYXJhbWV0ZXJzCAAAAAIABnNlbmRlcgAHY29udGVudAgAD3RyYW5zbGF0aW9uX2tleQAWY2hhdC50eXBlLmFubm91bmNlbWVudAAKAAluYXJyYXRpb24JAApwYXJhbWV0ZXJzCAAAAAIABnNlbmRlcgAHY29udGVudAgAD3RyYW5zbGF0aW9uX2tleQAWY2hhdC50eXBlLnRleHQubmFycmF0ZQAA"
+        },
+        {
+          "key": "minecraft:team_msg_command_incoming",
+          "value": "CgoABGNoYXQJAApwYXJhbWV0ZXJzCAAAAAMABnRhcmdldAAGc2VuZGVyAAdjb250ZW50CAAPdHJhbnNsYXRpb25fa2V5ABNjaGF0LnR5cGUudGVhbS50ZXh0AAoACW5hcnJhdGlvbgkACnBhcmFtZXRlcnMIAAAAAgAGc2VuZGVyAAdjb250ZW50CAAPdHJhbnNsYXRpb25fa2V5ABZjaGF0LnR5cGUudGV4dC5uYXJyYXRlAAA="
+        },
+        {
+          "key": "minecraft:team_msg_command_outgoing",
+          "value": "CgoABGNoYXQJAApwYXJhbWV0ZXJzCAAAAAMABnRhcmdldAAGc2VuZGVyAAdjb250ZW50CAAPdHJhbnNsYXRpb25fa2V5ABNjaGF0LnR5cGUudGVhbS5zZW50AAoACW5hcnJhdGlvbgkACnBhcmFtZXRlcnMIAAAAAgAGc2VuZGVyAAdjb250ZW50CAAPdHJhbnNsYXRpb25fa2V5ABZjaGF0LnR5cGUudGV4dC5uYXJyYXRlAAA="
+        }
+      ]
+    },
+    {
+      "id": "minecraft:damage_type",
+      "entries": [
+        {
+          "key": "minecraft:arrow",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAFYXJyb3cIAAdzY2FsaW5nACB3aGVuX2NhdXNlZF9ieV9saXZpbmdfbm9uX3BsYXllcgA="
+        },
+        {
+          "key": "minecraft:bad_respawn_point",
+          "value": "CggAEmRlYXRoX21lc3NhZ2VfdHlwZQAXaW50ZW50aW9uYWxfZ2FtZV9kZXNpZ24FAApleGhhdXN0aW9uPczMzQgACm1lc3NhZ2VfaWQAD2JhZFJlc3Bhd25Qb2ludAgAB3NjYWxpbmcABmFsd2F5cwA="
+        },
+        {
+          "key": "minecraft:cactus",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAGY2FjdHVzCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:cramming",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAAIY3JhbW1pbmcIAAdzY2FsaW5nACB3aGVuX2NhdXNlZF9ieV9saXZpbmdfbm9uX3BsYXllcgA="
+        },
+        {
+          "key": "minecraft:dragon_breath",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAAMZHJhZ29uQnJlYXRoCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:drown",
+          "value": "CggAB2VmZmVjdHMACGRyb3duaW5nBQAKZXhoYXVzdGlvbgAAAAAIAAptZXNzYWdlX2lkAAVkcm93bggAB3NjYWxpbmcAIHdoZW5fY2F1c2VkX2J5X2xpdmluZ19ub25fcGxheWVyAA=="
+        },
+        {
+          "key": "minecraft:dry_out",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAGZHJ5b3V0CAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:explosion",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAJZXhwbG9zaW9uCAAHc2NhbGluZwAGYWx3YXlzAA=="
+        },
+        {
+          "key": "minecraft:fall",
+          "value": "CggAEmRlYXRoX21lc3NhZ2VfdHlwZQANZmFsbF92YXJpYW50cwUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAAEZmFsbAgAB3NjYWxpbmcAIHdoZW5fY2F1c2VkX2J5X2xpdmluZ19ub25fcGxheWVyAA=="
+        },
+        {
+          "key": "minecraft:falling_anvil",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAFYW52aWwIAAdzY2FsaW5nACB3aGVuX2NhdXNlZF9ieV9saXZpbmdfbm9uX3BsYXllcgA="
+        },
+        {
+          "key": "minecraft:falling_block",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAMZmFsbGluZ0Jsb2NrCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:falling_stalactite",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAARZmFsbGluZ1N0YWxhY3RpdGUIAAdzY2FsaW5nACB3aGVuX2NhdXNlZF9ieV9saXZpbmdfbm9uX3BsYXllcgA="
+        },
+        {
+          "key": "minecraft:fireball",
+          "value": "CggAB2VmZmVjdHMAB2J1cm5pbmcFAApleGhhdXN0aW9uPczMzQgACm1lc3NhZ2VfaWQACGZpcmViYWxsCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:fireworks",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAJZmlyZXdvcmtzCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:fly_into_wall",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAALZmx5SW50b1dhbGwIAAdzY2FsaW5nACB3aGVuX2NhdXNlZF9ieV9saXZpbmdfbm9uX3BsYXllcgA="
+        },
+        {
+          "key": "minecraft:freeze",
+          "value": "CggAB2VmZmVjdHMACGZyZWV6aW5nBQAKZXhoYXVzdGlvbgAAAAAIAAptZXNzYWdlX2lkAAZmcmVlemUIAAdzY2FsaW5nACB3aGVuX2NhdXNlZF9ieV9saXZpbmdfbm9uX3BsYXllcgA="
+        },
+        {
+          "key": "minecraft:generic",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAAHZ2VuZXJpYwgAB3NjYWxpbmcAIHdoZW5fY2F1c2VkX2J5X2xpdmluZ19ub25fcGxheWVyAA=="
+        },
+        {
+          "key": "minecraft:generic_kill",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAALZ2VuZXJpY0tpbGwIAAdzY2FsaW5nACB3aGVuX2NhdXNlZF9ieV9saXZpbmdfbm9uX3BsYXllcgA="
+        },
+        {
+          "key": "minecraft:hot_floor",
+          "value": "CggAB2VmZmVjdHMAB2J1cm5pbmcFAApleGhhdXN0aW9uPczMzQgACm1lc3NhZ2VfaWQACGhvdEZsb29yCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:in_fire",
+          "value": "CggAB2VmZmVjdHMAB2J1cm5pbmcFAApleGhhdXN0aW9uPczMzQgACm1lc3NhZ2VfaWQABmluRmlyZQgAB3NjYWxpbmcAIHdoZW5fY2F1c2VkX2J5X2xpdmluZ19ub25fcGxheWVyAA=="
+        },
+        {
+          "key": "minecraft:in_wall",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAAGaW5XYWxsCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:indirect_magic",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAANaW5kaXJlY3RNYWdpYwgAB3NjYWxpbmcAIHdoZW5fY2F1c2VkX2J5X2xpdmluZ19ub25fcGxheWVyAA=="
+        },
+        {
+          "key": "minecraft:lava",
+          "value": "CggAB2VmZmVjdHMAB2J1cm5pbmcFAApleGhhdXN0aW9uPczMzQgACm1lc3NhZ2VfaWQABGxhdmEIAAdzY2FsaW5nACB3aGVuX2NhdXNlZF9ieV9saXZpbmdfbm9uX3BsYXllcgA="
+        },
+        {
+          "key": "minecraft:lightning_bolt",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAANbGlnaHRuaW5nQm9sdAgAB3NjYWxpbmcAIHdoZW5fY2F1c2VkX2J5X2xpdmluZ19ub25fcGxheWVyAA=="
+        },
+        {
+          "key": "minecraft:magic",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAAFbWFnaWMIAAdzY2FsaW5nACB3aGVuX2NhdXNlZF9ieV9saXZpbmdfbm9uX3BsYXllcgA="
+        },
+        {
+          "key": "minecraft:mob_attack",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAADbW9iCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:mob_attack_no_aggro",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAADbW9iCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:mob_projectile",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAADbW9iCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:on_fire",
+          "value": "CggAB2VmZmVjdHMAB2J1cm5pbmcFAApleGhhdXN0aW9uAAAAAAgACm1lc3NhZ2VfaWQABm9uRmlyZQgAB3NjYWxpbmcAIHdoZW5fY2F1c2VkX2J5X2xpdmluZ19ub25fcGxheWVyAA=="
+        },
+        {
+          "key": "minecraft:out_of_world",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAAKb3V0T2ZXb3JsZAgAB3NjYWxpbmcAIHdoZW5fY2F1c2VkX2J5X2xpdmluZ19ub25fcGxheWVyAA=="
+        },
+        {
+          "key": "minecraft:outside_border",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAANb3V0c2lkZUJvcmRlcggAB3NjYWxpbmcAIHdoZW5fY2F1c2VkX2J5X2xpdmluZ19ub25fcGxheWVyAA=="
+        },
+        {
+          "key": "minecraft:player_attack",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAGcGxheWVyCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:player_explosion",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAQZXhwbG9zaW9uLnBsYXllcggAB3NjYWxpbmcABmFsd2F5cwA="
+        },
+        {
+          "key": "minecraft:sonic_boom",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAAKc29uaWNfYm9vbQgAB3NjYWxpbmcABmFsd2F5cwA="
+        },
+        {
+          "key": "minecraft:spit",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAADbW9iCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:stalagmite",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAAKc3RhbGFnbWl0ZQgAB3NjYWxpbmcAIHdoZW5fY2F1c2VkX2J5X2xpdmluZ19ub25fcGxheWVyAA=="
+        },
+        {
+          "key": "minecraft:starve",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAAGc3RhcnZlCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:sting",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAFc3RpbmcIAAdzY2FsaW5nACB3aGVuX2NhdXNlZF9ieV9saXZpbmdfbm9uX3BsYXllcgA="
+        },
+        {
+          "key": "minecraft:sweet_berry_bush",
+          "value": "CggAB2VmZmVjdHMABnBva2luZwUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAOc3dlZXRCZXJyeUJ1c2gIAAdzY2FsaW5nACB3aGVuX2NhdXNlZF9ieV9saXZpbmdfbm9uX3BsYXllcgA="
+        },
+        {
+          "key": "minecraft:thorns",
+          "value": "CggAB2VmZmVjdHMABnRob3JucwUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAGdGhvcm5zCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:thrown",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAGdGhyb3duCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:trident",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAAHdHJpZGVudAgAB3NjYWxpbmcAIHdoZW5fY2F1c2VkX2J5X2xpdmluZ19ub25fcGxheWVyAA=="
+        },
+        {
+          "key": "minecraft:unattributed_fireball",
+          "value": "CggAB2VmZmVjdHMAB2J1cm5pbmcFAApleGhhdXN0aW9uPczMzQgACm1lc3NhZ2VfaWQABm9uRmlyZQgAB3NjYWxpbmcAIHdoZW5fY2F1c2VkX2J5X2xpdmluZ19ub25fcGxheWVyAA=="
+        },
+        {
+          "key": "minecraft:wither",
+          "value": "CgUACmV4aGF1c3Rpb24AAAAACAAKbWVzc2FnZV9pZAAGd2l0aGVyCAAHc2NhbGluZwAgd2hlbl9jYXVzZWRfYnlfbGl2aW5nX25vbl9wbGF5ZXIA"
+        },
+        {
+          "key": "minecraft:wither_skull",
+          "value": "CgUACmV4aGF1c3Rpb249zMzNCAAKbWVzc2FnZV9pZAALd2l0aGVyU2t1bGwIAAdzY2FsaW5nACB3aGVuX2NhdXNlZF9ieV9saXZpbmdfbm9uX3BsYXllcgA="
+        }
+      ]
+    },
+    {
+      "id": "minecraft:trim_material",
+      "entries": [
+        {
+          "key": "minecraft:amethyst",
+          "value": "CggACmFzc2V0X25hbWUACGFtZXRoeXN0CgALZGVzY3JpcHRpb24IAAVjb2xvcgAHIzlBNUNDNggACXRyYW5zbGF0ZQAgdHJpbV9tYXRlcmlhbC5taW5lY3JhZnQuYW1ldGh5c3QACAAKaW5ncmVkaWVudAAYbWluZWNyYWZ0OmFtZXRoeXN0X3NoYXJkBQAQaXRlbV9tb2RlbF9pbmRleD+AAAAA"
+        },
+        {
+          "key": "minecraft:copper",
+          "value": "CggACmFzc2V0X25hbWUABmNvcHBlcgoAC2Rlc2NyaXB0aW9uCAAFY29sb3IAByNCNDY4NEQIAAl0cmFuc2xhdGUAHnRyaW1fbWF0ZXJpYWwubWluZWNyYWZ0LmNvcHBlcgAIAAppbmdyZWRpZW50ABZtaW5lY3JhZnQ6Y29wcGVyX2luZ290BQAQaXRlbV9tb2RlbF9pbmRleD8AAAAA"
+        },
+        {
+          "key": "minecraft:diamond",
+          "value": "CggACmFzc2V0X25hbWUAB2RpYW1vbmQKAAtkZXNjcmlwdGlvbggABWNvbG9yAAcjNkVFQ0QyCAAJdHJhbnNsYXRlAB90cmltX21hdGVyaWFsLm1pbmVjcmFmdC5kaWFtb25kAAgACmluZ3JlZGllbnQAEW1pbmVjcmFmdDpkaWFtb25kBQAQaXRlbV9tb2RlbF9pbmRleD9MzM0KABhvdmVycmlkZV9hcm1vcl9tYXRlcmlhbHMIABFtaW5lY3JhZnQ6ZGlhbW9uZAAOZGlhbW9uZF9kYXJrZXIAAA=="
+        },
+        {
+          "key": "minecraft:emerald",
+          "value": "CggACmFzc2V0X25hbWUAB2VtZXJhbGQKAAtkZXNjcmlwdGlvbggABWNvbG9yAAcjMTFBMDM2CAAJdHJhbnNsYXRlAB90cmltX21hdGVyaWFsLm1pbmVjcmFmdC5lbWVyYWxkAAgACmluZ3JlZGllbnQAEW1pbmVjcmFmdDplbWVyYWxkBQAQaXRlbV9tb2RlbF9pbmRleD8zMzMA"
+        },
+        {
+          "key": "minecraft:gold",
+          "value": "CggACmFzc2V0X25hbWUABGdvbGQKAAtkZXNjcmlwdGlvbggABWNvbG9yAAcjREVCMTJECAAJdHJhbnNsYXRlABx0cmltX21hdGVyaWFsLm1pbmVjcmFmdC5nb2xkAAgACmluZ3JlZGllbnQAFG1pbmVjcmFmdDpnb2xkX2luZ290BQAQaXRlbV9tb2RlbF9pbmRleD8ZmZoKABhvdmVycmlkZV9hcm1vcl9tYXRlcmlhbHMIAA5taW5lY3JhZnQ6Z29sZAALZ29sZF9kYXJrZXIAAA=="
+        },
+        {
+          "key": "minecraft:iron",
+          "value": "CggACmFzc2V0X25hbWUABGlyb24KAAtkZXNjcmlwdGlvbggABWNvbG9yAAcjRUNFQ0VDCAAJdHJhbnNsYXRlABx0cmltX21hdGVyaWFsLm1pbmVjcmFmdC5pcm9uAAgACmluZ3JlZGllbnQAFG1pbmVjcmFmdDppcm9uX2luZ290BQAQaXRlbV9tb2RlbF9pbmRleD5MzM0KABhvdmVycmlkZV9hcm1vcl9tYXRlcmlhbHMIAA5taW5lY3JhZnQ6aXJvbgALaXJvbl9kYXJrZXIAAA=="
+        },
+        {
+          "key": "minecraft:lapis",
+          "value": "CggACmFzc2V0X25hbWUABWxhcGlzCgALZGVzY3JpcHRpb24IAAVjb2xvcgAHIzQxNkU5NwgACXRyYW5zbGF0ZQAddHJpbV9tYXRlcmlhbC5taW5lY3JhZnQubGFwaXMACAAKaW5ncmVkaWVudAAWbWluZWNyYWZ0OmxhcGlzX2xhenVsaQUAEGl0ZW1fbW9kZWxfaW5kZXg/ZmZmAA=="
+        },
+        {
+          "key": "minecraft:netherite",
+          "value": "CggACmFzc2V0X25hbWUACW5ldGhlcml0ZQoAC2Rlc2NyaXB0aW9uCAAFY29sb3IAByM2MjU4NTkIAAl0cmFuc2xhdGUAIXRyaW1fbWF0ZXJpYWwubWluZWNyYWZ0Lm5ldGhlcml0ZQAIAAppbmdyZWRpZW50ABltaW5lY3JhZnQ6bmV0aGVyaXRlX2luZ290BQAQaXRlbV9tb2RlbF9pbmRleD6ZmZoKABhvdmVycmlkZV9hcm1vcl9tYXRlcmlhbHMIABNtaW5lY3JhZnQ6bmV0aGVyaXRlABBuZXRoZXJpdGVfZGFya2VyAAA="
+        },
+        {
+          "key": "minecraft:quartz",
+          "value": "CggACmFzc2V0X25hbWUABnF1YXJ0egoAC2Rlc2NyaXB0aW9uCAAFY29sb3IAByNFM0Q0QzQIAAl0cmFuc2xhdGUAHnRyaW1fbWF0ZXJpYWwubWluZWNyYWZ0LnF1YXJ0egAIAAppbmdyZWRpZW50ABBtaW5lY3JhZnQ6cXVhcnR6BQAQaXRlbV9tb2RlbF9pbmRleD3MzM0A"
+        },
+        {
+          "key": "minecraft:redstone",
+          "value": "CggACmFzc2V0X25hbWUACHJlZHN0b25lCgALZGVzY3JpcHRpb24IAAVjb2xvcgAHIzk3MTYwNwgACXRyYW5zbGF0ZQAgdHJpbV9tYXRlcmlhbC5taW5lY3JhZnQucmVkc3RvbmUACAAKaW5ncmVkaWVudAASbWluZWNyYWZ0OnJlZHN0b25lBQAQaXRlbV9tb2RlbF9pbmRleD7MzM0A"
+        }
+      ]
+    },
+    {
+      "id": "minecraft:trim_pattern",
+      "entries": [
+        {
+          "key": "minecraft:coast",
+          "value": "CggACGFzc2V0X2lkAA9taW5lY3JhZnQ6Y29hc3QBAAVkZWNhbAAKAAtkZXNjcmlwdGlvbggACXRyYW5zbGF0ZQAcdHJpbV9wYXR0ZXJuLm1pbmVjcmFmdC5jb2FzdAAIAA10ZW1wbGF0ZV9pdGVtACxtaW5lY3JhZnQ6Y29hc3RfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:dune",
+          "value": "CggACGFzc2V0X2lkAA5taW5lY3JhZnQ6ZHVuZQEABWRlY2FsAAoAC2Rlc2NyaXB0aW9uCAAJdHJhbnNsYXRlABt0cmltX3BhdHRlcm4ubWluZWNyYWZ0LmR1bmUACAANdGVtcGxhdGVfaXRlbQArbWluZWNyYWZ0OmR1bmVfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:eye",
+          "value": "CggACGFzc2V0X2lkAA1taW5lY3JhZnQ6ZXllAQAFZGVjYWwACgALZGVzY3JpcHRpb24IAAl0cmFuc2xhdGUAGnRyaW1fcGF0dGVybi5taW5lY3JhZnQuZXllAAgADXRlbXBsYXRlX2l0ZW0AKm1pbmVjcmFmdDpleWVfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:host",
+          "value": "CggACGFzc2V0X2lkAA5taW5lY3JhZnQ6aG9zdAEABWRlY2FsAAoAC2Rlc2NyaXB0aW9uCAAJdHJhbnNsYXRlABt0cmltX3BhdHRlcm4ubWluZWNyYWZ0Lmhvc3QACAANdGVtcGxhdGVfaXRlbQArbWluZWNyYWZ0Omhvc3RfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:raiser",
+          "value": "CggACGFzc2V0X2lkABBtaW5lY3JhZnQ6cmFpc2VyAQAFZGVjYWwACgALZGVzY3JpcHRpb24IAAl0cmFuc2xhdGUAHXRyaW1fcGF0dGVybi5taW5lY3JhZnQucmFpc2VyAAgADXRlbXBsYXRlX2l0ZW0ALW1pbmVjcmFmdDpyYWlzZXJfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:rib",
+          "value": "CggACGFzc2V0X2lkAA1taW5lY3JhZnQ6cmliAQAFZGVjYWwACgALZGVzY3JpcHRpb24IAAl0cmFuc2xhdGUAGnRyaW1fcGF0dGVybi5taW5lY3JhZnQucmliAAgADXRlbXBsYXRlX2l0ZW0AKm1pbmVjcmFmdDpyaWJfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:sentry",
+          "value": "CggACGFzc2V0X2lkABBtaW5lY3JhZnQ6c2VudHJ5AQAFZGVjYWwACgALZGVzY3JpcHRpb24IAAl0cmFuc2xhdGUAHXRyaW1fcGF0dGVybi5taW5lY3JhZnQuc2VudHJ5AAgADXRlbXBsYXRlX2l0ZW0ALW1pbmVjcmFmdDpzZW50cnlfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:shaper",
+          "value": "CggACGFzc2V0X2lkABBtaW5lY3JhZnQ6c2hhcGVyAQAFZGVjYWwACgALZGVzY3JpcHRpb24IAAl0cmFuc2xhdGUAHXRyaW1fcGF0dGVybi5taW5lY3JhZnQuc2hhcGVyAAgADXRlbXBsYXRlX2l0ZW0ALW1pbmVjcmFmdDpzaGFwZXJfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:silence",
+          "value": "CggACGFzc2V0X2lkABFtaW5lY3JhZnQ6c2lsZW5jZQEABWRlY2FsAAoAC2Rlc2NyaXB0aW9uCAAJdHJhbnNsYXRlAB50cmltX3BhdHRlcm4ubWluZWNyYWZ0LnNpbGVuY2UACAANdGVtcGxhdGVfaXRlbQAubWluZWNyYWZ0OnNpbGVuY2VfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:snout",
+          "value": "CggACGFzc2V0X2lkAA9taW5lY3JhZnQ6c25vdXQBAAVkZWNhbAAKAAtkZXNjcmlwdGlvbggACXRyYW5zbGF0ZQAcdHJpbV9wYXR0ZXJuLm1pbmVjcmFmdC5zbm91dAAIAA10ZW1wbGF0ZV9pdGVtACxtaW5lY3JhZnQ6c25vdXRfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:spire",
+          "value": "CggACGFzc2V0X2lkAA9taW5lY3JhZnQ6c3BpcmUBAAVkZWNhbAAKAAtkZXNjcmlwdGlvbggACXRyYW5zbGF0ZQAcdHJpbV9wYXR0ZXJuLm1pbmVjcmFmdC5zcGlyZQAIAA10ZW1wbGF0ZV9pdGVtACxtaW5lY3JhZnQ6c3BpcmVfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:tide",
+          "value": "CggACGFzc2V0X2lkAA5taW5lY3JhZnQ6dGlkZQEABWRlY2FsAAoAC2Rlc2NyaXB0aW9uCAAJdHJhbnNsYXRlABt0cmltX3BhdHRlcm4ubWluZWNyYWZ0LnRpZGUACAANdGVtcGxhdGVfaXRlbQArbWluZWNyYWZ0OnRpZGVfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:vex",
+          "value": "CggACGFzc2V0X2lkAA1taW5lY3JhZnQ6dmV4AQAFZGVjYWwACgALZGVzY3JpcHRpb24IAAl0cmFuc2xhdGUAGnRyaW1fcGF0dGVybi5taW5lY3JhZnQudmV4AAgADXRlbXBsYXRlX2l0ZW0AKm1pbmVjcmFmdDp2ZXhfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:ward",
+          "value": "CggACGFzc2V0X2lkAA5taW5lY3JhZnQ6d2FyZAEABWRlY2FsAAoAC2Rlc2NyaXB0aW9uCAAJdHJhbnNsYXRlABt0cmltX3BhdHRlcm4ubWluZWNyYWZ0LndhcmQACAANdGVtcGxhdGVfaXRlbQArbWluZWNyYWZ0OndhcmRfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:wayfinder",
+          "value": "CggACGFzc2V0X2lkABNtaW5lY3JhZnQ6d2F5ZmluZGVyAQAFZGVjYWwACgALZGVzY3JpcHRpb24IAAl0cmFuc2xhdGUAIHRyaW1fcGF0dGVybi5taW5lY3JhZnQud2F5ZmluZGVyAAgADXRlbXBsYXRlX2l0ZW0AMG1pbmVjcmFmdDp3YXlmaW5kZXJfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        },
+        {
+          "key": "minecraft:wild",
+          "value": "CggACGFzc2V0X2lkAA5taW5lY3JhZnQ6d2lsZAEABWRlY2FsAAoAC2Rlc2NyaXB0aW9uCAAJdHJhbnNsYXRlABt0cmltX3BhdHRlcm4ubWluZWNyYWZ0LndpbGQACAANdGVtcGxhdGVfaXRlbQArbWluZWNyYWZ0OndpbGRfYXJtb3JfdHJpbV9zbWl0aGluZ190ZW1wbGF0ZQA="
+        }
+      ]
+    },
+    {
+      "id": "minecraft:wolf_variant",
+      "entries": [
+        {
+          "key": "minecraft:ashen",
+          "value": "CggADWFuZ3J5X3RleHR1cmUAJm1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX2FzaGVuX2FuZ3J5CAAGYmlvbWVzABVtaW5lY3JhZnQ6c25vd3lfdGFpZ2EIAAx0YW1lX3RleHR1cmUAJW1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX2FzaGVuX3RhbWUIAAx3aWxkX3RleHR1cmUAIG1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX2FzaGVuAA=="
+        },
+        {
+          "key": "minecraft:black",
+          "value": "CggADWFuZ3J5X3RleHR1cmUAJm1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX2JsYWNrX2FuZ3J5CAAGYmlvbWVzAB9taW5lY3JhZnQ6b2xkX2dyb3d0aF9waW5lX3RhaWdhCAAMdGFtZV90ZXh0dXJlACVtaW5lY3JhZnQ6ZW50aXR5L3dvbGYvd29sZl9ibGFja190YW1lCAAMd2lsZF90ZXh0dXJlACBtaW5lY3JhZnQ6ZW50aXR5L3dvbGYvd29sZl9ibGFjawA="
+        },
+        {
+          "key": "minecraft:chestnut",
+          "value": "CggADWFuZ3J5X3RleHR1cmUAKW1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX2NoZXN0bnV0X2FuZ3J5CAAGYmlvbWVzACFtaW5lY3JhZnQ6b2xkX2dyb3d0aF9zcHJ1Y2VfdGFpZ2EIAAx0YW1lX3RleHR1cmUAKG1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX2NoZXN0bnV0X3RhbWUIAAx3aWxkX3RleHR1cmUAI21pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX2NoZXN0bnV0AA=="
+        },
+        {
+          "key": "minecraft:pale",
+          "value": "CggADWFuZ3J5X3RleHR1cmUAIG1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX2FuZ3J5CAAGYmlvbWVzAA9taW5lY3JhZnQ6dGFpZ2EIAAx0YW1lX3RleHR1cmUAH21pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX3RhbWUIAAx3aWxkX3RleHR1cmUAGm1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmAA=="
+        },
+        {
+          "key": "minecraft:rusty",
+          "value": "CggADWFuZ3J5X3RleHR1cmUAJm1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX3J1c3R5X2FuZ3J5CAAGYmlvbWVzABQjbWluZWNyYWZ0OmlzX2p1bmdsZQgADHRhbWVfdGV4dHVyZQAlbWluZWNyYWZ0OmVudGl0eS93b2xmL3dvbGZfcnVzdHlfdGFtZQgADHdpbGRfdGV4dHVyZQAgbWluZWNyYWZ0OmVudGl0eS93b2xmL3dvbGZfcnVzdHkA"
+        },
+        {
+          "key": "minecraft:snowy",
+          "value": "CggADWFuZ3J5X3RleHR1cmUAJm1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX3Nub3d5X2FuZ3J5CAAGYmlvbWVzAA9taW5lY3JhZnQ6Z3JvdmUIAAx0YW1lX3RleHR1cmUAJW1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX3Nub3d5X3RhbWUIAAx3aWxkX3RleHR1cmUAIG1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX3Nub3d5AA=="
+        },
+        {
+          "key": "minecraft:spotted",
+          "value": "CggADWFuZ3J5X3RleHR1cmUAKG1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX3Nwb3R0ZWRfYW5ncnkIAAZiaW9tZXMAFSNtaW5lY3JhZnQ6aXNfc2F2YW5uYQgADHRhbWVfdGV4dHVyZQAnbWluZWNyYWZ0OmVudGl0eS93b2xmL3dvbGZfc3BvdHRlZF90YW1lCAAMd2lsZF90ZXh0dXJlACJtaW5lY3JhZnQ6ZW50aXR5L3dvbGYvd29sZl9zcG90dGVkAA=="
+        },
+        {
+          "key": "minecraft:striped",
+          "value": "CggADWFuZ3J5X3RleHR1cmUAKG1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX3N0cmlwZWRfYW5ncnkIAAZiaW9tZXMAFiNtaW5lY3JhZnQ6aXNfYmFkbGFuZHMIAAx0YW1lX3RleHR1cmUAJ21pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX3N0cmlwZWRfdGFtZQgADHdpbGRfdGV4dHVyZQAibWluZWNyYWZ0OmVudGl0eS93b2xmL3dvbGZfc3RyaXBlZAA="
+        },
+        {
+          "key": "minecraft:woods",
+          "value": "CggADWFuZ3J5X3RleHR1cmUAJm1pbmVjcmFmdDplbnRpdHkvd29sZi93b2xmX3dvb2RzX2FuZ3J5CAAGYmlvbWVzABBtaW5lY3JhZnQ6Zm9yZXN0CAAMdGFtZV90ZXh0dXJlACVtaW5lY3JhZnQ6ZW50aXR5L3dvbGYvd29sZl93b29kc190YW1lCAAMd2lsZF90ZXh0dXJlACBtaW5lY3JhZnQ6ZW50aXR5L3dvbGYvd29sZl93b29kcwA="
+        }
+      ]
+    },
+    {
+      "id": "minecraft:worldgen/biome",
+      "entries": [
+        {
+          "key": "minecraft:badlands",
+          "value": "CgUACGRvd25mYWxsAAAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/AwANZm9saWFnZV9jb2xvcgCegU0DAAtncmFzc19jb2xvcgCQgU0KAAptb29kX3NvdW5kAwATYmxvY2tfc2VhcmNoX2V4dGVudAAAAAgGAAZvZmZzZXRAAAAAAAAAAAgABXNvdW5kABZtaW5lY3JhZnQ6YW1iaWVudC5jYXZlAwAKdGlja19kZWxheQAAF3AACgAFbXVzaWMDAAltYXhfZGVsYXkAAF3AAwAJbWluX2RlbGF5AAAu4AEAFXJlcGxhY2VfY3VycmVudF9tdXNpYwAIAAVzb3VuZAAibWluZWNyYWZ0Om11c2ljLm92ZXJ3b3JsZC5iYWRsYW5kcwADAAlza3lfY29sb3IAbrH/AwALd2F0ZXJfY29sb3IAP3bkAwAPd2F0ZXJfZm9nX2NvbG9yAAUFMwABABFoYXNfcHJlY2lwaXRhdGlvbgAFAAt0ZW1wZXJhdHVyZUAAAAAA"
+        },
+        {
+          "key": "minecraft:bamboo_jungle",
+          "value": "CgUACGRvd25mYWxsP2ZmZgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAJ21pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuYmFtYm9vX2p1bmdsZQADAAlza3lfY29sb3IAd6j/AwALd2F0ZXJfY29sb3IAP3bkAwAPd2F0ZXJfZm9nX2NvbG9yAAUFMwABABFoYXNfcHJlY2lwaXRhdGlvbgEFAAt0ZW1wZXJhdHVyZT9zMzMA"
+        },
+        {
+          "key": "minecraft:basalt_deltas",
+          "value": "CgUACGRvd25mYWxsAAAAAAoAB2VmZmVjdHMKAA9hZGRpdGlvbnNfc291bmQIAAVzb3VuZAApbWluZWNyYWZ0OmFtYmllbnQuYmFzYWx0X2RlbHRhcy5hZGRpdGlvbnMGAAt0aWNrX2NoYW5jZT+Gu5jH4oJBAAgADWFtYmllbnRfc291bmQAJG1pbmVjcmFmdDphbWJpZW50LmJhc2FsdF9kZWx0YXMubG9vcAMACWZvZ19jb2xvcgBoX3AKAAptb29kX3NvdW5kAwATYmxvY2tfc2VhcmNoX2V4dGVudAAAAAgGAAZvZmZzZXRAAAAAAAAAAAgABXNvdW5kACRtaW5lY3JhZnQ6YW1iaWVudC5iYXNhbHRfZGVsdGFzLm1vb2QDAAp0aWNrX2RlbGF5AAAXcAAKAAVtdXNpYwMACW1heF9kZWxheQAAXcADAAltaW5fZGVsYXkAAC7gAQAVcmVwbGFjZV9jdXJyZW50X211c2ljAAgABXNvdW5kACRtaW5lY3JhZnQ6bXVzaWMubmV0aGVyLmJhc2FsdF9kZWx0YXMACgAIcGFydGljbGUKAAdvcHRpb25zCAAEdHlwZQATbWluZWNyYWZ0OndoaXRlX2FzaAAFAAtwcm9iYWJpbGl0eT3x2usAAwAJc2t5X2NvbG9yAG6x/wMAC3dhdGVyX2NvbG9yAD925AMAD3dhdGVyX2ZvZ19jb2xvcgAFBTMAAQARaGFzX3ByZWNpcGl0YXRpb24ABQALdGVtcGVyYXR1cmVAAAAAAA=="
+        },
+        {
+          "key": "minecraft:beach",
+          "value": "CgUACGRvd25mYWxsPszMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB4p/8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlP0zMzQA="
+        },
+        {
+          "key": "minecraft:birch_forest",
+          "value": "CgUACGRvd25mYWxsPxmZmgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAIG1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuZm9yZXN0AAMACXNreV9jb2xvcgB6pf8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPxmZmgA="
+        },
+        {
+          "key": "minecraft:cherry_grove",
+          "value": "CgUACGRvd25mYWxsP0zMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/AwANZm9saWFnZV9jb2xvcgC222EDAAtncmFzc19jb2xvcgC222EKAAptb29kX3NvdW5kAwATYmxvY2tfc2VhcmNoX2V4dGVudAAAAAgGAAZvZmZzZXRAAAAAAAAAAAgABXNvdW5kABZtaW5lY3JhZnQ6YW1iaWVudC5jYXZlAwAKdGlja19kZWxheQAAF3AACgAFbXVzaWMDAAltYXhfZGVsYXkAAF3AAwAJbWluX2RlbGF5AAAu4AEAFXJlcGxhY2VfY3VycmVudF9tdXNpYwAIAAVzb3VuZAAmbWluZWNyYWZ0Om11c2ljLm92ZXJ3b3JsZC5jaGVycnlfZ3JvdmUAAwAJc2t5X2NvbG9yAHuk/wMAC3dhdGVyX2NvbG9yAF237wMAD3dhdGVyX2ZvZ19jb2xvcgBdt+8AAQARaGFzX3ByZWNpcGl0YXRpb24BBQALdGVtcGVyYXR1cmU/AAAAAA=="
+        },
+        {
+          "key": "minecraft:cold_ocean",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB7pP8DAAt3YXRlcl9jb2xvcgA9V9YDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:crimson_forest",
+          "value": "CgUACGRvd25mYWxsAAAAAAoAB2VmZmVjdHMKAA9hZGRpdGlvbnNfc291bmQIAAVzb3VuZAAqbWluZWNyYWZ0OmFtYmllbnQuY3JpbXNvbl9mb3Jlc3QuYWRkaXRpb25zBgALdGlja19jaGFuY2U/hruYx+KCQQAIAA1hbWJpZW50X3NvdW5kACVtaW5lY3JhZnQ6YW1iaWVudC5jcmltc29uX2ZvcmVzdC5sb29wAwAJZm9nX2NvbG9yADMDAwoACm1vb2Rfc291bmQDABNibG9ja19zZWFyY2hfZXh0ZW50AAAACAYABm9mZnNldEAAAAAAAAAACAAFc291bmQAJW1pbmVjcmFmdDphbWJpZW50LmNyaW1zb25fZm9yZXN0Lm1vb2QDAAp0aWNrX2RlbGF5AAAXcAAKAAVtdXNpYwMACW1heF9kZWxheQAAXcADAAltaW5fZGVsYXkAAC7gAQAVcmVwbGFjZV9jdXJyZW50X211c2ljAAgABXNvdW5kACVtaW5lY3JhZnQ6bXVzaWMubmV0aGVyLmNyaW1zb25fZm9yZXN0AAoACHBhcnRpY2xlCgAHb3B0aW9ucwgABHR5cGUAF21pbmVjcmFmdDpjcmltc29uX3Nwb3JlAAUAC3Byb2JhYmlsaXR5PMzMzQADAAlza3lfY29sb3IAbrH/AwALd2F0ZXJfY29sb3IAP3bkAwAPd2F0ZXJfZm9nX2NvbG9yAAUFMwABABFoYXNfcHJlY2lwaXRhdGlvbgAFAAt0ZW1wZXJhdHVyZUAAAAAA"
+        },
+        {
+          "key": "minecraft:dark_forest",
+          "value": "CgUACGRvd25mYWxsP0zMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CAAUZ3Jhc3NfY29sb3JfbW9kaWZpZXIAC2RhcmtfZm9yZXN0CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAIG1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuZm9yZXN0AAMACXNreV9jb2xvcgB5pv8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPzMzMwA="
+        },
+        {
+          "key": "minecraft:deep_cold_ocean",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB7pP8DAAt3YXRlcl9jb2xvcgA9V9YDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:deep_dark",
+          "value": "CgUACGRvd25mYWxsPszMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAI21pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuZGVlcF9kYXJrAAMACXNreV9jb2xvcgB4p/8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlP0zMzQA="
+        },
+        {
+          "key": "minecraft:deep_frozen_ocean",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB7pP8DAAt3YXRlcl9jb2xvcgA5OMkDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPwAAAAgAFHRlbXBlcmF0dXJlX21vZGlmaWVyAAZmcm96ZW4A"
+        },
+        {
+          "key": "minecraft:deep_lukewarm_ocean",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB7pP8DAAt3YXRlcl9jb2xvcgBFrfIDAA93YXRlcl9mb2dfY29sb3IABBYzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:deep_ocean",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB7pP8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:desert",
+          "value": "CgUACGRvd25mYWxsAAAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAIG1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuZGVzZXJ0AAMACXNreV9jb2xvcgBusf8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAAUAC3RlbXBlcmF0dXJlQAAAAAA="
+        },
+        {
+          "key": "minecraft:dripstone_caves",
+          "value": "CgUACGRvd25mYWxsPszMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAKW1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuZHJpcHN0b25lX2NhdmVzAAMACXNreV9jb2xvcgB4p/8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlP0zMzQA="
+        },
+        {
+          "key": "minecraft:end_barrens",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAoICgCgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgAAAAADAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAAUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:end_highlands",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAoICgCgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgAAAAADAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAAUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:end_midlands",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAoICgCgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgAAAAADAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAAUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:eroded_badlands",
+          "value": "CgUACGRvd25mYWxsAAAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/AwANZm9saWFnZV9jb2xvcgCegU0DAAtncmFzc19jb2xvcgCQgU0KAAptb29kX3NvdW5kAwATYmxvY2tfc2VhcmNoX2V4dGVudAAAAAgGAAZvZmZzZXRAAAAAAAAAAAgABXNvdW5kABZtaW5lY3JhZnQ6YW1iaWVudC5jYXZlAwAKdGlja19kZWxheQAAF3AACgAFbXVzaWMDAAltYXhfZGVsYXkAAF3AAwAJbWluX2RlbGF5AAAu4AEAFXJlcGxhY2VfY3VycmVudF9tdXNpYwAIAAVzb3VuZAAibWluZWNyYWZ0Om11c2ljLm92ZXJ3b3JsZC5iYWRsYW5kcwADAAlza3lfY29sb3IAbrH/AwALd2F0ZXJfY29sb3IAP3bkAwAPd2F0ZXJfZm9nX2NvbG9yAAUFMwABABFoYXNfcHJlY2lwaXRhdGlvbgAFAAt0ZW1wZXJhdHVyZUAAAAAA"
+        },
+        {
+          "key": "minecraft:flower_forest",
+          "value": "CgUACGRvd25mYWxsP0zMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAJ21pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuZmxvd2VyX2ZvcmVzdAADAAlza3lfY29sb3IAeab/AwALd2F0ZXJfY29sb3IAP3bkAwAPd2F0ZXJfZm9nX2NvbG9yAAUFMwABABFoYXNfcHJlY2lwaXRhdGlvbgEFAAt0ZW1wZXJhdHVyZT8zMzMA"
+        },
+        {
+          "key": "minecraft:forest",
+          "value": "CgUACGRvd25mYWxsP0zMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAIG1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuZm9yZXN0AAMACXNreV9jb2xvcgB5pv8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPzMzMwA="
+        },
+        {
+          "key": "minecraft:frozen_ocean",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB/of8DAAt3YXRlcl9jb2xvcgA5OMkDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlAAAAAAgAFHRlbXBlcmF0dXJlX21vZGlmaWVyAAZmcm96ZW4A"
+        },
+        {
+          "key": "minecraft:frozen_peaks",
+          "value": "CgUACGRvd25mYWxsP2ZmZgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAJm1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuZnJvemVuX3BlYWtzAAMACXNreV9jb2xvcgCFnf8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlvzMzMwA="
+        },
+        {
+          "key": "minecraft:frozen_river",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB/of8DAAt3YXRlcl9jb2xvcgA5OMkDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlAAAAAAA="
+        },
+        {
+          "key": "minecraft:grove",
+          "value": "CgUACGRvd25mYWxsP0zMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAH21pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuZ3JvdmUAAwAJc2t5X2NvbG9yAIGg/wMAC3dhdGVyX2NvbG9yAD925AMAD3dhdGVyX2ZvZ19jb2xvcgAFBTMAAQARaGFzX3ByZWNpcGl0YXRpb24BBQALdGVtcGVyYXR1cmW+TMzNAA=="
+        },
+        {
+          "key": "minecraft:ice_spikes",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB/of8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlAAAAAAA="
+        },
+        {
+          "key": "minecraft:jagged_peaks",
+          "value": "CgUACGRvd25mYWxsP2ZmZgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAJm1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuamFnZ2VkX3BlYWtzAAMACXNreV9jb2xvcgCFnf8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlvzMzMwA="
+        },
+        {
+          "key": "minecraft:jungle",
+          "value": "CgUACGRvd25mYWxsP2ZmZgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAIG1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuanVuZ2xlAAMACXNreV9jb2xvcgB3qP8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlP3MzMwA="
+        },
+        {
+          "key": "minecraft:lukewarm_ocean",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB7pP8DAAt3YXRlcl9jb2xvcgBFrfIDAA93YXRlcl9mb2dfY29sb3IABBYzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:lush_caves",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAJG1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQubHVzaF9jYXZlcwADAAlza3lfY29sb3IAe6T/AwALd2F0ZXJfY29sb3IAP3bkAwAPd2F0ZXJfZm9nX2NvbG9yAAUFMwABABFoYXNfcHJlY2lwaXRhdGlvbgEFAAt0ZW1wZXJhdHVyZT8AAAAA"
+        },
+        {
+          "key": "minecraft:mangrove_swamp",
+          "value": "CgUACGRvd25mYWxsP2ZmZgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/AwANZm9saWFnZV9jb2xvcgCNsScIABRncmFzc19jb2xvcl9tb2RpZmllcgAFc3dhbXAKAAptb29kX3NvdW5kAwATYmxvY2tfc2VhcmNoX2V4dGVudAAAAAgGAAZvZmZzZXRAAAAAAAAAAAgABXNvdW5kABZtaW5lY3JhZnQ6YW1iaWVudC5jYXZlAwAKdGlja19kZWxheQAAF3AACgAFbXVzaWMDAAltYXhfZGVsYXkAAF3AAwAJbWluX2RlbGF5AAAu4AEAFXJlcGxhY2VfY3VycmVudF9tdXNpYwAIAAVzb3VuZAAfbWluZWNyYWZ0Om11c2ljLm92ZXJ3b3JsZC5zd2FtcAADAAlza3lfY29sb3IAeKf/AwALd2F0ZXJfY29sb3IAOnpqAwAPd2F0ZXJfZm9nX2NvbG9yAE16YAABABFoYXNfcHJlY2lwaXRhdGlvbgEFAAt0ZW1wZXJhdHVyZT9MzM0A"
+        },
+        {
+          "key": "minecraft:meadow",
+          "value": "CgUACGRvd25mYWxsP0zMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAIG1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQubWVhZG93AAMACXNreV9jb2xvcgB7pP8DAAt3YXRlcl9jb2xvcgAOTs8DAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:mushroom_fields",
+          "value": "CgUACGRvd25mYWxsP4AAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB3qP8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlP2ZmZgA="
+        },
+        {
+          "key": "minecraft:nether_wastes",
+          "value": "CgUACGRvd25mYWxsAAAAAAoAB2VmZmVjdHMKAA9hZGRpdGlvbnNfc291bmQIAAVzb3VuZAApbWluZWNyYWZ0OmFtYmllbnQubmV0aGVyX3dhc3Rlcy5hZGRpdGlvbnMGAAt0aWNrX2NoYW5jZT+Gu5jH4oJBAAgADWFtYmllbnRfc291bmQAJG1pbmVjcmFmdDphbWJpZW50Lm5ldGhlcl93YXN0ZXMubG9vcAMACWZvZ19jb2xvcgAzCAgKAAptb29kX3NvdW5kAwATYmxvY2tfc2VhcmNoX2V4dGVudAAAAAgGAAZvZmZzZXRAAAAAAAAAAAgABXNvdW5kACRtaW5lY3JhZnQ6YW1iaWVudC5uZXRoZXJfd2FzdGVzLm1vb2QDAAp0aWNrX2RlbGF5AAAXcAAKAAVtdXNpYwMACW1heF9kZWxheQAAXcADAAltaW5fZGVsYXkAAC7gAQAVcmVwbGFjZV9jdXJyZW50X211c2ljAAgABXNvdW5kACRtaW5lY3JhZnQ6bXVzaWMubmV0aGVyLm5ldGhlcl93YXN0ZXMAAwAJc2t5X2NvbG9yAG6x/wMAC3dhdGVyX2NvbG9yAD925AMAD3dhdGVyX2ZvZ19jb2xvcgAFBTMAAQARaGFzX3ByZWNpcGl0YXRpb24ABQALdGVtcGVyYXR1cmVAAAAAAA=="
+        },
+        {
+          "key": "minecraft:ocean",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB7pP8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:old_growth_birch_forest",
+          "value": "CgUACGRvd25mYWxsPxmZmgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAIG1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuZm9yZXN0AAMACXNreV9jb2xvcgB6pf8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPxmZmgA="
+        },
+        {
+          "key": "minecraft:old_growth_pine_taiga",
+          "value": "CgUACGRvd25mYWxsP0zMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAKm1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQub2xkX2dyb3d0aF90YWlnYQADAAlza3lfY29sb3IAfKP/AwALd2F0ZXJfY29sb3IAP3bkAwAPd2F0ZXJfZm9nX2NvbG9yAAUFMwABABFoYXNfcHJlY2lwaXRhdGlvbgEFAAt0ZW1wZXJhdHVyZT6ZmZoA"
+        },
+        {
+          "key": "minecraft:old_growth_spruce_taiga",
+          "value": "CgUACGRvd25mYWxsP0zMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAKm1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQub2xkX2dyb3d0aF90YWlnYQADAAlza3lfY29sb3IAfaP/AwALd2F0ZXJfY29sb3IAP3bkAwAPd2F0ZXJfZm9nX2NvbG9yAAUFMwABABFoYXNfcHJlY2lwaXRhdGlvbgEFAAt0ZW1wZXJhdHVyZT6AAAAA"
+        },
+        {
+          "key": "minecraft:plains",
+          "value": "CgUACGRvd25mYWxsPszMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB4p/8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlP0zMzQA="
+        },
+        {
+          "key": "minecraft:river",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB7pP8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:savanna",
+          "value": "CgUACGRvd25mYWxsAAAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgBusf8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAAUAC3RlbXBlcmF0dXJlQAAAAAA="
+        },
+        {
+          "key": "minecraft:savanna_plateau",
+          "value": "CgUACGRvd25mYWxsAAAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgBusf8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAAUAC3RlbXBlcmF0dXJlQAAAAAA="
+        },
+        {
+          "key": "minecraft:small_end_islands",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAoICgCgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgAAAAADAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAAUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:snowy_beach",
+          "value": "CgUACGRvd25mYWxsPpmZmgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB/of8DAAt3YXRlcl9jb2xvcgA9V9YDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPUzMzQA="
+        },
+        {
+          "key": "minecraft:snowy_plains",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB/of8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlAAAAAAA="
+        },
+        {
+          "key": "minecraft:snowy_slopes",
+          "value": "CgUACGRvd25mYWxsP2ZmZgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAJm1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuc25vd3lfc2xvcGVzAAMACXNreV9jb2xvcgCCn/8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlvpmZmgA="
+        },
+        {
+          "key": "minecraft:snowy_taiga",
+          "value": "CgUACGRvd25mYWxsPszMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgCDnv8DAAt3YXRlcl9jb2xvcgA9V9YDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlvwAAAAA="
+        },
+        {
+          "key": "minecraft:soul_sand_valley",
+          "value": "CgUACGRvd25mYWxsAAAAAAoAB2VmZmVjdHMKAA9hZGRpdGlvbnNfc291bmQIAAVzb3VuZAAsbWluZWNyYWZ0OmFtYmllbnQuc291bF9zYW5kX3ZhbGxleS5hZGRpdGlvbnMGAAt0aWNrX2NoYW5jZT+Gu5jH4oJBAAgADWFtYmllbnRfc291bmQAJ21pbmVjcmFmdDphbWJpZW50LnNvdWxfc2FuZF92YWxsZXkubG9vcAMACWZvZ19jb2xvcgAbR0UKAAptb29kX3NvdW5kAwATYmxvY2tfc2VhcmNoX2V4dGVudAAAAAgGAAZvZmZzZXRAAAAAAAAAAAgABXNvdW5kACdtaW5lY3JhZnQ6YW1iaWVudC5zb3VsX3NhbmRfdmFsbGV5Lm1vb2QDAAp0aWNrX2RlbGF5AAAXcAAKAAVtdXNpYwMACW1heF9kZWxheQAAXcADAAltaW5fZGVsYXkAAC7gAQAVcmVwbGFjZV9jdXJyZW50X211c2ljAAgABXNvdW5kACdtaW5lY3JhZnQ6bXVzaWMubmV0aGVyLnNvdWxfc2FuZF92YWxsZXkACgAIcGFydGljbGUKAAdvcHRpb25zCAAEdHlwZQANbWluZWNyYWZ0OmFzaAAFAAtwcm9iYWJpbGl0eTvMzM0AAwAJc2t5X2NvbG9yAG6x/wMAC3dhdGVyX2NvbG9yAD925AMAD3dhdGVyX2ZvZ19jb2xvcgAFBTMAAQARaGFzX3ByZWNpcGl0YXRpb24ABQALdGVtcGVyYXR1cmVAAAAAAA=="
+        },
+        {
+          "key": "minecraft:sparse_jungle",
+          "value": "CgUACGRvd25mYWxsP0zMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAJ21pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuc3BhcnNlX2p1bmdsZQADAAlza3lfY29sb3IAd6j/AwALd2F0ZXJfY29sb3IAP3bkAwAPd2F0ZXJfZm9nX2NvbG9yAAUFMwABABFoYXNfcHJlY2lwaXRhdGlvbgEFAAt0ZW1wZXJhdHVyZT9zMzMA"
+        },
+        {
+          "key": "minecraft:stony_peaks",
+          "value": "CgUACGRvd25mYWxsPpmZmgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAoABW11c2ljAwAJbWF4X2RlbGF5AABdwAMACW1pbl9kZWxheQAALuABABVyZXBsYWNlX2N1cnJlbnRfbXVzaWMACAAFc291bmQAJW1pbmVjcmFmdDptdXNpYy5vdmVyd29ybGQuc3RvbnlfcGVha3MAAwAJc2t5X2NvbG9yAHao/wMAC3dhdGVyX2NvbG9yAD925AMAD3dhdGVyX2ZvZ19jb2xvcgAFBTMAAQARaGFzX3ByZWNpcGl0YXRpb24BBQALdGVtcGVyYXR1cmU/gAAAAA=="
+        },
+        {
+          "key": "minecraft:stony_shore",
+          "value": "CgUACGRvd25mYWxsPpmZmgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB9ov8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPkzMzQA="
+        },
+        {
+          "key": "minecraft:sunflower_plains",
+          "value": "CgUACGRvd25mYWxsPszMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB4p/8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlP0zMzQA="
+        },
+        {
+          "key": "minecraft:swamp",
+          "value": "CgUACGRvd25mYWxsP2ZmZgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/AwANZm9saWFnZV9jb2xvcgBqcDkIABRncmFzc19jb2xvcl9tb2RpZmllcgAFc3dhbXAKAAptb29kX3NvdW5kAwATYmxvY2tfc2VhcmNoX2V4dGVudAAAAAgGAAZvZmZzZXRAAAAAAAAAAAgABXNvdW5kABZtaW5lY3JhZnQ6YW1iaWVudC5jYXZlAwAKdGlja19kZWxheQAAF3AACgAFbXVzaWMDAAltYXhfZGVsYXkAAF3AAwAJbWluX2RlbGF5AAAu4AEAFXJlcGxhY2VfY3VycmVudF9tdXNpYwAIAAVzb3VuZAAfbWluZWNyYWZ0Om11c2ljLm92ZXJ3b3JsZC5zd2FtcAADAAlza3lfY29sb3IAeKf/AwALd2F0ZXJfY29sb3IAYXtkAwAPd2F0ZXJfZm9nX2NvbG9yACMjFwABABFoYXNfcHJlY2lwaXRhdGlvbgEFAAt0ZW1wZXJhdHVyZT9MzM0A"
+        },
+        {
+          "key": "minecraft:taiga",
+          "value": "CgUACGRvd25mYWxsP0zMzQoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB9o/8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPoAAAAA="
+        },
+        {
+          "key": "minecraft:the_end",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAoICgCgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgAAAAADAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAAUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:the_void",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB7pP8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAAUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:warm_ocean",
+          "value": "CgUACGRvd25mYWxsPwAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB7pP8DAAt3YXRlcl9jb2xvcgBD1e4DAA93YXRlcl9mb2dfY29sb3IABB8zAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPwAAAAA="
+        },
+        {
+          "key": "minecraft:warped_forest",
+          "value": "CgUACGRvd25mYWxsAAAAAAoAB2VmZmVjdHMKAA9hZGRpdGlvbnNfc291bmQIAAVzb3VuZAApbWluZWNyYWZ0OmFtYmllbnQud2FycGVkX2ZvcmVzdC5hZGRpdGlvbnMGAAt0aWNrX2NoYW5jZT+Gu5jH4oJBAAgADWFtYmllbnRfc291bmQAJG1pbmVjcmFmdDphbWJpZW50LndhcnBlZF9mb3Jlc3QubG9vcAMACWZvZ19jb2xvcgAaBRoKAAptb29kX3NvdW5kAwATYmxvY2tfc2VhcmNoX2V4dGVudAAAAAgGAAZvZmZzZXRAAAAAAAAAAAgABXNvdW5kACRtaW5lY3JhZnQ6YW1iaWVudC53YXJwZWRfZm9yZXN0Lm1vb2QDAAp0aWNrX2RlbGF5AAAXcAAKAAVtdXNpYwMACW1heF9kZWxheQAAXcADAAltaW5fZGVsYXkAAC7gAQAVcmVwbGFjZV9jdXJyZW50X211c2ljAAgABXNvdW5kACRtaW5lY3JhZnQ6bXVzaWMubmV0aGVyLndhcnBlZF9mb3Jlc3QACgAIcGFydGljbGUKAAdvcHRpb25zCAAEdHlwZQAWbWluZWNyYWZ0OndhcnBlZF9zcG9yZQAFAAtwcm9iYWJpbGl0eTxp9qkAAwAJc2t5X2NvbG9yAG6x/wMAC3dhdGVyX2NvbG9yAD925AMAD3dhdGVyX2ZvZ19jb2xvcgAFBTMAAQARaGFzX3ByZWNpcGl0YXRpb24ABQALdGVtcGVyYXR1cmVAAAAAAA=="
+        },
+        {
+          "key": "minecraft:windswept_forest",
+          "value": "CgUACGRvd25mYWxsPpmZmgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB9ov8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPkzMzQA="
+        },
+        {
+          "key": "minecraft:windswept_gravelly_hills",
+          "value": "CgUACGRvd25mYWxsPpmZmgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB9ov8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPkzMzQA="
+        },
+        {
+          "key": "minecraft:windswept_hills",
+          "value": "CgUACGRvd25mYWxsPpmZmgoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgB9ov8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAQUAC3RlbXBlcmF0dXJlPkzMzQA="
+        },
+        {
+          "key": "minecraft:windswept_savanna",
+          "value": "CgUACGRvd25mYWxsAAAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/CgAKbW9vZF9zb3VuZAMAE2Jsb2NrX3NlYXJjaF9leHRlbnQAAAAIBgAGb2Zmc2V0QAAAAAAAAAAIAAVzb3VuZAAWbWluZWNyYWZ0OmFtYmllbnQuY2F2ZQMACnRpY2tfZGVsYXkAABdwAAMACXNreV9jb2xvcgBusf8DAAt3YXRlcl9jb2xvcgA/duQDAA93YXRlcl9mb2dfY29sb3IABQUzAAEAEWhhc19wcmVjaXBpdGF0aW9uAAUAC3RlbXBlcmF0dXJlQAAAAAA="
+        },
+        {
+          "key": "minecraft:wooded_badlands",
+          "value": "CgUACGRvd25mYWxsAAAAAAoAB2VmZmVjdHMDAAlmb2dfY29sb3IAwNj/AwANZm9saWFnZV9jb2xvcgCegU0DAAtncmFzc19jb2xvcgCQgU0KAAptb29kX3NvdW5kAwATYmxvY2tfc2VhcmNoX2V4dGVudAAAAAgGAAZvZmZzZXRAAAAAAAAAAAgABXNvdW5kABZtaW5lY3JhZnQ6YW1iaWVudC5jYXZlAwAKdGlja19kZWxheQAAF3AACgAFbXVzaWMDAAltYXhfZGVsYXkAAF3AAwAJbWluX2RlbGF5AAAu4AEAFXJlcGxhY2VfY3VycmVudF9tdXNpYwAIAAVzb3VuZAAibWluZWNyYWZ0Om11c2ljLm92ZXJ3b3JsZC5iYWRsYW5kcwADAAlza3lfY29sb3IAbrH/AwALd2F0ZXJfY29sb3IAP3bkAwAPd2F0ZXJfZm9nX2NvbG9yAAUFMwABABFoYXNfcHJlY2lwaXRhdGlvbgAFAAt0ZW1wZXJhdHVyZUAAAAAA"
+        }
+      ]
+    }
+  ],
+  "tags": [
+    {
+      "id": "minecraft:wolf_variant",
+      "tags": [
+        {
+          "key": "minecraft:is_badlands",
+          "values": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ]
+        },
+        {
+          "key": "minecraft:is_jungle",
+          "values": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ]
+        },
+        {
+          "key": "minecraft:is_savanna",
+          "values": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ]
+        }
+      ]
+    }
+  ]
+}

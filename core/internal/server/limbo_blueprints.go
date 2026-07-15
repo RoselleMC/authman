@@ -16,8 +16,8 @@ import (
 	"github.com/RoselleMC/authman/core/internal/api"
 	"github.com/RoselleMC/authman/core/internal/audit"
 	"github.com/RoselleMC/authman/core/internal/store"
-	"github.com/RoselleMC/limbgo"
-	"github.com/RoselleMC/limbgo/world/schematic"
+	"github.com/RoselleMC/authman/limbo"
+	"github.com/RoselleMC/authman/limbo/world/schematic"
 )
 
 const maxLimboBlueprintUploadBytes = 32 * 1024 * 1024

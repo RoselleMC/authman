@@ -44,11 +44,21 @@ type nodeHeartbeatRequest struct {
 	PluginVersion       string                      `json:"plugin_version"`
 	VelocityVersion     string                      `json:"velocity_version"`
 	Status              *nodeDownstreamStatusReport `json:"status"`
+	ProtocolPack        *nodeProtocolPackReport     `json:"protocol_pack"`
 }
 
 type nodeDownstreamStatusReport struct {
 	OnlinePlayers int `json:"online_players"`
 	MaxPlayers    int `json:"max_players"`
+}
+
+type nodeProtocolPackReport struct {
+	Name              string   `json:"name"`
+	Version           string   `json:"version"`
+	SHA256            string   `json:"sha256"`
+	Protocols         []int32  `json:"protocols"`
+	MinecraftVersions []string `json:"minecraft_versions"`
+	LastError         string   `json:"last_error"`
 }
 
 type ackNodeActionsRequest struct {
@@ -361,6 +371,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.recordNodeDownstreamStatus(r.Context(), node, req.Status, now)
+		s.recordLimboProtocolStatus(r.Context(), node, req.ProtocolPack, now)
 		api.WriteJSON(w, http.StatusOK, s.nodeSyncPayload(r.Context(), node), nil)
 		return
 	}
@@ -371,6 +382,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	if hasBody {
 		s.recordNodeDownstreamStatus(r.Context(), node, req.Status, now)
+		s.recordLimboProtocolStatus(r.Context(), node, req.ProtocolPack, now)
 	}
 	api.WriteJSON(w, http.StatusOK, s.nodeSyncPayload(r.Context(), node), nil)
 }
@@ -2222,7 +2234,7 @@ func (s *Server) nodeData(ctx context.Context, n node.Node) map[string]any {
 	if server, err := s.store.GetDownstreamServer(ctx, serverID); err == nil {
 		serverLabel = server.DisplayName
 	}
-	return map[string]any{
+	data := map[string]any{
 		"id":                   n.ID,
 		"name":                 n.Name,
 		"kind":                 node.NormalizeKind(n.Mode),
@@ -2240,6 +2252,10 @@ func (s *Server) nodeData(ctx context.Context, n node.Node) map[string]any {
 		"last_seen_at":         n.LastHeartbeatAt,
 		"last_heartbeat_at":    n.LastHeartbeatAt,
 	}
+	if node.IsLimboPortal(n.Mode) {
+		data["protocol_pack"] = s.limboProtocolPackData(ctx, n.ID)
+	}
+	return data
 }
 
 func (s *Server) nodeRuntimeConfig(ctx context.Context, n node.Node) map[string]any {

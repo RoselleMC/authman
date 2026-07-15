@@ -484,6 +484,32 @@ export interface VelocityNode {
   plugin_version: string;
   velocity_version: string;
   created_at: string;
+  protocol_pack?: LimboProtocolPackState;
+}
+
+export interface LimboProtocolPackMetadata {
+  source?: "builtin" | "custom";
+  name: string;
+  version: string;
+  filename?: string;
+  content_type?: string;
+  size_bytes?: number;
+  sha256: string;
+  protocols: number[];
+  minecraft_versions: string[];
+  last_error?: string;
+  reported_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface LimboProtocolPackState {
+  source: "builtin" | "custom" | "unavailable";
+  configured: LimboProtocolPackMetadata | null;
+  active: LimboProtocolPackMetadata | null;
+  in_sync: boolean;
+  download_path?: string;
+  error?: string;
 }
 
 export async function fetchNodes(kind: "limbo_portal" | "downstream_velocity" | "all" = "all", filters: ListFilters = {}): Promise<ListResult<VelocityNode>> {
@@ -495,6 +521,43 @@ export async function fetchNodes(kind: "limbo_portal" | "downstream_velocity" | 
 export async function fetchNode(id: string): Promise<VelocityNode> {
   const res = await apiFetch<VelocityNode>(`/admin/nodes/${encodeURIComponent(id)}`);
   return res.data;
+}
+
+export async function fetchLimboProtocolPack(id: string): Promise<LimboProtocolPackState> {
+  const res = await apiFetch<LimboProtocolPackState>(`/admin/login-portals/${encodeURIComponent(id)}/protocol-pack`);
+  return res.data;
+}
+
+export async function uploadLimboProtocolPack(id: string, file: File): Promise<LimboProtocolPackState> {
+  const form = new FormData();
+  form.set("file", file);
+  return multipartFetch<LimboProtocolPackState>(`/admin/login-portals/${encodeURIComponent(id)}/protocol-pack`, { method: "PUT", body: form });
+}
+
+export async function resetLimboProtocolPack(id: string): Promise<LimboProtocolPackState> {
+  const res = await apiFetch<LimboProtocolPackState>(`/admin/login-portals/${encodeURIComponent(id)}/protocol-pack`, { method: "DELETE" });
+  return res.data;
+}
+
+export async function downloadLimboProtocolPack(id: string): Promise<{ blob: Blob; filename: string }> {
+  const base = getRuntimeConfig().apiBase;
+  const path = `/admin/login-portals/${encodeURIComponent(id)}/protocol-pack/download`;
+  const response = await fetch(`${base}${path}`, { credentials: "include", headers: { Accept: "application/zip" } });
+  if (!response.ok) {
+    const text = await response.text();
+    let error: { code: string; message: string; details?: Record<string, unknown> } | null = null;
+    try {
+      error = text ? (JSON.parse(text) as { error?: typeof error }).error ?? null : null;
+    } catch {
+      error = null;
+    }
+    throw new ApiError(response.status, error, response.statusText);
+  }
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const plain = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+  const filename = encoded ? decodeURIComponent(encoded) : plain || "authman-protocols.zip";
+  return { blob: await response.blob(), filename };
 }
 
 export async function updateNode(id: string, input: { name: string; runtime_config: Record<string, unknown> }): Promise<VelocityNode> {
@@ -1635,7 +1698,7 @@ function bufferToBase64URL(buffer: ArrayBuffer): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-async function multipartFetch<T>(path: string, opts: { method: "POST" | "DELETE"; body?: FormData }): Promise<T> {
+async function multipartFetch<T>(path: string, opts: { method: "POST" | "PUT" | "DELETE"; body?: FormData }): Promise<T> {
   const base = getRuntimeConfig().apiBase;
   const url = path.startsWith("/") ? `${base}${path}` : `${base}/${path}`;
   const headers: Record<string, string> = { Accept: "application/json" };

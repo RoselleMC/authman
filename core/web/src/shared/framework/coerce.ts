@@ -190,7 +190,7 @@ export function coerceMojangProxy(raw: unknown): SafeMojangProxy {
     url_masked: asString(r.url_masked, kind === "direct" ? "(direct)" : ""),
     state: asString(r.state, "healthy"),
     weight: asNumber(r.weight, 1),
-    request_count: asNumber(firstDefined(r.recent_request_count, r.request_count), 0),
+    request_count: asNumber(firstDefined(r.recent_request_count, r.request_count, r.failure_count, r.rate_limit_count), 0),
     cooldown_remaining_seconds: asNumber(r.cooldown_remaining_seconds, 0),
     last_error_at: typeof r.last_error_at === "string" ? r.last_error_at : null,
   };
@@ -293,6 +293,57 @@ export interface SafeVelocityNode {
   plugin_version: string;
   velocity_version: string;
   created_at: string | null;
+  protocol_pack: SafeLimboProtocolPackState | null;
+}
+
+export interface SafeLimboProtocolPackMetadata {
+  source: "builtin" | "custom" | "";
+  name: string;
+  version: string;
+  filename: string;
+  size_bytes: number;
+  sha256: string;
+  protocols: number[];
+  minecraft_versions: string[];
+  last_error: string;
+  reported_at: string | null;
+  updated_at: string | null;
+}
+
+export interface SafeLimboProtocolPackState {
+  source: "builtin" | "custom" | "unavailable";
+  configured: SafeLimboProtocolPackMetadata | null;
+  active: SafeLimboProtocolPackMetadata | null;
+  in_sync: boolean;
+  error: string;
+}
+
+function coerceLimboProtocolPackMetadata(raw: unknown): SafeLimboProtocolPackMetadata | null {
+  if (!isObject(raw)) return null;
+  return {
+    source: mapEnum(raw.source, ["builtin", "custom", ""] as const, ""),
+    name: asString(raw.name, ""),
+    version: asString(raw.version, ""),
+    filename: asString(raw.filename, ""),
+    size_bytes: asNumber(raw.size_bytes, 0),
+    sha256: asString(raw.sha256, ""),
+    protocols: asArray(raw.protocols, (value) => asNumber(value)).filter((value) => value > 0),
+    minecraft_versions: asArray(raw.minecraft_versions, (value) => asString(value)).filter(Boolean),
+    last_error: asString(raw.last_error, ""),
+    reported_at: typeof raw.reported_at === "string" ? raw.reported_at : null,
+    updated_at: typeof raw.updated_at === "string" ? raw.updated_at : null,
+  };
+}
+
+export function coerceLimboProtocolPackState(raw: unknown): SafeLimboProtocolPackState | null {
+  if (!isObject(raw)) return null;
+  return {
+    source: mapEnum(raw.source, ["builtin", "custom", "unavailable"] as const, "unavailable"),
+    configured: coerceLimboProtocolPackMetadata(raw.configured),
+    active: coerceLimboProtocolPackMetadata(raw.active),
+    in_sync: asBoolean(raw.in_sync, false),
+    error: asString(raw.error, ""),
+  };
 }
 
 export function coerceVelocityNode(raw: unknown): SafeVelocityNode {
@@ -312,6 +363,7 @@ export function coerceVelocityNode(raw: unknown): SafeVelocityNode {
     plugin_version: asString(r.plugin_version, ""),
     velocity_version: asString(r.velocity_version, ""),
     created_at: typeof r.created_at === "string" ? r.created_at : null,
+    protocol_pack: coerceLimboProtocolPackState(r.protocol_pack),
   };
 }
 

@@ -31,6 +31,8 @@ const passportSelectColumns = "uuid, kind, uuid, username, username_normalized, 
 const profileSelectColumns = "uuid, uuid, protocol_name, normalized_name, display_name, status, skin_source, profile_properties, created_from_passport_id, last_seen_server_id, last_seen_at, last_seen_ip, last_seen_geo, attributes, created_at, updated_at"
 const nodeSelectColumns = "id, server_id, mode, name, token_hash, token_fingerprint, instance_fingerprint, plugin_version, velocity_version, disabled, runtime_config, created_at, last_heartbeat_at"
 const limboBlueprintSelectColumns = "id, name, description, filename, content_type, size_bytes, sha256, schematic, preview, config, created_at, updated_at"
+const limboProtocolBundleSelectColumns = "node_id, name, version, filename, content_type, size_bytes, sha256, protocols, minecraft_versions, archive, created_at, updated_at"
+const limboProtocolStatusSelectColumns = "node_id, name, version, sha256, protocols, minecraft_versions, last_error, reported_at, updated_at"
 const profileSkinSelectColumns = "profile_id, model, skin_png, skin_content_type, skin_sha256, COALESCE(cape_png, ''::bytea), COALESCE(cape_content_type, ''), COALESCE(cape_sha256, ''), COALESCE(elytra_png, ''::bytea), COALESCE(elytra_content_type, ''), COALESCE(elytra_sha256, ''), created_at, updated_at"
 const passportSkinSelectColumns = "passport_id, model, skin_png, skin_content_type, skin_sha256, COALESCE(cape_png, ''::bytea), COALESCE(cape_content_type, ''), COALESCE(cape_sha256, ''), COALESCE(elytra_png, ''::bytea), COALESCE(elytra_content_type, ''), COALESCE(elytra_sha256, ''), created_at, updated_at"
 const externalAPITokenSelectColumns = "id, name, token_hash, token_fingerprint, status, created_by, call_count, last_used_at, last_used_ip, last_used_path, created_at, updated_at"
@@ -2887,6 +2889,103 @@ func (p *Postgres) DeleteLimboBlueprint(ctx context.Context, id string) error {
 	return nil
 }
 
+func (p *Postgres) GetLimboProtocolBundle(ctx context.Context, nodeID string) (LimboProtocolBundle, error) {
+	bundle, err := scanLimboProtocolBundleRow(p.pool.QueryRow(ctx, `SELECT `+limboProtocolBundleSelectColumns+` FROM limbo_protocol_bundles WHERE node_id = $1`, strings.TrimSpace(nodeID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return LimboProtocolBundle{}, fmt.Errorf("limbo protocol bundle not found: %w", ErrNotFound)
+	}
+	return bundle, err
+}
+
+func (p *Postgres) UpsertLimboProtocolBundle(ctx context.Context, bundle LimboProtocolBundle) (LimboProtocolBundle, error) {
+	bundle.NodeID = strings.TrimSpace(bundle.NodeID)
+	if bundle.NodeID == "" {
+		return LimboProtocolBundle{}, fmt.Errorf("limbo protocol bundle node id is required")
+	}
+	return scanLimboProtocolBundleRow(p.pool.QueryRow(ctx, `
+		INSERT INTO limbo_protocol_bundles (
+			node_id, name, version, filename, content_type, size_bytes, sha256,
+			protocols, minecraft_versions, archive, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+		ON CONFLICT (node_id) DO UPDATE
+		SET name = EXCLUDED.name,
+			version = EXCLUDED.version,
+			filename = EXCLUDED.filename,
+			content_type = EXCLUDED.content_type,
+			size_bytes = EXCLUDED.size_bytes,
+			sha256 = EXCLUDED.sha256,
+			protocols = EXCLUDED.protocols,
+			minecraft_versions = EXCLUDED.minecraft_versions,
+			archive = EXCLUDED.archive,
+			updated_at = now()
+		RETURNING `+limboProtocolBundleSelectColumns,
+		bundle.NodeID,
+		strings.TrimSpace(bundle.Name),
+		strings.TrimSpace(bundle.Version),
+		strings.TrimSpace(bundle.Filename),
+		strings.TrimSpace(bundle.ContentType),
+		bundle.SizeBytes,
+		strings.TrimSpace(bundle.SHA256),
+		bundle.Protocols,
+		bundle.MinecraftVersions,
+		bundle.Archive,
+	))
+}
+
+func (p *Postgres) DeleteLimboProtocolBundle(ctx context.Context, nodeID string) error {
+	tag, err := p.pool.Exec(ctx, `DELETE FROM limbo_protocol_bundles WHERE node_id = $1`, strings.TrimSpace(nodeID))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("limbo protocol bundle not found: %w", ErrNotFound)
+	}
+	return nil
+}
+
+func (p *Postgres) GetLimboProtocolStatus(ctx context.Context, nodeID string) (LimboProtocolStatus, error) {
+	status, err := scanLimboProtocolStatusRow(p.pool.QueryRow(ctx, `SELECT `+limboProtocolStatusSelectColumns+` FROM limbo_protocol_status WHERE node_id = $1`, strings.TrimSpace(nodeID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return LimboProtocolStatus{}, fmt.Errorf("limbo protocol status not found: %w", ErrNotFound)
+	}
+	return status, err
+}
+
+func (p *Postgres) UpsertLimboProtocolStatus(ctx context.Context, status LimboProtocolStatus) (LimboProtocolStatus, error) {
+	status.NodeID = strings.TrimSpace(status.NodeID)
+	if status.NodeID == "" {
+		return LimboProtocolStatus{}, fmt.Errorf("limbo protocol status node id is required")
+	}
+	if status.ReportedAt.IsZero() {
+		status.ReportedAt = time.Now().UTC()
+	}
+	return scanLimboProtocolStatusRow(p.pool.QueryRow(ctx, `
+		INSERT INTO limbo_protocol_status (
+			node_id, name, version, sha256, protocols, minecraft_versions, last_error, reported_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+		ON CONFLICT (node_id) DO UPDATE
+		SET name = EXCLUDED.name,
+			version = EXCLUDED.version,
+			sha256 = EXCLUDED.sha256,
+			protocols = EXCLUDED.protocols,
+			minecraft_versions = EXCLUDED.minecraft_versions,
+			last_error = EXCLUDED.last_error,
+			reported_at = EXCLUDED.reported_at,
+			updated_at = now()
+		RETURNING `+limboProtocolStatusSelectColumns,
+		status.NodeID,
+		strings.TrimSpace(status.Name),
+		strings.TrimSpace(status.Version),
+		strings.TrimSpace(status.SHA256),
+		status.Protocols,
+		status.MinecraftVersions,
+		strings.TrimSpace(status.LastError),
+		status.ReportedAt.UTC(),
+	))
+}
+
 func (p *Postgres) SaveTransferGrant(ctx context.Context, grant auth.TransferGrant) error {
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO transfer_grants (
@@ -4258,6 +4357,47 @@ func scanLimboBlueprintRow(row playerScanner) (LimboBlueprint, error) {
 	return cloneLimboBlueprint(blueprint), nil
 }
 
+func scanLimboProtocolBundleRow(row playerScanner) (LimboProtocolBundle, error) {
+	var bundle LimboProtocolBundle
+	err := row.Scan(
+		&bundle.NodeID,
+		&bundle.Name,
+		&bundle.Version,
+		&bundle.Filename,
+		&bundle.ContentType,
+		&bundle.SizeBytes,
+		&bundle.SHA256,
+		&bundle.Protocols,
+		&bundle.MinecraftVersions,
+		&bundle.Archive,
+		&bundle.CreatedAt,
+		&bundle.UpdatedAt,
+	)
+	if err != nil {
+		return LimboProtocolBundle{}, err
+	}
+	return cloneLimboProtocolBundle(bundle), nil
+}
+
+func scanLimboProtocolStatusRow(row playerScanner) (LimboProtocolStatus, error) {
+	var status LimboProtocolStatus
+	err := row.Scan(
+		&status.NodeID,
+		&status.Name,
+		&status.Version,
+		&status.SHA256,
+		&status.Protocols,
+		&status.MinecraftVersions,
+		&status.LastError,
+		&status.ReportedAt,
+		&status.UpdatedAt,
+	)
+	if err != nil {
+		return LimboProtocolStatus{}, err
+	}
+	return cloneLimboProtocolStatus(status), nil
+}
+
 func scanExtensionPlayerDataRow(row playerScanner) (ExtensionPlayerData, error) {
 	var data ExtensionPlayerData
 	var schemaRaw []byte
@@ -4776,6 +4916,33 @@ ALTER TABLE velocity_nodes ADD COLUMN IF NOT EXISTS runtime_config jsonb NOT NUL
 CREATE UNIQUE INDEX IF NOT EXISTS velocity_nodes_instance_fingerprint_unique
 	ON velocity_nodes (instance_fingerprint)
 	WHERE instance_fingerprint <> '';
+
+CREATE TABLE IF NOT EXISTS limbo_protocol_bundles (
+	node_id text PRIMARY KEY REFERENCES velocity_nodes(id) ON DELETE CASCADE,
+	name text NOT NULL,
+	version text NOT NULL,
+	filename text NOT NULL DEFAULT 'protocols.zip',
+	content_type text NOT NULL DEFAULT 'application/zip',
+	size_bytes bigint NOT NULL CHECK (size_bytes > 0),
+	sha256 text NOT NULL,
+	protocols integer[] NOT NULL DEFAULT ARRAY[]::integer[],
+	minecraft_versions text[] NOT NULL DEFAULT ARRAY[]::text[],
+	archive bytea NOT NULL,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS limbo_protocol_status (
+	node_id text PRIMARY KEY REFERENCES velocity_nodes(id) ON DELETE CASCADE,
+	name text NOT NULL DEFAULT '',
+	version text NOT NULL DEFAULT '',
+	sha256 text NOT NULL DEFAULT '',
+	protocols integer[] NOT NULL DEFAULT ARRAY[]::integer[],
+	minecraft_versions text[] NOT NULL DEFAULT ARRAY[]::text[],
+	last_error text NOT NULL DEFAULT '',
+	reported_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS mojang_routes (
 	id text PRIMARY KEY,

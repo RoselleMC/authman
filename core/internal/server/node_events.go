@@ -356,13 +356,17 @@ func (s *Server) nodeEventPayload(ctx context.Context, typ string, n node.Node, 
 }
 
 func (s *Server) nodeSyncPayload(ctx context.Context, n node.Node) map[string]any {
-	return map[string]any{
+	payload := map[string]any{
 		"node":               s.nodeData(ctx, n),
 		"runtime_config":     s.nodeRuntimeConfig(ctx, n),
 		"player_messages":    s.playerMessagesPayload(ctx, n),
 		"actions":            nodeActionRows(s.store.ListPendingNodeActions(ctx, n.ID, time.Now(), 50)),
 		"downstream_servers": s.nodeDownstreamServerChoices(ctx, n),
 	}
+	if node.IsLimboPortal(n.Mode) {
+		payload["protocol_pack"] = s.limboProtocolPackData(ctx, n.ID)
+	}
+	return payload
 }
 
 func (s *Server) pushNodeSync(ctx context.Context, n node.Node, reason string) int {

@@ -7,6 +7,7 @@ import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
   ConfigGrid,
   ConfigRow,
   DefList,
@@ -23,13 +24,21 @@ import {
   Input,
   PageShell,
   coerceVelocityNode,
+  coerceLimboProtocolPackState,
   formatRelativeTime,
   useI18n,
   useBackTarget,
   useToast,
   type SafeVelocityNode,
 } from "@authman/shared";
-import { fetchNode, updateNode } from "../api/admin";
+import {
+  downloadLimboProtocolPack,
+  fetchLimboProtocolPack,
+  fetchNode,
+  resetLimboProtocolPack,
+  updateNode,
+  uploadLimboProtocolPack,
+} from "../api/admin";
 
 interface FormState {
   name: string;
@@ -108,6 +117,13 @@ function statusTone(status: SafeVelocityNode["status"]): "success" | "warning" |
   return "neutral";
 }
 
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "—";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
 export function NodeDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const { t, tError } = useI18n();
@@ -122,8 +138,21 @@ export function NodeDetailPage() {
   });
 
   const node = useMemo(() => (q.data ? coerceVelocityNode(q.data) : null), [q.data]);
+  const protocolPackQ = useQuery({
+    queryKey: ["admin.limboProtocolPack", id],
+    queryFn: () => fetchLimboProtocolPack(id),
+    enabled: !!id && node?.kind === "limbo_portal",
+    refetchInterval: 5_000,
+  });
+  const protocolPack = useMemo(
+    () => (protocolPackQ.data ? coerceLimboProtocolPackState(protocolPackQ.data) : node?.protocol_pack ?? null),
+    [node?.protocol_pack, protocolPackQ.data],
+  );
   const initial = useMemo(() => (node ? toForm(node) : null), [node]);
   const [form, setForm] = useState<FormState | null>(null);
+  const [protocolFile, setProtocolFile] = useState<File | null>(null);
+  const [protocolFileKey, setProtocolFileKey] = useState(0);
+  const [resetProtocolOpen, setResetProtocolOpen] = useState(false);
   const backPath = node?.kind === "limbo_portal" ? "/login-portals" : "/nodes";
   const backTarget = useBackTarget(backPath);
 
@@ -147,6 +176,46 @@ export function NodeDetailPage() {
     onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
   });
 
+  const refreshProtocolPack = () => {
+    void qc.invalidateQueries({ queryKey: ["admin.limboProtocolPack", id] });
+    void qc.invalidateQueries({ queryKey: ["admin.node", id] });
+    void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
+  };
+
+  const uploadProtocolPack = useMutation({
+    mutationFn: (file: File) => uploadLimboProtocolPack(id, file),
+    onSuccess: () => {
+      setProtocolFile(null);
+      setProtocolFileKey((value) => value + 1);
+      toast.push({ tone: "success", title: t("admin.nodes.protocolPack.uploaded") });
+      refreshProtocolPack();
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
+  });
+
+  const resetProtocolPack = useMutation({
+    mutationFn: () => resetLimboProtocolPack(id),
+    onSuccess: () => {
+      setResetProtocolOpen(false);
+      toast.push({ tone: "success", title: t("admin.nodes.protocolPack.resetDone") });
+      refreshProtocolPack();
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
+  });
+
+  const downloadProtocolPack = useMutation({
+    mutationFn: () => downloadLimboProtocolPack(id),
+    onSuccess: ({ blob, filename }) => {
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
+  });
+
   if (q.error) {
     return (
       <PageShell>
@@ -164,6 +233,8 @@ export function NodeDetailPage() {
 
   const dirty = !formEquals(form, initial);
   const cfg = node.runtime_config ?? {};
+  const configuredPack = protocolPack?.configured ?? null;
+  const activePack = protocolPack?.active ?? null;
   const backLabel = node.kind === "limbo_portal" ? t("admin.loginPortals.heading") : t("admin.nodes.heading");
 
   function patch<K extends keyof FormState>(key: K, value: FormState[K]) {
@@ -269,6 +340,85 @@ export function NodeDetailPage() {
               </label>
             </Card>
           ) : (
+            <>
+            <Card
+              title={t("admin.nodes.protocolPack.heading")}
+              actions={
+                <div className="row-actions">
+                  <Badge tone={protocolPack?.source === "custom" ? "info" : "neutral"}>
+                    {t(`admin.nodes.protocolPack.source.${protocolPack?.source ?? "unavailable"}`)}
+                  </Badge>
+                  <Badge tone={protocolPack?.in_sync ? "success" : "warning"} dot>
+                    {t(protocolPack?.in_sync ? "admin.nodes.protocolPack.synced" : "admin.nodes.protocolPack.pending")}
+                  </Badge>
+                </div>
+              }
+              testId="node-protocol-pack"
+            >
+              <ConfigGrid>
+                <ConfigRow k={t("admin.nodes.protocolPack.configured")} v={configuredPack ? `${configuredPack.name} / ${configuredPack.version}` : "—"} mono />
+                <ConfigRow k={t("admin.nodes.protocolPack.active")} v={activePack ? `${activePack.name} / ${activePack.version}` : "—"} mono />
+                <ConfigRow k={t("admin.nodes.protocolPack.archive")} v={configuredPack ? `${configuredPack.filename || "authman-protocols.zip"} · ${formatBytes(configuredPack.size_bytes)}` : "—"} mono />
+                <ConfigRow k="SHA-256" v={configuredPack?.sha256 ? configuredPack.sha256.slice(0, 16) : "—"} mono />
+                <ConfigRow k={t("admin.nodes.protocolPack.protocols")} v={configuredPack?.protocols.join(", ") || "—"} mono />
+                <ConfigRow k={t("admin.nodes.protocolPack.reported")} v={activePack?.reported_at ? formatRelativeTime(activePack.reported_at) : "—"} />
+              </ConfigGrid>
+
+              <div className="protocol-version-section">
+                <span className="protocol-version-label">{t("admin.nodes.protocolPack.minecraftVersions")}</span>
+                <div className="protocol-version-list" data-testid="node-protocol-pack-versions">
+                  {(activePack?.minecraft_versions.length ? activePack.minecraft_versions : configuredPack?.minecraft_versions ?? []).map((version) => (
+                    <span className="protocol-version-tag" key={version}>{version}</span>
+                  ))}
+                  {!activePack?.minecraft_versions.length && !configuredPack?.minecraft_versions.length ? <span className="muted-cell">—</span> : null}
+                </div>
+              </div>
+
+              {activePack?.last_error ? <p className="protocol-pack-error"><Icon name="alert" size={14} /> {activePack.last_error}</p> : null}
+              {protocolPack?.error ? <p className="protocol-pack-error"><Icon name="alert" size={14} /> {protocolPack.error}</p> : null}
+
+              <div className="protocol-pack-controls">
+                <input
+                  key={protocolFileKey}
+                  className="input protocol-pack-file"
+                  type="file"
+                  accept=".zip,application/zip"
+                  onChange={(event) => setProtocolFile(event.target.files?.[0] ?? null)}
+                  data-testid="node-protocol-pack-file"
+                />
+                <div className="protocol-pack-actions">
+                  <Button
+                    variant="primary"
+                    icon="upload"
+                    loading={uploadProtocolPack.isPending}
+                    disabled={!protocolFile || uploadProtocolPack.isPending}
+                    onClick={() => protocolFile && uploadProtocolPack.mutate(protocolFile)}
+                    data-testid="node-protocol-pack-upload"
+                  >
+                    {t("admin.nodes.protocolPack.upload")}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    icon="download"
+                    loading={downloadProtocolPack.isPending}
+                    onClick={() => downloadProtocolPack.mutate()}
+                    data-testid="node-protocol-pack-download"
+                  >
+                    {t("admin.nodes.protocolPack.download")}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    icon="refresh"
+                    disabled={protocolPack?.source !== "custom"}
+                    onClick={() => setResetProtocolOpen(true)}
+                    data-testid="node-protocol-pack-reset"
+                  >
+                    {t("admin.nodes.protocolPack.reset")}
+                  </Button>
+                </div>
+              </div>
+            </Card>
+
             <Card title={t("admin.nodes.detail.limboRuntime")}>
               <p className="card-foot-note" style={{ marginTop: 0 }}>
                 <Icon name="info" size={13} /> {t("admin.nodes.detail.portalRuntime")}
@@ -303,7 +453,7 @@ export function NodeDetailPage() {
                   <Input
                     value={form.proxy_protocol_trusted_proxies}
                     onChange={(e) => patch("proxy_protocol_trusted_proxies", e.target.value)}
-                    placeholder="127.0.0.1,172.20.0.0/16"
+                    placeholder="127.0.0.1,192.0.2.0/24"
                     mono
                     data-testid="node-limbo-proxy-trusted"
                   />
@@ -330,9 +480,21 @@ export function NodeDetailPage() {
                 <ConfigRow k={t("admin.portal.field.protocol")} v={t("admin.portal.protocolRange")} />
               </ConfigGrid>
             </Card>
+            </>
           )}
         </DetailBody>
       </DetailGrid>
+      <ConfirmDialog
+        open={resetProtocolOpen}
+        title={t("admin.nodes.protocolPack.resetConfirm")}
+        body={t("admin.nodes.protocolPack.resetConfirm.body")}
+        confirmLabel={t("admin.nodes.protocolPack.reset")}
+        loading={resetProtocolPack.isPending}
+        icon="refresh"
+        onConfirm={() => resetProtocolPack.mutate()}
+        onCancel={() => setResetProtocolOpen(false)}
+        testId="node-protocol-pack-reset-dialog"
+      />
     </PageShell>
   );
 }

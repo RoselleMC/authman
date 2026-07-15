@@ -1,8 +1,8 @@
 services:
   authman:
     build:
-      context: ..
-      dockerfile: authman/core/Dockerfile
+      context: .
+      dockerfile: core/Dockerfile
       args:
         GOPROXY: "${GOPROXY:-https://proxy.golang.org,direct}"
     environment:
@@ -42,8 +42,8 @@ services:
 
   authman-limbo:
     build:
-      context: ..
-      dockerfile: authman/limbo/Dockerfile
+      context: .
+      dockerfile: limbo/Dockerfile
       args:
         GOPROXY: "${GOPROXY:-https://proxy.golang.org,direct}"
     network_mode: host

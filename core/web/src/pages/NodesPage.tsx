@@ -62,6 +62,12 @@ function LimboAuthBadges({ node: _node }: { node: SafeVelocityNode }) {
   );
 }
 
+function limboMinecraftVersions(node: SafeVelocityNode): string[] {
+  const active = node.protocol_pack?.active?.minecraft_versions ?? [];
+  if (active.length > 0) return active;
+  return node.protocol_pack?.configured?.minecraft_versions ?? [];
+}
+
 interface IssuedToken {
   token_once: string;
   token_fingerprint: string;
@@ -275,10 +281,13 @@ export function NodesPage({ kind, embedded = false }: { kind: "limbo_portal" | "
     {
       key: "version",
       header: t("admin.loginPortals.col.version"),
-      minWidth: "130px",
+      minWidth: "260px",
       sortable: true,
-      sortValue: (n) => n.plugin_version ?? "",
-      render: (n) => <span className="muted-cell">{n.plugin_version || "—"}</span>,
+      sortValue: (n) => limboMinecraftVersions(n).join(","),
+      render: (n) => {
+        const versions = limboMinecraftVersions(n);
+        return <span className="muted-cell protocol-version-summary" title={versions.join(", ")}>{versions.join(" · ") || "—"}</span>;
+      },
     },
     {
       key: "heartbeat",

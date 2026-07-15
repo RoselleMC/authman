@@ -25,17 +25,16 @@ import (
 	"time"
 
 	"github.com/RoselleMC/authman/internal/playermsg"
-	"github.com/RoselleMC/limbgo"
-	"github.com/RoselleMC/limbgo/dialog"
-	"github.com/RoselleMC/limbgo/protocol/limbo"
-	"github.com/RoselleMC/limbgo/world/schematic"
+	"github.com/RoselleMC/authman/limbo"
+	"github.com/RoselleMC/authman/limbo/dialog"
+	"github.com/RoselleMC/authman/limbo/protocol/limbo"
+	protocolpack "github.com/RoselleMC/authman/limbo/protocol/pack"
+	"github.com/RoselleMC/authman/limbo/world/schematic"
 	"go.minekube.com/common/minecraft/component"
 	"golang.org/x/net/websocket"
 )
 
 const version = "0.1.0-dev"
-
-const minDialogProtocol = 771 // Minecraft 1.21.6
 
 var miniMessageLineBreakRE = regexp.MustCompile(`(?i)\r\n|\r|\n|<\s*(?:newline|br)\s*/?>`)
 
@@ -76,6 +75,10 @@ type portal struct {
 	authed         map[limbgo.PlayerSession]authedSession
 	verifiedJoins  map[string][]verifiedJoinState
 	restartCh      chan string
+	protocols      *protocolpack.Store
+	protocolSyncMu sync.Mutex
+	protocolMu     sync.RWMutex
+	protocolError  string
 }
 
 // authedSession remembers that THIS connection already proved its passport so
@@ -218,6 +221,10 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	protocols, err := protocolpack.NewDefaultStore()
+	if err != nil {
+		fatal(fmt.Errorf("load embedded protocol pack: %w", err))
+	}
 	p := &portal{
 		cfg:            cfg,
 		client:         newCoreClient(cfg),
@@ -232,6 +239,7 @@ func main() {
 		dialogs:        map[string]playermsg.DialogDoc{},
 		targetNames:    map[string]string{},
 		targetMessages: map[string]playerMessagesPayload{},
+		protocols:      protocols,
 	}
 	if err := p.heartbeat(context.Background()); err != nil {
 		logger.Warn("initial Authman heartbeat failed; portal starts locked", "err", err)
@@ -254,12 +262,13 @@ func main() {
 		SessionVerifier:     limbgo.SessionVerifierFunc(p.verifySession),
 		OnlineServerID:      cfg.OnlineServerID,
 		ProtocolPolicy: limbgo.ProtocolPolicyFunc(func(_ context.Context, req limbgo.ProtocolRequest) error {
-			if req.ProtocolVersion >= minDialogProtocol {
+			if req.ProtocolKnown && req.PortalDialog {
 				return nil
 			}
 			// No player name exists at handshake time; strip the token.
 			return limbgo.RejectProtocol(p.message("limbo.kick.client_too_old", map[string]string{"player": ""}))
 		}),
+		ProtocolPackSource: protocols,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -381,15 +390,27 @@ func (p *portal) heartbeatLoop(ctx context.Context) {
 }
 
 func (p *portal) heartbeat(ctx context.Context) error {
-	res, err := p.client.heartbeat(ctx)
+	before := p.protocolPackReport()
+	res, err := p.client.heartbeat(ctx, before)
 	if err != nil {
 		return err
 	}
-	p.applyHeartbeat(res)
-	return nil
+	applyErr := p.applyHeartbeat(ctx, res)
+	after := p.protocolPackReport()
+	if !protocolPackReportChanged(before, after) {
+		return applyErr
+	}
+	ack, reportErr := p.client.heartbeat(ctx, after)
+	if reportErr != nil {
+		return errors.Join(applyErr, fmt.Errorf("report protocol pack state: %w", reportErr))
+	}
+	if applyErr != nil {
+		return applyErr
+	}
+	return p.applyHeartbeat(ctx, ack)
 }
 
-func (p *portal) applyHeartbeat(res heartbeatResponse) {
+func (p *portal) applyHeartbeat(ctx context.Context, res heartbeatResponse) error {
 	proxyBefore := p.proxyProtocolFingerprint()
 	messages := res.PlayerMessages.Messages
 	if messages == nil {
@@ -410,6 +431,7 @@ func (p *portal) applyHeartbeat(res heartbeatResponse) {
 	if proxyBefore != proxyAfter {
 		p.requestServerRestart("proxy_protocol_mode_changed")
 	}
+	return p.syncProtocolPack(ctx, res.ProtocolPack)
 }
 
 func (p *portal) eventLoop(ctx context.Context) {
@@ -461,7 +483,16 @@ func (p *portal) runEventStream(ctx context.Context) error {
 		}
 		switch event.Type {
 		case "sync":
-			p.applyHeartbeat(event.Data)
+			before := p.protocolPackReport()
+			if err := p.applyHeartbeat(ctx, event.Data); err != nil {
+				p.logger.Warn("Authman protocol pack sync failed; keeping current snapshot", "err", err)
+			}
+			after := p.protocolPackReport()
+			if protocolPackReportChanged(before, after) {
+				if _, err := p.client.heartbeat(ctx, after); err != nil {
+					p.logger.Warn("failed to report Authman protocol pack state", "err", err)
+				}
+			}
 		case "revoked":
 			p.logger.Warn("Authman node token revoked; portal locked")
 			p.setLocked(true)
@@ -1962,6 +1993,26 @@ type heartbeatResponse struct {
 	} `json:"node"`
 	RuntimeConfig  map[string]any        `json:"runtime_config"`
 	PlayerMessages playerMessagesPayload `json:"player_messages"`
+	ProtocolPack   protocolPackSync      `json:"protocol_pack"`
+}
+
+type protocolPackSync struct {
+	Source       string           `json:"source"`
+	Configured   protocolPackInfo `json:"configured"`
+	DownloadPath string           `json:"download_path"`
+}
+
+type protocolPackInfo struct {
+	Name              string   `json:"name"`
+	Version           string   `json:"version"`
+	SHA256            string   `json:"sha256"`
+	Protocols         []int32  `json:"protocols"`
+	MinecraftVersions []string `json:"minecraft_versions"`
+	LastError         string   `json:"last_error,omitempty"`
+}
+
+func protocolPackReportChanged(before, after protocolPackInfo) bool {
+	return before.SHA256 != after.SHA256 || before.Version != after.Version || before.LastError != after.LastError
 }
 
 type playerMessagesPayload struct {
@@ -2078,13 +2129,101 @@ type downstreamTarget struct {
 	MaxPlayers    int    `json:"max_players"`
 }
 
-func (c *coreClient) heartbeat(ctx context.Context) (heartbeatResponse, error) {
+func (c *coreClient) heartbeat(ctx context.Context, protocolPack protocolPackInfo) (heartbeatResponse, error) {
 	return postJSON[heartbeatResponse](ctx, c, "/api/node/heartbeat", map[string]any{
 		"kind":                 "limbo_portal",
 		"name":                 c.cfg.NodeName,
 		"instance_fingerprint": instanceFingerprint(c.cfg),
 		"plugin_version":       version,
+		"protocol_pack":        protocolPack,
 	})
+}
+
+func (p *portal) protocolPackReport() protocolPackInfo {
+	p.protocolMu.RLock()
+	lastError := p.protocolError
+	p.protocolMu.RUnlock()
+	loaded, err := p.protocols.ProtocolPack()
+	if err != nil {
+		return protocolPackInfo{LastError: err.Error()}
+	}
+	metadata := portalProtocolMetadata(loaded)
+	return protocolPackInfo{
+		Name:              metadata.Name,
+		Version:           metadata.Version,
+		SHA256:            metadata.SHA256,
+		Protocols:         metadata.Protocols,
+		MinecraftVersions: metadata.MinecraftVersions,
+		LastError:         lastError,
+	}
+}
+
+func portalProtocolMetadata(loaded *protocolpack.Pack) protocolpack.Metadata {
+	metadata := loaded.Metadata()
+	metadata.Protocols = metadata.Protocols[:0]
+	metadata.MinecraftVersions = metadata.MinecraftVersions[:0]
+	for _, descriptor := range loaded.Manifest().Protocols {
+		if !descriptor.Layout.PortalDialog {
+			continue
+		}
+		metadata.Protocols = append(metadata.Protocols, descriptor.Protocol)
+		metadata.MinecraftVersions = append(metadata.MinecraftVersions, descriptor.MinecraftVersions...)
+	}
+	return metadata
+}
+
+func (p *portal) syncProtocolPack(ctx context.Context, desired protocolPackSync) error {
+	desiredSHA := strings.TrimSpace(desired.Configured.SHA256)
+	if desiredSHA == "" {
+		return nil
+	}
+	p.protocolSyncMu.Lock()
+	defer p.protocolSyncMu.Unlock()
+	current, err := p.protocols.ProtocolPack()
+	if err == nil && current.Metadata().SHA256 == desiredSHA {
+		p.setProtocolError("")
+		return nil
+	}
+	downloadPath := strings.TrimSpace(desired.DownloadPath)
+	if !strings.HasPrefix(downloadPath, "/api/node/limbo/") {
+		downloadPath = "/api/node/limbo/protocol-pack"
+	}
+	raw, err := p.client.fetchProtocolPack(ctx, downloadPath)
+	if err != nil {
+		p.setProtocolError(err.Error())
+		return err
+	}
+	loaded, err := protocolpack.LoadZip(raw)
+	if err != nil {
+		p.setProtocolError(err.Error())
+		return fmt.Errorf("validate downloaded protocol pack: %w", err)
+	}
+	metadata := loaded.Metadata()
+	if metadata.SHA256 != desiredSHA {
+		err := fmt.Errorf("downloaded protocol pack sha256 %s does not match configured %s", metadata.SHA256, desiredSHA)
+		p.setProtocolError(err.Error())
+		return err
+	}
+	if _, err := p.protocols.Update(loaded); err != nil {
+		p.setProtocolError(err.Error())
+		return err
+	}
+	p.setProtocolError("")
+	p.logger.Info("activated Authman protocol pack", "source", desired.Source, "name", metadata.Name, "version", metadata.Version, "sha256", metadata.SHA256, "minecraft_versions", portalProtocolMetadata(loaded).MinecraftVersions)
+	return nil
+}
+
+func (p *portal) setProtocolError(value string) {
+	p.protocolMu.Lock()
+	p.protocolError = truncateProtocolError(value)
+	p.protocolMu.Unlock()
+}
+
+func truncateProtocolError(value string) string {
+	if len(value) <= 1000 {
+		return value
+	}
+	return value[:1000]
 }
 
 func (c *coreClient) eventStream(ctx context.Context) (*websocket.Conn, error) {
@@ -2177,6 +2316,31 @@ func (c *coreClient) resolveTarget(ctx context.Context, requestedHost string, pr
 
 func (c *coreClient) fetchBlueprint(ctx context.Context, id string) (limboBlueprintData, error) {
 	return getJSON[limboBlueprintData](ctx, c, "/api/node/limbo/blueprints/"+url.PathEscape(strings.TrimSpace(id)))
+}
+
+func (c *coreClient) fetchProtocolPack(ctx context.Context, path string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, coreURL(c.cfg.CoreURL, path), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.cfg.NodeToken)
+	req.Header.Set("X-Authman-Instance", instanceFingerprint(c.cfg))
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Authman protocol pack download returned HTTP %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocolpack.MaxArchiveBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || len(raw) > protocolpack.MaxArchiveBytes {
+		return nil, fmt.Errorf("Authman protocol pack download has invalid size %d", len(raw))
+	}
+	return raw, nil
 }
 
 func (c *coreClient) createGrant(ctx context.Context, playerID, username, serverID, requestedHost, source string, remoteIP string, protocolVersion int) (grantResponse, error) {

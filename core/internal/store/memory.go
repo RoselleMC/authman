@@ -43,6 +43,8 @@ type Memory struct {
 	downstreamStatus     map[string]DownstreamServerStatus
 	downstreamPrivileges map[string]map[string]DownstreamServerPrivilegedPassport
 	limboBlueprints      map[string]LimboBlueprint
+	limboProtocolBundles map[string]LimboProtocolBundle
+	limboProtocolStatus  map[string]LimboProtocolStatus
 	profileSkins         map[string]ProfileSkin
 	premiumTextures      map[string][]identity.ProfileProperty
 	passportSkins        map[string]PassportSkin
@@ -82,6 +84,8 @@ func NewMemory() *Memory {
 		downstreamStatus:     make(map[string]DownstreamServerStatus),
 		downstreamPrivileges: make(map[string]map[string]DownstreamServerPrivilegedPassport),
 		limboBlueprints:      make(map[string]LimboBlueprint),
+		limboProtocolBundles: make(map[string]LimboProtocolBundle),
+		limboProtocolStatus:  make(map[string]LimboProtocolStatus),
 		profileSkins:         make(map[string]ProfileSkin),
 		premiumTextures:      make(map[string][]identity.ProfileProperty),
 		passportSkins:        make(map[string]PassportSkin),
@@ -2222,6 +2226,71 @@ func (m *Memory) DeleteLimboBlueprint(ctx context.Context, id string) error {
 	}
 	delete(m.limboBlueprints, id)
 	return nil
+}
+
+func (m *Memory) GetLimboProtocolBundle(ctx context.Context, nodeID string) (LimboProtocolBundle, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	bundle, ok := m.limboProtocolBundles[strings.TrimSpace(nodeID)]
+	if !ok {
+		return LimboProtocolBundle{}, fmt.Errorf("limbo protocol bundle not found: %w", ErrNotFound)
+	}
+	return cloneLimboProtocolBundle(bundle), nil
+}
+
+func (m *Memory) UpsertLimboProtocolBundle(ctx context.Context, bundle LimboProtocolBundle) (LimboProtocolBundle, error) {
+	bundle.NodeID = strings.TrimSpace(bundle.NodeID)
+	if bundle.NodeID == "" {
+		return LimboProtocolBundle{}, fmt.Errorf("limbo protocol bundle node id is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	if existing, ok := m.limboProtocolBundles[bundle.NodeID]; ok {
+		bundle.CreatedAt = existing.CreatedAt
+	}
+	if bundle.CreatedAt.IsZero() {
+		bundle.CreatedAt = now
+	}
+	bundle.UpdatedAt = now
+	m.limboProtocolBundles[bundle.NodeID] = cloneLimboProtocolBundle(bundle)
+	return cloneLimboProtocolBundle(bundle), nil
+}
+
+func (m *Memory) DeleteLimboProtocolBundle(ctx context.Context, nodeID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	nodeID = strings.TrimSpace(nodeID)
+	if _, ok := m.limboProtocolBundles[nodeID]; !ok {
+		return fmt.Errorf("limbo protocol bundle not found: %w", ErrNotFound)
+	}
+	delete(m.limboProtocolBundles, nodeID)
+	return nil
+}
+
+func (m *Memory) GetLimboProtocolStatus(ctx context.Context, nodeID string) (LimboProtocolStatus, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	status, ok := m.limboProtocolStatus[strings.TrimSpace(nodeID)]
+	if !ok {
+		return LimboProtocolStatus{}, fmt.Errorf("limbo protocol status not found: %w", ErrNotFound)
+	}
+	return cloneLimboProtocolStatus(status), nil
+}
+
+func (m *Memory) UpsertLimboProtocolStatus(ctx context.Context, status LimboProtocolStatus) (LimboProtocolStatus, error) {
+	status.NodeID = strings.TrimSpace(status.NodeID)
+	if status.NodeID == "" {
+		return LimboProtocolStatus{}, fmt.Errorf("limbo protocol status node id is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	status.UpdatedAt = time.Now().UTC()
+	if status.ReportedAt.IsZero() {
+		status.ReportedAt = status.UpdatedAt
+	}
+	m.limboProtocolStatus[status.NodeID] = cloneLimboProtocolStatus(status)
+	return cloneLimboProtocolStatus(status), nil
 }
 
 func (m *Memory) SaveTransferGrant(ctx context.Context, grant auth.TransferGrant) error {

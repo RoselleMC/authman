@@ -286,6 +286,16 @@
 .config-v { font-size: 13px; font-weight: 520; text-align: right; display: inline-flex; align-items: center; gap: 6px; }
 .config-ok { display: inline-flex; color: var(--color-success); }
 .config-note { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--color-text-subtle); margin: 14px 0 0; }
+.protocol-version-section { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--color-border); }
+.protocol-version-label { color: var(--color-text-muted); font-size: 12px; font-weight: 560; }
+.protocol-version-list { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.protocol-version-tag { display: inline-flex; align-items: center; min-height: 25px; padding: 3px 8px; border: 1px solid var(--color-border); border-radius: 5px; background: var(--color-surface-muted); color: var(--color-text); font-family: var(--font-mono); font-size: 11.5px; white-space: nowrap; }
+.protocol-pack-controls { display: grid; grid-template-columns: minmax(220px, 1fr) auto; align-items: center; gap: 12px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--color-border); }
+.protocol-pack-file { width: 100%; min-width: 0; padding: 8px 10px; }
+.protocol-pack-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.protocol-pack-error { display: flex; align-items: flex-start; gap: 7px; margin: 14px 0 0; color: var(--color-danger); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.protocol-pack-error svg { margin-top: 2px; }
+.protocol-version-summary { display: block; max-width: 100%; white-space: normal; line-height: 1.45; }
 .placeholder-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .placeholder-card { display: flex; align-items: center; gap: 13px; background: var(--color-surface); border: 1px dashed var(--color-border-strong); border-radius: var(--radius-lg); padding: 16px 18px; }
 .placeholder-ico { width: 38px; height: 38px; border-radius: 10px; background: var(--color-surface-muted); color: var(--color-text-subtle); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -477,6 +487,8 @@
   .roles-layout { grid-template-columns: 1fr; }
   .roles-sidebar-card { position: static; }
   .settings-form-grid, .settings-form-grid--single, .profile-settings, .profile-settings__fields, .account-profile-form, .account-profile-form__fields, .passkey-add-row, .totp-dialog-grid, .form-grid.two { grid-template-columns: 1fr; }
+  .protocol-pack-controls { grid-template-columns: 1fr; }
+  .protocol-pack-actions { justify-content: flex-start; }
   .account-profile-form__actions { justify-content: stretch; }
   .account-profile-form__actions .btn { width: 100%; }
   .security-method-row { grid-template-columns: 38px minmax(0, 1fr); }

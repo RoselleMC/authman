@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/RoselleMC/limbgo"
+	"github.com/RoselleMC/authman/limbo"
 	"go.minekube.com/common/minecraft/component"
 )
 

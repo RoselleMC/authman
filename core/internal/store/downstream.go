@@ -225,6 +225,19 @@ func cloneLimboBlueprint(blueprint LimboBlueprint) LimboBlueprint {
 	return blueprint
 }
 
+func cloneLimboProtocolBundle(bundle LimboProtocolBundle) LimboProtocolBundle {
+	bundle.Protocols = append([]int32(nil), bundle.Protocols...)
+	bundle.MinecraftVersions = append([]string(nil), bundle.MinecraftVersions...)
+	bundle.Archive = append([]byte(nil), bundle.Archive...)
+	return bundle
+}
+
+func cloneLimboProtocolStatus(status LimboProtocolStatus) LimboProtocolStatus {
+	status.Protocols = append([]int32(nil), status.Protocols...)
+	status.MinecraftVersions = append([]string(nil), status.MinecraftVersions...)
+	return status
+}
+
 func cloneDownstreamServer(server DownstreamServer) DownstreamServer {
 	server.PortalTheme = cloneMap(server.PortalTheme)
 	server.PortalConfig = cloneMap(server.PortalConfig)

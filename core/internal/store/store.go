@@ -63,6 +63,33 @@ type LimboBlueprint struct {
 	UpdatedAt   time.Time
 }
 
+type LimboProtocolBundle struct {
+	NodeID            string
+	Name              string
+	Version           string
+	Filename          string
+	ContentType       string
+	SizeBytes         int64
+	SHA256            string
+	Protocols         []int32
+	MinecraftVersions []string
+	Archive           []byte
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type LimboProtocolStatus struct {
+	NodeID            string
+	Name              string
+	Version           string
+	SHA256            string
+	Protocols         []int32
+	MinecraftVersions []string
+	LastError         string
+	ReportedAt        time.Time
+	UpdatedAt         time.Time
+}
+
 type ProfileSkin struct {
 	ProfileID         string
 	Model             string
@@ -467,6 +494,11 @@ type PlayerStore interface {
 	GetLimboBlueprint(ctx context.Context, id string) (LimboBlueprint, error)
 	UpsertLimboBlueprint(ctx context.Context, blueprint LimboBlueprint) (LimboBlueprint, error)
 	DeleteLimboBlueprint(ctx context.Context, id string) error
+	GetLimboProtocolBundle(ctx context.Context, nodeID string) (LimboProtocolBundle, error)
+	UpsertLimboProtocolBundle(ctx context.Context, bundle LimboProtocolBundle) (LimboProtocolBundle, error)
+	DeleteLimboProtocolBundle(ctx context.Context, nodeID string) error
+	GetLimboProtocolStatus(ctx context.Context, nodeID string) (LimboProtocolStatus, error)
+	UpsertLimboProtocolStatus(ctx context.Context, status LimboProtocolStatus) (LimboProtocolStatus, error)
 	SaveTransferGrant(ctx context.Context, grant auth.TransferGrant) error
 	GetPendingTransferGrantByProtocolName(ctx context.Context, serverID string, protocolName string, now time.Time) (auth.TransferGrant, error)
 	ConsumeTransferGrant(ctx context.Context, tokenHash string, serverID string, uuid string, protocolName string, gateNodeID string, allowedPortalSources []string, now time.Time) (auth.TransferGrant, error)

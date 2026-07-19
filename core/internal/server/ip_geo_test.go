@@ -1,15 +1,26 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/RoselleMC/authman/core/internal/api"
 	"github.com/RoselleMC/authman/core/internal/config"
 	"github.com/RoselleMC/authman/core/internal/identity"
 	"github.com/RoselleMC/authman/core/internal/store"
@@ -17,6 +28,256 @@ import (
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 	ipsmodel "github.com/sjzar/ips/pkg/model"
 )
+
+func TestCopyIPGeoResponseUsesProgressRatherThanTotalDuration(t *testing.T) {
+	reader := &delayedIPGeoReadCloser{remaining: 12, delay: 5 * time.Millisecond, closed: make(chan struct{})}
+	var output bytes.Buffer
+	written, err := copyIPGeoResponse(&output, reader, 100, 12, 20*time.Millisecond, 30*time.Millisecond, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written != 12 || output.Len() != 12 {
+		t.Fatalf("copied %d bytes, output=%d", written, output.Len())
+	}
+}
+
+func TestGitHubReleaseAssetAPIURL(t *testing.T) {
+	got := githubReleaseAssetAPIURL("sapics/ip-location-db", 463626099)
+	want := "https://api.github.com/repos/sapics/ip-location-db/releases/assets/463626099"
+	if got != want {
+		t.Fatalf("asset API URL = %q, want %q", got, want)
+	}
+}
+
+func TestCopyIPGeoResponseRejectsIdleAndTooSlowConnections(t *testing.T) {
+	t.Run("idle", func(t *testing.T) {
+		reader := &delayedIPGeoReadCloser{remaining: 1, delay: time.Second, closed: make(chan struct{})}
+		_, err := copyIPGeoResponse(io.Discard, reader, 100, 100, 20*time.Millisecond, time.Second, 1)
+		if err == nil || !strings.Contains(err.Error(), "made no progress") {
+			t.Fatalf("idle error = %v", err)
+		}
+	})
+	t.Run("too slow", func(t *testing.T) {
+		reader := &delayedIPGeoReadCloser{remaining: 20, delay: 15 * time.Millisecond, closed: make(chan struct{})}
+		_, err := copyIPGeoResponse(io.Discard, reader, 100, 20, 50*time.Millisecond, 40*time.Millisecond, 4)
+		if err == nil || !strings.Contains(err.Error(), "too slow") {
+			t.Fatalf("slow error = %v", err)
+		}
+	})
+}
+
+func TestDownloadIPGeoURLResumesPartialResponse(t *testing.T) {
+	const body = "hello resumable database"
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Content-Disposition", `attachment; filename="test.mmdb"`)
+		if r.Header.Get("Range") == "" {
+			connection, buffer, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_, _ = fmt.Fprintf(buffer, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nAccept-Ranges: bytes\r\nContent-Disposition: attachment; filename=test.mmdb\r\nETag: \"test-v1\"\r\n\r\n%s", len(body), body[:5])
+			_ = buffer.Flush()
+			_ = connection.Close()
+			return
+		}
+		if r.Header.Get("Range") != "bytes=5-" {
+			t.Errorf("Range = %q, want bytes=5-", r.Header.Get("Range"))
+			http.Error(w, "bad range", http.StatusBadRequest)
+			return
+		}
+		if r.Header.Get("If-Range") != `"test-v1"` {
+			t.Errorf("If-Range = %q, want an ETag validator", r.Header.Get("If-Range"))
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes 5-%d/%d", len(body)-1, len(body)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)-5))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = io.WriteString(w, body[5:])
+	}))
+	defer server.Close()
+
+	download, err := downloadIPGeoURL(context.Background(), server.URL, nil, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(download.Path)
+	data, err := os.ReadFile(download.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != body {
+		t.Fatalf("downloaded data = %q, want %q", data, body)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("requests = %d, want 2", got)
+	}
+}
+
+type delayedIPGeoReadCloser struct {
+	remaining int
+	delay     time.Duration
+	closed    chan struct{}
+}
+
+func (r *delayedIPGeoReadCloser) Read(buffer []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	timer := time.NewTimer(r.delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-r.closed:
+		return 0, errors.New("reader closed")
+	}
+	buffer[0] = 'x'
+	r.remaining--
+	return 1, nil
+}
+
+func (r *delayedIPGeoReadCloser) Close() error {
+	select {
+	case <-r.closed:
+	default:
+		close(r.closed)
+	}
+	return nil
+}
+
+func TestCreateIPGeoSourceQueuesBackgroundDownload(t *testing.T) {
+	srv := New(Options{
+		Config: config.Config{
+			HTTPAddr:      ":0",
+			PublicBaseURL: "http://example.test",
+			AdminUsername: "admin",
+			AdminPassword: "correct admin password",
+			IPGeoDataDir:  t.TempDir(),
+		},
+		Logger: slog.Default(),
+		Store:  store.NewMemory(),
+	})
+	adminCookie, csrf := adminLogin(t, srv)
+	rec := requestJSONWithSession(t, srv, http.MethodPost, "/api/admin/ip-geo/sources", `{"catalog_id":"ip66","enabled":true,"weight":1,"auto_update":true}`, adminCookie, csrf)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope api.Envelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	data := envelope.Data.(map[string]any)
+	if data["status"] != string(store.IPGeoSourcePending) || data["size_bytes"] != float64(0) || data["last_updated_at"] != nil {
+		t.Fatalf("unexpected queued source: %#v", data)
+	}
+	select {
+	case sourceID := <-srv.ipGeoRefreshQ:
+		job, ok := srv.beginIPGeoRefresh(sourceID)
+		if !ok || job.SourceID == "" || !job.Force {
+			t.Fatalf("unexpected refresh job: %#v", job)
+		}
+		srv.finishIPGeoRefresh(sourceID)
+	default:
+		t.Fatal("source creation did not queue a background refresh")
+	}
+}
+
+func TestIPGeoRefreshQueueCoalescesDuplicateJobs(t *testing.T) {
+	srv := New(Options{Config: config.Config{IPGeoDataDir: t.TempDir()}})
+	if !srv.queueIPGeoRefresh(ipGeoRefreshJob{SourceID: "source-1"}) ||
+		!srv.queueIPGeoRefresh(ipGeoRefreshJob{SourceID: "source-1", Force: true}) {
+		t.Fatal("failed to queue refresh jobs")
+	}
+	if got := len(srv.ipGeoRefreshQ); got != 1 {
+		t.Fatalf("queued jobs = %d, want 1", got)
+	}
+	sourceID := <-srv.ipGeoRefreshQ
+	job, ok := srv.beginIPGeoRefresh(sourceID)
+	if !ok || !job.Force {
+		t.Fatalf("coalesced job = %#v, %t", job, ok)
+	}
+	if !srv.queueIPGeoRefresh(ipGeoRefreshJob{SourceID: sourceID, Force: true}) {
+		t.Fatal("active refresh should satisfy duplicate manual refresh")
+	}
+	if got := len(srv.ipGeoRefreshQ); got != 0 {
+		t.Fatalf("duplicate active jobs = %d, want 0", got)
+	}
+	if !srv.queueIPGeoRefresh(ipGeoRefreshJob{SourceID: sourceID, Force: true, RepeatIfActive: true}) {
+		t.Fatal("failed to queue changed-source follow-up")
+	}
+	if got := len(srv.ipGeoRefreshQ); got != 1 {
+		t.Fatalf("follow-up jobs = %d, want 1", got)
+	}
+	srv.finishIPGeoRefresh(sourceID)
+}
+
+func TestQueueDueIPGeoSourcesRecoversInterruptedUpdatingSource(t *testing.T) {
+	srv := New(Options{Config: config.Config{IPGeoDataDir: t.TempDir()}, Store: store.NewMemory()})
+	now := time.Now().UTC()
+	source, err := srv.store.UpsertIPGeoSource(context.Background(), store.IPGeoSource{
+		ID: "interrupted", Name: "Interrupted", Type: store.IPGeoSourceURL, Format: "mmdb",
+		SourceURL: "https://example.test/database.mmdb", AutoUpdate: true,
+		Status: store.IPGeoSourceUpdating, CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.queueDueIPGeoSources(context.Background())
+	select {
+	case sourceID := <-srv.ipGeoRefreshQ:
+		if sourceID != source.ID {
+			t.Fatalf("queued source = %q, want %q", sourceID, source.ID)
+		}
+	default:
+		t.Fatal("interrupted updating source was not queued after restart")
+	}
+}
+
+func TestRefreshIPGeoSourceQueuesBackgroundDownload(t *testing.T) {
+	srv := New(Options{
+		Config: config.Config{
+			HTTPAddr:      ":0",
+			PublicBaseURL: "http://example.test",
+			AdminUsername: "admin",
+			AdminPassword: "correct admin password",
+			IPGeoDataDir:  t.TempDir(),
+		},
+		Logger: slog.Default(),
+		Store:  store.NewMemory(),
+	})
+	now := time.Now().UTC()
+	source, err := srv.store.UpsertIPGeoSource(context.Background(), store.IPGeoSource{
+		ID: "source-1", Name: "IP66", Type: store.IPGeoSourceURL, Format: "mmdb",
+		SourceURL: "https://example.test/ip66.mmdb", Status: store.IPGeoSourceReady,
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminCookie, csrf := adminLogin(t, srv)
+	rec := requestJSONWithSession(t, srv, http.MethodPost, "/api/admin/ip-geo/sources/"+source.ID+"/refresh", "", adminCookie, csrf)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("refresh status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	stored, err := srv.store.GetIPGeoSource(context.Background(), source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != store.IPGeoSourceUpdating {
+		t.Fatalf("source status = %q, want updating", stored.Status)
+	}
+	select {
+	case sourceID := <-srv.ipGeoRefreshQ:
+		job, ok := srv.beginIPGeoRefresh(sourceID)
+		if !ok || sourceID != source.ID || !job.Force {
+			t.Fatalf("unexpected refresh job: %#v, %t", job, ok)
+		}
+	default:
+		t.Fatal("manual refresh did not queue a background job")
+	}
+}
 
 func TestIPGeoResolverDoesNotCacheExternalFailure(t *testing.T) {
 	resolver := newIPGeoResolver()

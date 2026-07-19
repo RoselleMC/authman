@@ -238,6 +238,11 @@ func cloneLimboProtocolStatus(status LimboProtocolStatus) LimboProtocolStatus {
 	return status
 }
 
+func cloneVelocityRuntimeRelease(release VelocityRuntimeRelease) VelocityRuntimeRelease {
+	release.Artifact = append([]byte(nil), release.Artifact...)
+	return release
+}
+
 func cloneDownstreamServer(server DownstreamServer) DownstreamServer {
 	server.PortalTheme = cloneMap(server.PortalTheme)
 	server.PortalConfig = cloneMap(server.PortalConfig)

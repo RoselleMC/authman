@@ -90,6 +90,33 @@ type LimboProtocolStatus struct {
 	UpdatedAt         time.Time
 }
 
+type VelocityRuntimeRelease struct {
+	ID          string
+	Version     string
+	APIVersion  int
+	Entrypoint  string
+	Filename    string
+	ContentType string
+	SizeBytes   int64
+	SHA256      string
+	Artifact    []byte
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+type VelocityRuntimeStatus struct {
+	NodeID        string
+	State         string
+	APIVersion    int
+	Version       string
+	SHA256        string
+	TargetVersion string
+	TargetSHA256  string
+	LastError     string
+	ReportedAt    time.Time
+	UpdatedAt     time.Time
+}
+
 type ProfileSkin struct {
 	ProfileID         string
 	Model             string
@@ -120,6 +147,11 @@ type PassportSkin struct {
 	ElytraSHA256      string
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+}
+
+type ProfilePassportBinding struct {
+	Passport identity.Passport
+	Link     identity.ProfilePassportLink
 }
 
 type ExtensionPlayerData struct {
@@ -397,6 +429,8 @@ type PlayerStore interface {
 	GetProfileByID(ctx context.Context, id string) (identity.Profile, error)
 	GetProfileByProtocolName(ctx context.Context, protocolName string) (identity.Profile, error)
 	GetPassportForProfile(ctx context.Context, profileID string) (identity.Passport, error)
+	GetProfilePassportBinding(ctx context.Context, profileID string, passportID string) (ProfilePassportBinding, error)
+	ListPassportsForProfile(ctx context.Context, profileID string) []ProfilePassportBinding
 	GetPrimaryProfileForPassport(ctx context.Context, passportID string) (identity.Profile, error)
 	GetProfileSkin(ctx context.Context, profileID string) (ProfileSkin, error)
 	SetProfileSkin(ctx context.Context, profileID string, skin ProfileSkin, properties []identity.ProfileProperty) (identity.Profile, error)
@@ -413,6 +447,7 @@ type PlayerStore interface {
 	ListProfilesPage(ctx context.Context, query IdentityListQuery) ([]identity.Profile, int, error)
 	CreateProfile(ctx context.Context, profile identity.Profile) (identity.Profile, error)
 	BindProfileToPassport(ctx context.Context, profileID string, passportID string, primary bool) (identity.PassportProfile, error)
+	UnbindProfileFromPassport(ctx context.Context, profileID string, passportID string) error
 	UnbindProfile(ctx context.Context, profileID string) error
 	SetPassportStatus(ctx context.Context, id string, status identity.PassportStatus) (identity.Passport, error)
 	SetProfileStatus(ctx context.Context, id string, status identity.ProfileStatus) (identity.Profile, error)
@@ -499,6 +534,12 @@ type PlayerStore interface {
 	DeleteLimboProtocolBundle(ctx context.Context, nodeID string) error
 	GetLimboProtocolStatus(ctx context.Context, nodeID string) (LimboProtocolStatus, error)
 	UpsertLimboProtocolStatus(ctx context.Context, status LimboProtocolStatus) (LimboProtocolStatus, error)
+	ListVelocityRuntimeReleases(ctx context.Context) []VelocityRuntimeRelease
+	GetVelocityRuntimeRelease(ctx context.Context, id string) (VelocityRuntimeRelease, error)
+	UpsertVelocityRuntimeRelease(ctx context.Context, release VelocityRuntimeRelease) (VelocityRuntimeRelease, error)
+	DeleteVelocityRuntimeRelease(ctx context.Context, id string) error
+	GetVelocityRuntimeStatus(ctx context.Context, nodeID string) (VelocityRuntimeStatus, error)
+	UpsertVelocityRuntimeStatus(ctx context.Context, status VelocityRuntimeStatus) (VelocityRuntimeStatus, error)
 	SaveTransferGrant(ctx context.Context, grant auth.TransferGrant) error
 	GetPendingTransferGrantByProtocolName(ctx context.Context, serverID string, protocolName string, now time.Time) (auth.TransferGrant, error)
 	ConsumeTransferGrant(ctx context.Context, tokenHash string, serverID string, uuid string, protocolName string, gateNodeID string, allowedPortalSources []string, now time.Time) (auth.TransferGrant, error)

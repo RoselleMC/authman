@@ -365,6 +365,8 @@ func (s *Server) nodeSyncPayload(ctx context.Context, n node.Node) map[string]an
 	}
 	if node.IsLimboPortal(n.Mode) {
 		payload["protocol_pack"] = s.limboProtocolPackData(ctx, n.ID)
+	} else if node.IsDownstreamVelocity(n.Mode) {
+		payload["runtime_module"] = s.velocityRuntimeNodeData(ctx, n.ID)
 	}
 	return payload
 }

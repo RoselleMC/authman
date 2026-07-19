@@ -105,8 +105,7 @@ func (s *Server) portalLinkProfile(ctx context.Context, passportID string, sugge
 	if profileID != "" {
 		profile, err := s.store.GetProfileByID(ctx, profileID)
 		if err == nil && profile.Status == identity.ProfileStatusActive {
-			owner, ownerErr := s.store.GetPassportForProfile(ctx, profile.ID)
-			if ownerErr == nil && owner.ID == passportID {
+			if _, bindingErr := s.store.GetProfilePassportBinding(ctx, profile.ID, passportID); bindingErr == nil {
 				return profile, nil
 			}
 		}
@@ -132,8 +131,7 @@ func (s *Server) requirePortalLinkProfile(ctx context.Context, passportID string
 	if err != nil || profile.Status != identity.ProfileStatusActive {
 		return identity.Profile{}, errors.New("profile is not active")
 	}
-	owner, err := s.store.GetPassportForProfile(ctx, profile.ID)
-	if err != nil || owner.ID != passportID {
+	if _, err := s.store.GetProfilePassportBinding(ctx, profile.ID, passportID); err != nil {
 		return identity.Profile{}, errors.New("profile does not belong to passport")
 	}
 	return profile, nil

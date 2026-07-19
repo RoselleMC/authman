@@ -37,7 +37,7 @@ type nodeStore interface {
 	CreateKindForServer(ctx context.Context, name string, kind string, serverID string, now time.Time) (node.Node, string, error)
 	Authenticate(ctx context.Context, token string) (node.Node, error)
 	Rotate(ctx context.Context, id string, now time.Time) (node.Node, string, error)
-	Heartbeat(ctx context.Context, token string, now time.Time) (node.Node, error)
+	Heartbeat(ctx context.Context, token string, metadata node.HeartbeatMetadata, now time.Time) (node.Node, error)
 	Register(ctx context.Context, registration node.Registration, now time.Time) (node.Node, error)
 	Get(ctx context.Context, id string) (node.Node, error)
 	Update(ctx context.Context, id string, name string, runtime map[string]any) (node.Node, error)
@@ -58,6 +58,10 @@ type Server struct {
 	webAuthn       *webauthn.WebAuthn
 	ipGeo          *ipGeoResolver
 	ipGeoRefreshMu sync.Mutex
+	ipGeoRefreshQ  chan string
+	ipGeoQueueMu   sync.Mutex
+	ipGeoPending   map[string]ipGeoRefreshJob
+	ipGeoActive    map[string]bool
 	passportLocks  keyedMutex
 	nodeEvents     *nodeEventHub
 }
@@ -100,6 +104,9 @@ func New(options Options) *Server {
 		passwordParams: options.PasswordParams,
 		mojangVerifier: newMojangVerifier(options.Config),
 		ipGeo:          newIPGeoResolver(),
+		ipGeoRefreshQ:  make(chan string, 256),
+		ipGeoPending:   make(map[string]ipGeoRefreshJob),
+		ipGeoActive:    make(map[string]bool),
 		nodeEvents:     newNodeEventHub(),
 	}
 	s.webAuthn = newWebAuthn(options.Config, logger)
@@ -310,6 +317,8 @@ func (s *Server) routes() {
 	s.coreMux.HandleFunc("DELETE /api/admin/profiles/{id}/skin", s.handleAdminDeleteProfileSkin)
 	s.coreMux.HandleFunc("POST /api/admin/profiles/{id}/bind", s.handleAdminBindProfile)
 	s.coreMux.HandleFunc("POST /api/admin/profiles/{id}/unbind", s.handleAdminUnbindProfile)
+	s.coreMux.HandleFunc("POST /api/admin/profiles/{id}/passports", s.handleAdminBindProfile)
+	s.coreMux.HandleFunc("DELETE /api/admin/profiles/{id}/passports/{passportID}", s.handleAdminUnbindProfilePassport)
 	s.coreMux.HandleFunc("POST /api/admin/profiles/{id}/bans", s.handleAdminCreateProfileBan)
 	s.coreMux.HandleFunc("POST /api/admin/profiles/{id}/kick", s.handleAdminKickProfile)
 	s.coreMux.HandleFunc("DELETE /api/admin/bans/{id}", s.handleAdminRevokeBan)
@@ -350,7 +359,12 @@ func (s *Server) routes() {
 	s.coreMux.HandleFunc("PUT /api/admin/velocity/nodes/{id}", s.handleAdminUpdateNode)
 	s.coreMux.HandleFunc("POST /api/admin/velocity/nodes/{id}/rotate", s.handleAdminRotateNode)
 	s.coreMux.HandleFunc("POST /api/admin/velocity/nodes/{id}/disable", s.handleAdminDisableNode)
+	s.coreMux.HandleFunc("GET /api/admin/velocity/nodes/{id}/runtime-module", s.handleAdminVelocityNodeRuntime)
 	s.coreMux.HandleFunc("DELETE /api/admin/velocity/nodes/{id}", s.handleAdminDeleteNode)
+	s.coreMux.HandleFunc("GET /api/admin/velocity/runtime-releases", s.handleAdminVelocityRuntimeReleases)
+	s.coreMux.HandleFunc("POST /api/admin/velocity/runtime-releases", s.handleAdminUploadVelocityRuntimeRelease)
+	s.coreMux.HandleFunc("POST /api/admin/velocity/runtime-releases/{id}/activate", s.handleAdminActivateVelocityRuntimeRelease)
+	s.coreMux.HandleFunc("DELETE /api/admin/velocity/runtime-releases/{id}", s.handleAdminDeleteVelocityRuntimeRelease)
 	s.coreMux.HandleFunc("GET /api/admin/downstream-servers", s.handleAdminDownstreamServers)
 	s.coreMux.HandleFunc("POST /api/admin/downstream-servers", s.handleAdminCreateDownstreamServer)
 	s.coreMux.HandleFunc("GET /api/admin/downstream-servers/{id}", s.handleAdminDownstreamServerDetail)
@@ -443,6 +457,7 @@ func (s *Server) routes() {
 	s.coreMux.HandleFunc("POST /api/node/limbo/targets/resolve", s.handleNodeResolvePortalTarget)
 	s.coreMux.HandleFunc("GET /api/node/limbo/blueprints/{id}", s.handleNodeLimboBlueprint)
 	s.coreMux.HandleFunc("GET /api/node/limbo/protocol-pack", s.handleNodeLimboProtocolPack)
+	s.coreMux.HandleFunc("GET /api/node/velocity/runtime-module", s.handleNodeVelocityRuntime)
 	s.coreMux.HandleFunc("POST /api/node/limbo/transfer-grants", s.handleNodeCreateTransferGrant)
 	s.coreMux.HandleFunc("POST /api/node/downstream/transfers", s.handleNodeCreateDownstreamTransfer)
 	s.coreMux.HandleFunc("POST /api/node/downstream/transfer-grants/consume", s.handleNodeConsumeTransferGrant)

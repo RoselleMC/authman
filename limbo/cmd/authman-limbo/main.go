@@ -74,6 +74,7 @@ type portal struct {
 	authMu         sync.Mutex
 	authed         map[limbgo.PlayerSession]authedSession
 	verifiedJoins  map[string][]verifiedJoinState
+	preJoinResolve map[string][]preJoinResolveState
 	restartCh      chan string
 	protocols      *protocolpack.Store
 	protocolSyncMu sync.Mutex
@@ -98,6 +99,12 @@ type verifiedJoinState struct {
 	passportID          string
 	passportPreexisting bool
 	expires             time.Time
+}
+
+type preJoinResolveState struct {
+	resolved resolveResponse
+	err      error
+	expires  time.Time
 }
 
 func (p *portal) markAuthed(session limbgo.PlayerSession, passportID, username string) {
@@ -187,6 +194,82 @@ func (p *portal) consumeVerifiedJoin(player limbgo.Player) (verifiedJoinState, b
 	return st, true
 }
 
+func (p *portal) peekVerifiedJoin(player limbgo.Player) (verifiedJoinState, bool) {
+	key := verifiedJoinKey(player.UUID, remoteIP(player.RemoteAddr), player.RequestedHost)
+	if strings.TrimSpace(player.UUID) == "" || strings.TrimSpace(key) == "||" {
+		return verifiedJoinState{}, false
+	}
+	p.authMu.Lock()
+	defer p.authMu.Unlock()
+	p.cleanupVerifiedJoinsLocked(time.Now())
+	queue := p.verifiedJoins[key]
+	if len(queue) == 0 {
+		return verifiedJoinState{}, false
+	}
+	return queue[0], true
+}
+
+func (p *portal) rememberPreJoinResolve(player limbgo.Player, resolved resolveResponse) {
+	p.rememberPreJoinResolveState(player, preJoinResolveState{resolved: resolved})
+}
+
+func (p *portal) rememberPreJoinResolveFailure(player limbgo.Player, err error) {
+	p.rememberPreJoinResolveState(player, preJoinResolveState{err: err})
+}
+
+func (p *portal) rememberPreJoinResolveState(player limbgo.Player, state preJoinResolveState) {
+	key := verifiedJoinKey(player.UUID, remoteIP(player.RemoteAddr), player.RequestedHost)
+	if strings.TrimSpace(key) == "||" {
+		return
+	}
+	p.authMu.Lock()
+	defer p.authMu.Unlock()
+	if p.preJoinResolve == nil {
+		p.preJoinResolve = map[string][]preJoinResolveState{}
+	}
+	now := time.Now()
+	p.cleanupPreJoinResolveLocked(now)
+	state.expires = now.Add(30 * time.Second)
+	p.preJoinResolve[key] = append(p.preJoinResolve[key], state)
+}
+
+func (p *portal) consumePreJoinResolve(player limbgo.Player) (resolveResponse, error, bool) {
+	key := verifiedJoinKey(player.UUID, remoteIP(player.RemoteAddr), player.RequestedHost)
+	if strings.TrimSpace(key) == "||" {
+		return resolveResponse{}, nil, false
+	}
+	p.authMu.Lock()
+	defer p.authMu.Unlock()
+	p.cleanupPreJoinResolveLocked(time.Now())
+	queue := p.preJoinResolve[key]
+	if len(queue) == 0 {
+		return resolveResponse{}, nil, false
+	}
+	state := queue[0]
+	if len(queue) == 1 {
+		delete(p.preJoinResolve, key)
+	} else {
+		p.preJoinResolve[key] = append([]preJoinResolveState(nil), queue[1:]...)
+	}
+	return state.resolved, state.err, true
+}
+
+func (p *portal) cleanupPreJoinResolveLocked(now time.Time) {
+	for key, queue := range p.preJoinResolve {
+		kept := queue[:0]
+		for _, state := range queue {
+			if now.Before(state.expires) {
+				kept = append(kept, state)
+			}
+		}
+		if len(kept) == 0 {
+			delete(p.preJoinResolve, key)
+		} else {
+			p.preJoinResolve[key] = kept
+		}
+	}
+}
+
 type cachedWorld struct {
 	sha256 string
 	world  limbgo.World
@@ -235,6 +318,7 @@ func main() {
 		worlds:         map[string]cachedWorld{},
 		authed:         map[limbgo.PlayerSession]authedSession{},
 		verifiedJoins:  map[string][]verifiedJoinState{},
+		preJoinResolve: map[string][]preJoinResolveState{},
 		messages:       map[string]string{},
 		dialogs:        map[string]playermsg.DialogDoc{},
 		targetNames:    map[string]string{},
@@ -358,13 +442,98 @@ func (p *portal) newServer(router limbo.Router) (*limbgo.Server, error) {
 		ProtocolRouter: router,
 		JoinResolver:   limbgo.JoinResolverFunc(p.resolveJoin),
 		Events: limbgo.PlayerEventHandlerFuncs{
-			Join:        p.handleJoin,
-			DialogClick: p.handleDialogClick,
-			Chat:        p.handleChat,
+			Configuration: p.handleConfiguration,
+			Join:          p.handleJoin,
+			DialogClick:   p.handleDialogClick,
+			Chat:          p.handleChat,
 		},
 		ProxyProtocol: proxyProtocol,
 		Logger:        p.logger,
 	})
+}
+
+// handleConfiguration performs the no-interaction path before Limbo resolves
+// a world or sends registry and chunk data. It only terminates this phase when
+// the same auth policy that skips the login dialog yields exactly one profile.
+func (p *portal) handleConfiguration(ctx context.Context, session limbgo.PlayerSession, event *limbgo.ConfigurationEvent) error {
+	started := time.Now()
+	player := session.Player()
+	caps := session.Capabilities()
+	if p.isLocked() || !caps.StoreCookie || !caps.Transfer {
+		return nil
+	}
+
+	resolved, err := p.client.resolvePlayer(ctx, player)
+	if err != nil {
+		var coreErr coreAPIError
+		if errors.As(err, &coreErr) && coreErr.Status == http.StatusNotFound {
+			p.rememberPreJoinResolveFailure(player, err)
+		}
+		p.logResolvePlayerFailure("limbo configuration fast path resolve failed; continuing to limbo", "configuration_fast_path", player, err, "decision", "continue_to_limbo")
+		return nil
+	}
+
+	premiumPassportPreexisting := false
+	verifiedJoinPassportID := ""
+	if player.Verified {
+		if verifiedJoin, ok := p.peekVerifiedJoin(player); ok {
+			verifiedJoinPassportID = verifiedJoin.passportID
+			premiumPassportPreexisting = verifiedJoin.passportPreexisting &&
+				(strings.TrimSpace(verifiedJoin.passportID) == "" || verifiedJoin.passportID == resolved.Passport.ID)
+		}
+	}
+	skip, reason := shouldSkipLoginDialog(resolved, "", premiumPassportPreexisting)
+	if !skip || len(resolved.Profiles) != 1 {
+		p.rememberPreJoinResolve(player, resolved)
+		p.logResolvePlayerSuccess(
+			"configuration_fast_path",
+			player,
+			resolved,
+			"decision", "continue_to_limbo",
+			"skip_login_dialog", skip,
+			"skip_reason", reason,
+			"verified_join_passport_id", verifiedJoinPassportID,
+			"verified_join_preexisting", premiumPassportPreexisting,
+		)
+		return nil
+	}
+
+	host := requestedHost(player.RequestedHost, p.cfg.DefaultHost)
+	playerIP := remoteIP(player.RemoteAddr)
+	targetResult, err := p.client.resolveTarget(ctx, host, player.ProtocolVersion, playerIP)
+	if err != nil {
+		p.rememberPreJoinResolve(player, resolved)
+		p.logResolvePlayerFailure("limbo configuration fast path target resolve failed; continuing to limbo", "configuration_fast_path", player, err, "decision", "continue_to_limbo", "skip_reason", reason)
+		return nil
+	}
+	p.rememberTarget(host, targetResult.Target, targetResult.PlayerMessages)
+	profile := resolved.Profiles[0]
+	grant, err := p.client.createGrant(ctx, resolved.Passport.ID, profile.ID, profile.ProtocolName, targetResult.Target.ServerID, host, p.sourceID(), playerIP, player.ProtocolVersion)
+	if err != nil {
+		p.rememberPreJoinResolve(player, resolved)
+		p.logResolvePlayerFailure("limbo configuration fast path grant failed; continuing to limbo", "configuration_fast_path", player, err, "decision", "continue_to_limbo", "skip_reason", reason, "profile_id", profile.ID)
+		return nil
+	}
+	if err := session.StoreCookie(ctx, p.transferCookieKey(), []byte(grant.Token)); err != nil {
+		return err
+	}
+	if err := session.Transfer(ctx, grant.Target.TransferHost, grant.Target.TransferPort); err != nil {
+		return err
+	}
+	if player.Verified {
+		_, _ = p.consumeVerifiedJoin(player)
+	}
+	p.logResolvePlayerSuccess(
+		"configuration_fast_path",
+		player,
+		resolved,
+		"decision", "transfer_before_world",
+		"skip_reason", reason,
+		"profile_id", profile.ID,
+		"server_id", grant.Target.ServerID,
+		"elapsed_ms", time.Since(started).Milliseconds(),
+	)
+	return nil
 }
 
 func waitServerExit(errCh <-chan error, timeout time.Duration) error {
@@ -1336,7 +1505,10 @@ func (p *portal) showLoginDialogMessage(ctx context.Context, session limbgo.Play
 		return session.Disconnect(ctx, p.messageForSession(session, "limbo.kick.client_too_old", vars))
 	}
 	player := session.Player()
-	resolved, err := p.client.resolvePlayer(ctx, player)
+	resolved, err, cachedResolve := p.consumePreJoinResolve(player)
+	if !cachedResolve {
+		resolved, err = p.client.resolvePlayer(ctx, player)
+	}
 	if err != nil {
 		var coreErr coreAPIError
 		if errors.As(err, &coreErr) && coreErr.Status == http.StatusNotFound && shouldShowRegisterForResolveNotFound(player) {
@@ -1345,6 +1517,9 @@ func (p *portal) showLoginDialogMessage(ctx context.Context, session limbgo.Play
 		}
 		p.logResolvePlayerFailure("limbo player resolve failed; showing resolve error", "login_dialog", player, err, "decision", "send_resolve_failed", "has_error", strings.TrimSpace(errorText) != "")
 		return session.SendMessage(ctx, p.messageForSession(session, "limbo.error.resolve_failed", vars))
+	}
+	if cachedResolve {
+		p.logger.Debug("using configuration-stage player resolve", playerLogAttrs(player)...)
 	}
 	premiumPassportPreexisting := false
 	var verifiedJoinPassportID string
@@ -1611,7 +1786,11 @@ func (p *portal) transferProfile(ctx context.Context, session limbgo.PlayerSessi
 	} else if target.ServerID != "" {
 		vars["server"] = target.ServerID
 	}
-	grant, err := p.client.createGrant(ctx, profile.ID, profile.ProtocolName, target.ServerID, host, p.sourceID(), playerIP, player.ProtocolVersion)
+	passportID := ""
+	if authed, ok := p.authedState(session); ok {
+		passportID = authed.passportID
+	}
+	grant, err := p.client.createGrant(ctx, passportID, profile.ID, profile.ProtocolName, target.ServerID, host, p.sourceID(), playerIP, player.ProtocolVersion)
 	if err != nil {
 		return p.showAuthDialogError(ctx, session, screen, p.rawMessageForSession(session, "limbo.error.grant_failed"))
 	}
@@ -2343,8 +2522,9 @@ func (c *coreClient) fetchProtocolPack(ctx context.Context, path string) ([]byte
 	return raw, nil
 }
 
-func (c *coreClient) createGrant(ctx context.Context, playerID, username, serverID, requestedHost, source string, remoteIP string, protocolVersion int) (grantResponse, error) {
+func (c *coreClient) createGrant(ctx context.Context, passportID, playerID, username, serverID, requestedHost, source string, remoteIP string, protocolVersion int) (grantResponse, error) {
 	return postJSON[grantResponse](ctx, c, "/api/node/limbo/transfer-grants", map[string]any{
+		"passport_id":      passportID,
 		"player_id":        playerID,
 		"username":         username,
 		"server_id":        serverID,

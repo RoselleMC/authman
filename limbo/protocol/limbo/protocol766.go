@@ -142,14 +142,7 @@ func (cfg modernProtocolConfig) packetID(state packetid.State, direction packeti
 	return packetid.ID(cfg.packetProtocol(), state, direction, name)
 }
 
-func serveModernProtocol(ctx context.Context, conn net.Conn, reader *bufio.Reader, services limbgo.SessionServices, player limbgo.Player, cfg modernProtocolConfig, registryData *registrydata.Data) error {
-	join, err := resolveJoin(ctx, services, player)
-	if err != nil {
-		return err
-	}
-	spawn := join.Spawn
-	world := join.World
-
+func serveModernProtocol(ctx context.Context, conn net.Conn, reader *bufio.Reader, services limbgo.SessionServices, player limbgo.Player, cfg modernProtocolConfig, resolveRegistryData func() (*registrydata.Data, error)) error {
 	if err := writeLoginSuccessModern(conn, player, cfg); err != nil {
 		return err
 	}
@@ -160,6 +153,20 @@ func serveModernProtocol(ctx context.Context, conn net.Conn, reader *bufio.Reade
 	ackID, ok := cfg.packetID(packetid.StateLogin, packetid.ToServer, "login_acknowledged")
 	if !ok || ack.ID != ackID {
 		return fmt.Errorf("expected login_acknowledged packet %d, got %d", ackID, ack.ID)
+	}
+	if handled, err := serveConfigurationEvent(ctx, conn, services, player, cfg); err != nil || handled {
+		return err
+	}
+
+	join, err := resolveJoin(ctx, services, player)
+	if err != nil {
+		return err
+	}
+	spawn := join.Spawn
+	world := join.World
+	registryData, err := resolveRegistryData()
+	if err != nil {
+		return err
 	}
 
 	if cfg.registryCodecNBT {

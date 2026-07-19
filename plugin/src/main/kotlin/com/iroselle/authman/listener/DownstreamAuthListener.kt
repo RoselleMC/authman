@@ -1,5 +1,6 @@
 package com.iroselle.authman.listener
 
+import com.google.gson.Gson
 import com.velocitypowered.api.event.Subscribe
 import com.velocitypowered.api.event.connection.DisconnectEvent
 import com.velocitypowered.api.event.connection.LoginEvent
@@ -44,12 +45,42 @@ class DownstreamAuthListener(
     private val client: AuthmanClient,
     private val messages: AuthmanMessages,
 ) {
+    private val gson = Gson()
     private val pending: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
     private val allowed: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
     private val validating: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
     private val presences: MutableMap<UUID, String> = ConcurrentHashMap()
     private val resourcePackTargets: MutableMap<UUID, DownstreamTarget> = ConcurrentHashMap()
     private val privilegedPlayers: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
+
+    fun exportState(): ByteArray {
+        val activeIDs = server.allPlayers.filter { it.isActive }.mapTo(HashSet()) { it.uniqueId }
+        val state = RuntimeState(
+            allowed = allowed.filter { it in activeIDs }.map(UUID::toString),
+            presences = presences.filterKeys { it in activeIDs }.mapKeys { it.key.toString() },
+            resourcePackTargets = resourcePackTargets.filterKeys { it in activeIDs }.mapKeys { it.key.toString() },
+            privileged = privilegedPlayers.filter { it in activeIDs }.map(UUID::toString),
+        )
+        return gson.toJson(state).toByteArray(StandardCharsets.UTF_8)
+    }
+
+    fun importState(raw: ByteArray?) {
+        if (raw == null || raw.isEmpty()) {
+            return
+        }
+        val state = runCatching {
+            gson.fromJson(raw.toString(StandardCharsets.UTF_8), RuntimeState::class.java)
+        }.getOrNull() ?: return
+        val activeIDs = server.allPlayers.filter { it.isActive }.mapTo(HashSet()) { it.uniqueId }
+        state.allowed.mapNotNull(::parseUUID).filterTo(allowed) { it in activeIDs }
+        for ((id, presence) in state.presences) {
+            parseUUID(id)?.takeIf { it in activeIDs && presence.isNotBlank() }?.let { presences[it] = presence }
+        }
+        for ((id, target) in state.resourcePackTargets) {
+            parseUUID(id)?.takeIf { it in activeIDs }?.let { resourcePackTargets[it] = target }
+        }
+        state.privileged.mapNotNull(::parseUUID).filterTo(privilegedPlayers) { it in activeIDs }
+    }
 
     fun onlinePresenceCount(): Int =
         server.allPlayers.count { player ->
@@ -292,14 +323,14 @@ class DownstreamAuthListener(
         privilegedPlayers.remove(event.player.uniqueId)
         val presenceId = presences.remove(event.player.uniqueId)
         if (!presenceId.isNullOrBlank()) {
-            server.scheduler.buildTask(plugin, Runnable {
+            plugin.schedule(Runnable {
                 try {
                     client.endPresence(presenceId, "disconnect")
                 } catch (ex: Exception) {
                     plugin.lockIfCoreRejected(ex)
                     logger.warn("Failed to end Authman presence {} for {}", presenceId, event.player.username, ex)
                 }
-            }).schedule()
+            })
         }
     }
 
@@ -333,23 +364,40 @@ class DownstreamAuthListener(
     }
 
     private fun scheduleInitialConnect(player: Player, delayMillis: Long) {
-        server.scheduler.buildTask(plugin, Runnable {
+        plugin.schedule(Runnable {
             connectInitialServer(player)
-        }).delay(delayMillis.coerceAtLeast(0), TimeUnit.MILLISECONDS).schedule()
+        }, delayMillis, TimeUnit.MILLISECONDS)
     }
 
     private fun connectInitialServer(player: Player) {
         if (!player.isActive) {
             return
         }
-        val target = resolveInitialServer(null) ?: return
+        val target = resolveInitialServer(null)
+        if (target == null) {
+            val targetName = config.downstreamInitialServer.ifBlank { "downstream server" }
+            rejectWith(
+                player,
+                "Authman downstream target is not registered: $targetName",
+                messages.downstreamUnavailable(player.username, targetName),
+            )
+            return
+        }
         val targetName = target.serverInfo.name
-        if (player.currentServer.map { it.server.serverInfo.name == targetName }.orElse(false)) {
+        if (isConnectedTo(player, targetName)) {
             return
         }
         player.createConnectionRequest(target).connect().whenComplete { result, error ->
             if (error != null) {
                 logger.warn("Failed to connect Authman downstream player {} to {}", player.username, targetName, error)
+                if (!player.isActive || isConnectedTo(player, targetName)) {
+                    return@whenComplete
+                }
+                rejectWith(
+                    player,
+                    "downstream connection to $targetName failed: ${error.message ?: error.javaClass.simpleName}",
+                    messages.downstreamUnavailable(player.username, targetName),
+                )
                 return@whenComplete
             }
             if (result.status == com.velocitypowered.api.proxy.ConnectionRequestBuilder.Status.CONNECTION_IN_PROGRESS) {
@@ -358,17 +406,28 @@ class DownstreamAuthListener(
             }
             if (!result.isSuccessful) {
                 logger.warn("Authman downstream player {} was not connected to {}: {}", player.username, targetName, result.status)
+                if (!player.isActive || isConnectedTo(player, targetName)) {
+                    return@whenComplete
+                }
+                rejectWith(
+                    player,
+                    "downstream connection to $targetName returned ${result.status}",
+                    messages.downstreamUnavailable(player.username, targetName),
+                )
             }
         }
     }
+
+    private fun isConnectedTo(player: Player, targetName: String): Boolean =
+        player.currentServer.map { it.server.serverInfo.name == targetName }.orElse(false)
 
     private fun scheduleResourcePacks(player: Player, target: DownstreamTarget, delayMillis: Long) {
         if (!target.resourcePackEnabled || target.resourcePacks.isEmpty()) {
             return
         }
-        server.scheduler.buildTask(plugin, Runnable {
+        plugin.schedule(Runnable {
             sendResourcePacks(player, target)
-        }).delay(delayMillis.coerceAtLeast(0), TimeUnit.MILLISECONDS).schedule()
+        }, delayMillis, TimeUnit.MILLISECONDS)
     }
 
     private fun sendResourcePacks(player: Player, target: DownstreamTarget) {
@@ -453,11 +512,11 @@ class DownstreamAuthListener(
     private fun cookieKey(): Key = Key.key(config.transferCookieKey)
 
     private fun scheduleValidationTimeout(player: Player) {
-        server.scheduler.buildTask(plugin, Runnable {
+        plugin.schedule(Runnable {
             if (player.isActive && pending.contains(player.uniqueId) && !allowed.contains(player.uniqueId)) {
                 rejectWith(player, "Authman downstream validation timed out", messages.validationTimeout(player.username))
             }
-        }).delay(config.downstreamValidationTimeoutSeconds, TimeUnit.SECONDS).schedule()
+        }, config.downstreamValidationTimeoutSeconds, TimeUnit.SECONDS)
     }
 
     private fun reject(player: Player, reason: String) {
@@ -548,4 +607,13 @@ class DownstreamAuthListener(
         }
         return action.protocolName.isNotBlank() && player.username.equals(action.protocolName, ignoreCase = true)
     }
+
+    private fun parseUUID(value: String): UUID? = runCatching { UUID.fromString(value) }.getOrNull()
+
+    private data class RuntimeState(
+        val allowed: List<String> = emptyList(),
+        val presences: Map<String, String> = emptyMap(),
+        val resourcePackTargets: Map<String, DownstreamTarget> = emptyMap(),
+        val privileged: List<String> = emptyList(),
+    )
 }

@@ -1656,7 +1656,11 @@ function IPGeoSettingsPanel() {
   const toast = useToast();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["settings.ipGeo"], queryFn: fetchIPGeoSettings });
-  const sourcesQ = useQuery({ queryKey: ["settings.ipGeo.sources"], queryFn: fetchIPGeoSources });
+  const sourcesQ = useQuery({
+    queryKey: ["settings.ipGeo.sources"],
+    queryFn: fetchIPGeoSources,
+    refetchInterval: (query) => query.state.data?.some((source) => source.status === "pending" || source.status === "updating") ? 3_000 : false,
+  });
   const catalogQ = useQuery({ queryKey: ["settings.ipGeo.catalog"], queryFn: fetchIPGeoCatalog });
   const [form, setForm] = useState<IPGeoSettings | null>(null);
   const [dialog, setDialog] = useState<"add" | "upload" | "edit" | null>(null);

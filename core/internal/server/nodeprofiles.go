@@ -81,7 +81,9 @@ func (s *Server) nodePassportResolveDataWithPlayer(ctx context.Context, passport
 		authLocked = player.Locked
 	}
 	if hasSelected {
-		selected.ProfileProperties = s.effectiveProfilePropertiesByID(ctx, selected.ID)
+		if profile, err := s.store.GetProfileByID(ctx, selected.ID); err == nil {
+			selected.ProfileProperties = s.effectiveProfileProperties(ctx, profile, &passport)
+		}
 		playerPayload = playerData(selected)
 		authLocked = selected.Locked
 	}
@@ -260,23 +262,31 @@ func (s *Server) handleNodeRenameProfile(w http.ResponseWriter, r *http.Request)
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.invalid_name", err.Error()))
 		return
 	}
-	passport, err := s.store.GetPassportForProfile(r.Context(), profile.ID)
+	passportID := s.activePresencePassportID(r.Context(), n, profile.ID)
+	bindings := s.store.ListPassportsForProfile(r.Context(), profile.ID)
+	if passportID == "" && len(bindings) == 1 {
+		passportID = bindings[0].Passport.ID
+	}
+	binding, err := s.store.GetProfilePassportBinding(r.Context(), profile.ID, passportID)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusForbidden, "passport.not_bound", "profile is not bound to a passport"))
 		return
 	}
+	passport := binding.Passport
 	if passport.Status != identity.PassportStatusActive {
 		api.WriteError(w, api.NewError(http.StatusForbidden, "passport.not_editable", "passport is not editable"))
 		return
 	}
-	if profileNameTakenForPassport(s.store.ListProfilesForPassport(r.Context(), passport.ID), profile.ID, name.Normalized) {
-		api.WriteError(w, api.NewError(http.StatusConflict, "profile.name_taken", "protocol name is already taken for this passport"))
-		return
+	for _, candidateBinding := range bindings {
+		if profileNameTakenForPassport(s.store.ListProfilesForPassport(r.Context(), candidateBinding.Passport.ID), profile.ID, name.Normalized) {
+			api.WriteError(w, api.NewError(http.StatusConflict, "profile.name_taken", "protocol name is already taken for a bound passport"))
+			return
+		}
 	}
 	oldName := profile.ProtocolName
 	profile, err = s.store.UpdateProfileIdentity(r.Context(), profile.ID, name.Protocol)
 	if err != nil {
-		api.WriteError(w, api.NewError(http.StatusNotFound, "profile.not_found", "profile not found"))
+		api.WriteError(w, api.NewError(http.StatusConflict, "profile.name_taken", err.Error()))
 		return
 	}
 	s.auditWithClientIP(r, req.RemoteIP, audit.ActorNode, n.ID, audit.TargetPlayer, profile.ID, "profile.node_rename", map[string]any{
@@ -297,11 +307,7 @@ func (s *Server) handleNodeRenameProfile(w http.ResponseWriter, r *http.Request)
 // promoteGrantProfilePrimary marks the explicitly selected profile as primary
 // so the downstream gate (which resolves by passport login name) applies the
 // identity the player just picked in the limbo dialog.
-func (s *Server) promoteGrantProfilePrimary(r *http.Request, n node.Node, player identity.Player, remoteIP string) {
-	passport, err := s.store.GetPassportForProfile(r.Context(), player.ID)
-	if err != nil {
-		return
-	}
+func (s *Server) promoteGrantProfilePrimary(r *http.Request, n node.Node, passport identity.Passport, player identity.Player, remoteIP string) {
 	if primary, err := s.store.GetPrimaryProfileForPassport(r.Context(), passport.ID); err == nil && primary.ID == player.ID {
 		return
 	}

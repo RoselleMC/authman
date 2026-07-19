@@ -1,0 +1,12 @@
+name: AuthmanBridge
+version: '${version}'
+main: com.iroselle.authman.bridge.AuthmanBridgePlugin
+api-version: '1.20'
+folia-supported: true
+description: Optional downstream command bridge for the Authman Velocity bootstrap
+authors: [Score2]
+commands:
+  authman:
+    description: Forward Authman commands to the connected Velocity bootstrap
+    aliases: [am]
+    usage: /authman

@@ -132,7 +132,17 @@ export function ProfilesPage() {
       ),
     },
     { key: "uuid", header: "UUID", minWidth: "300px", defaultVisible: false, render: (r) => <Copyable value={r.uuid} />, sortable: true, sortValue: (r) => r.uuid },
-    { key: "passport", header: t("admin.profiles.col.passport"), minWidth: "180px", render: (r) => r.passport ? r.passport.username : "—" },
+    {
+      key: "passport",
+      header: t("admin.profiles.col.passport"),
+      minWidth: "220px",
+      render: (r) => {
+        const bindings = r.passports ?? [];
+        if (!bindings.length) return "—";
+        const names = bindings.slice(0, 2).map((binding) => binding.username).join(", ");
+        return <span title={bindings.map((binding) => binding.username).join(", ")}>{names}{bindings.length > 2 ? ` +${bindings.length - 2}` : ""}</span>;
+      },
+    },
     {
       key: "status",
       header: t("admin.players.col.status"),

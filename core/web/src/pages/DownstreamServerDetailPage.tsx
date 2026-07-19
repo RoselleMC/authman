@@ -584,6 +584,14 @@ export function DownstreamServerDetailPage() {
                 </div>
                 <div className="row-actions">
                   <NodeStatusBadge node={node} />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon="settings"
+                    onClick={() => navigateWithBack(navigate, `/node-instances/${encodeURIComponent(node.id)}`, location)}
+                  >
+                    {t("common.manage")}
+                  </Button>
                   <Button size="sm" variant="danger-soft" icon="close" onClick={() => setDeleteNodeOpen(true)}>{t("admin.nodes.delete")}</Button>
                 </div>
               </div>

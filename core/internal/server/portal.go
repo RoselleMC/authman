@@ -334,11 +334,12 @@ func (s *Server) handlePortalSelectProfile(w http.ResponseWriter, r *http.Reques
 		api.WriteError(w, api.NewError(http.StatusNotFound, "profile.not_found", "profile not found"))
 		return
 	}
-	passport, err := s.store.GetPassportForProfile(r.Context(), profile.ID)
-	if err != nil || passport.ID != session.SubjectID {
+	binding, err := s.store.GetProfilePassportBinding(r.Context(), profile.ID, session.SubjectID)
+	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusForbidden, "profile.not_owned", "profile is not available for this passport"))
 		return
 	}
+	passport := binding.Passport
 	session.SelectedProfileID = profile.ID
 	if err := s.store.UpdateSession(r.Context(), session); err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "system.session_failed", "failed to update session"))
@@ -574,7 +575,7 @@ func (s *Server) portalSessionIdentity(ctx context.Context, session auth.Session
 	if session.SelectedProfileID != "" {
 		profile, err = s.store.GetProfileByID(ctx, session.SelectedProfileID)
 		if err == nil {
-			if owner, ownerErr := s.store.GetPassportForProfile(ctx, profile.ID); ownerErr == nil && owner.ID == passport.ID {
+			if _, bindingErr := s.store.GetProfilePassportBinding(ctx, profile.ID, passport.ID); bindingErr == nil {
 				return passport, profile, identity.PlayerFromPassportProfile(passport, profile), nil
 			}
 		}
@@ -600,8 +601,7 @@ func (s *Server) portalOwnedProfile(r *http.Request, session auth.Session, profi
 	if err != nil {
 		return identity.Passport{}, identity.Profile{}, api.NewError(http.StatusNotFound, "profile.not_found", "profile not found")
 	}
-	owner, err := s.store.GetPassportForProfile(r.Context(), profile.ID)
-	if err != nil || owner.ID != passport.ID {
+	if _, err := s.store.GetProfilePassportBinding(r.Context(), profile.ID, passport.ID); err != nil {
 		return identity.Passport{}, identity.Profile{}, api.NewError(http.StatusForbidden, "profile.not_owned", "profile is not available for this passport")
 	}
 	return passport, profile, nil

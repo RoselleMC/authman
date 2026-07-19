@@ -32,12 +32,16 @@ import {
   type SafeVelocityNode,
 } from "@authman/shared";
 import {
+  activateVelocityRuntime,
   downloadLimboProtocolPack,
   fetchLimboProtocolPack,
   fetchNode,
+  fetchVelocityNodeRuntime,
+  fetchVelocityRuntimeCatalog,
   resetLimboProtocolPack,
   updateNode,
   uploadLimboProtocolPack,
+  uploadVelocityRuntime,
 } from "../api/admin";
 
 interface FormState {
@@ -148,17 +152,37 @@ export function NodeDetailPage() {
     () => (protocolPackQ.data ? coerceLimboProtocolPackState(protocolPackQ.data) : node?.protocol_pack ?? null),
     [node?.protocol_pack, protocolPackQ.data],
   );
+  const runtimeCatalogQ = useQuery({
+    queryKey: ["admin.velocityRuntimeCatalog"],
+    queryFn: fetchVelocityRuntimeCatalog,
+    enabled: !!id && node?.kind === "downstream_velocity",
+    refetchInterval: 10_000,
+  });
+  const runtimeNodeQ = useQuery({
+    queryKey: ["admin.velocityNodeRuntime", id],
+    queryFn: () => fetchVelocityNodeRuntime(id),
+    enabled: !!id && node?.kind === "downstream_velocity",
+    refetchInterval: 5_000,
+  });
   const initial = useMemo(() => (node ? toForm(node) : null), [node]);
   const [form, setForm] = useState<FormState | null>(null);
   const [protocolFile, setProtocolFile] = useState<File | null>(null);
   const [protocolFileKey, setProtocolFileKey] = useState(0);
   const [resetProtocolOpen, setResetProtocolOpen] = useState(false);
+  const [runtimeFile, setRuntimeFile] = useState<File | null>(null);
+  const [runtimeFileKey, setRuntimeFileKey] = useState(0);
+  const [selectedRuntimeRelease, setSelectedRuntimeRelease] = useState("");
   const backPath = node?.kind === "limbo_portal" ? "/login-portals" : "/nodes";
   const backTarget = useBackTarget(backPath);
 
   useEffect(() => {
     if (initial) setForm(initial);
   }, [initial]);
+
+  useEffect(() => {
+    const current = runtimeCatalogQ.data?.current_release_id ?? "";
+    if (current) setSelectedRuntimeRelease(current);
+  }, [runtimeCatalogQ.data?.current_release_id]);
 
   const save = useMutation({
     mutationFn: (current: FormState) =>
@@ -216,6 +240,35 @@ export function NodeDetailPage() {
     onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
   });
 
+  const refreshRuntime = () => {
+    void qc.invalidateQueries({ queryKey: ["admin.velocityRuntimeCatalog"] });
+    void qc.invalidateQueries({ queryKey: ["admin.velocityNodeRuntime", id] });
+    void qc.invalidateQueries({ queryKey: ["admin.node", id] });
+    void qc.invalidateQueries({ queryKey: ["admin.nodes"] });
+  };
+
+  const uploadRuntime = useMutation({
+    mutationFn: (file: File) => uploadVelocityRuntime(file),
+    onSuccess: (catalog) => {
+      setRuntimeFile(null);
+      setRuntimeFileKey((value) => value + 1);
+      setSelectedRuntimeRelease(catalog.current_release_id);
+      toast.push({ tone: "success", title: t("admin.nodes.runtime.uploaded") });
+      refreshRuntime();
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
+  });
+
+  const activateRuntime = useMutation({
+    mutationFn: (releaseID: string) => activateVelocityRuntime(releaseID),
+    onSuccess: (catalog) => {
+      setSelectedRuntimeRelease(catalog.current_release_id);
+      toast.push({ tone: "success", title: t("admin.nodes.runtime.activated") });
+      refreshRuntime();
+    },
+    onError: (err) => toast.danger(err instanceof ApiError ? tError(err.code) : t("common.unknown")),
+  });
+
   if (q.error) {
     return (
       <PageShell>
@@ -235,6 +288,12 @@ export function NodeDetailPage() {
   const cfg = node.runtime_config ?? {};
   const configuredPack = protocolPack?.configured ?? null;
   const activePack = protocolPack?.active ?? null;
+  const runtimeState = runtimeNodeQ.data ?? q.data?.runtime_module ?? null;
+  const configuredRuntime = runtimeState?.configured ?? null;
+  const activeRuntime = runtimeState?.active ?? null;
+  const runtimeReleases = runtimeCatalogQ.data?.releases ?? [];
+  const runtimeSynced = runtimeState?.in_sync === true;
+  const runtimeTone = activeRuntime?.state === "ready" ? (runtimeSynced ? "success" : "warning") : activeRuntime?.state === "failed" ? "danger" : "neutral";
   const backLabel = node.kind === "limbo_portal" ? t("admin.loginPortals.heading") : t("admin.nodes.heading");
 
   function patch<K extends keyof FormState>(key: K, value: FormState[K]) {
@@ -305,6 +364,77 @@ export function NodeDetailPage() {
           </Card>
 
           {node.kind === "downstream_velocity" ? (
+            <>
+            <Card
+              title={t("admin.nodes.runtime.heading")}
+              actions={
+                <div className="row-actions">
+                  <Badge tone={runtimeTone} dot>{t(`admin.nodes.runtime.state.${activeRuntime?.state ?? "not_loaded"}`, activeRuntime?.state ?? "not_loaded")}</Badge>
+                  <Badge tone={runtimeSynced ? "success" : "warning"}>{t(runtimeSynced ? "admin.nodes.runtime.synced" : "admin.nodes.runtime.pending")}</Badge>
+                </div>
+              }
+              testId="node-runtime-module"
+            >
+              <ConfigGrid>
+                <ConfigRow k={t("admin.nodes.runtime.configured")} v={configuredRuntime?.version || "—"} mono />
+                <ConfigRow k={t("admin.nodes.runtime.active")} v={activeRuntime?.version || "—"} mono />
+                <ConfigRow k={t("admin.nodes.runtime.api")} v={configuredRuntime ? String(configuredRuntime.api_version) : "—"} mono />
+                <ConfigRow k={t("admin.nodes.runtime.archive")} v={configuredRuntime ? `${configuredRuntime.filename} · ${formatBytes(configuredRuntime.size_bytes)}` : "—"} mono />
+                <ConfigRow k="SHA-256" v={configuredRuntime?.sha256 ? configuredRuntime.sha256.slice(0, 16) : "—"} mono />
+                <ConfigRow k={t("admin.nodes.runtime.reported")} v={activeRuntime?.reported_at ? formatRelativeTime(activeRuntime.reported_at) : "—"} />
+              </ConfigGrid>
+
+              {activeRuntime?.last_error ? <p className="protocol-pack-error"><Icon name="alert" size={14} /> {activeRuntime.last_error}</p> : null}
+
+              <div className="protocol-pack-controls">
+                <input
+                  key={runtimeFileKey}
+                  className="input protocol-pack-file"
+                  type="file"
+                  accept=".jar,application/java-archive,application/java"
+                  onChange={(event) => setRuntimeFile(event.target.files?.[0] ?? null)}
+                  data-testid="node-runtime-file"
+                />
+                <div className="protocol-pack-actions">
+                  <Button
+                    variant="primary"
+                    icon="upload"
+                    loading={uploadRuntime.isPending}
+                    disabled={!runtimeFile || uploadRuntime.isPending}
+                    onClick={() => runtimeFile && uploadRuntime.mutate(runtimeFile)}
+                    data-testid="node-runtime-upload"
+                  >
+                    {t("admin.nodes.runtime.upload")}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="settings-form-grid settings-form-grid--single" style={{ marginTop: 16 }}>
+                <Field label={t("admin.nodes.runtime.release")}>
+                  <select
+                    className="input"
+                    value={selectedRuntimeRelease}
+                    onChange={(event) => setSelectedRuntimeRelease(event.target.value)}
+                    data-testid="node-runtime-release"
+                  >
+                    <option value="">—</option>
+                    {runtimeReleases.map((release) => (
+                      <option key={release.id} value={release.id}>{release.version} · {release.sha256.slice(0, 12)}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Button
+                  variant="secondary"
+                  icon="refresh"
+                  loading={activateRuntime.isPending}
+                  disabled={!selectedRuntimeRelease || selectedRuntimeRelease === runtimeCatalogQ.data?.current_release_id || activateRuntime.isPending}
+                  onClick={() => selectedRuntimeRelease && activateRuntime.mutate(selectedRuntimeRelease)}
+                  data-testid="node-runtime-activate"
+                >
+                  {t("admin.nodes.runtime.activate")}
+                </Button>
+              </div>
+            </Card>
             <Card title={t("admin.nodes.detail.downstreamRuntime")}>
               <div className="settings-form-grid">
                 <Field label={t("admin.nodes.field.serverId")} hint={t("admin.nodes.field.serverId.hint")}>
@@ -339,6 +469,7 @@ export function NodeDetailPage() {
                 </span>
               </label>
             </Card>
+            </>
           ) : (
             <>
             <Card

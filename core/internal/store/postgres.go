@@ -33,6 +33,8 @@ const nodeSelectColumns = "id, server_id, mode, name, token_hash, token_fingerpr
 const limboBlueprintSelectColumns = "id, name, description, filename, content_type, size_bytes, sha256, schematic, preview, config, created_at, updated_at"
 const limboProtocolBundleSelectColumns = "node_id, name, version, filename, content_type, size_bytes, sha256, protocols, minecraft_versions, archive, created_at, updated_at"
 const limboProtocolStatusSelectColumns = "node_id, name, version, sha256, protocols, minecraft_versions, last_error, reported_at, updated_at"
+const velocityRuntimeReleaseSelectColumns = "id, version, api_version, entrypoint, filename, content_type, size_bytes, sha256, artifact, created_at, updated_at"
+const velocityRuntimeStatusSelectColumns = "node_id, state, api_version, version, sha256, target_version, target_sha256, last_error, reported_at, updated_at"
 const profileSkinSelectColumns = "profile_id, model, skin_png, skin_content_type, skin_sha256, COALESCE(cape_png, ''::bytea), COALESCE(cape_content_type, ''), COALESCE(cape_sha256, ''), COALESCE(elytra_png, ''::bytea), COALESCE(elytra_content_type, ''), COALESCE(elytra_sha256, ''), created_at, updated_at"
 const passportSkinSelectColumns = "passport_id, model, skin_png, skin_content_type, skin_sha256, COALESCE(cape_png, ''::bytea), COALESCE(cape_content_type, ''), COALESCE(cape_sha256, ''), COALESCE(elytra_png, ''::bytea), COALESCE(elytra_content_type, ''), COALESCE(elytra_sha256, ''), created_at, updated_at"
 const externalAPITokenSelectColumns = "id, name, token_hash, token_fingerprint, status, created_by, call_count, last_used_at, last_used_ip, last_used_path, created_at, updated_at"
@@ -93,7 +95,7 @@ func (p *Postgres) CreateOfflinePassportProfile(ctx context.Context, rawName str
 	`, profile.UUID.String(), profile.ProtocolName, profile.NormalizedName, profile.DisplayName, profile.Status, profile.SkinSource, string(propsJSON), passport.ID, profile.CreatedAt, profile.UpdatedAt); err != nil {
 		return identity.PassportProfile{}, err
 	}
-	link := identity.ProfilePassportLink{ProfileID: profile.ID, PassportID: passport.ID, IsPrimary: true, LinkedAt: time.Now().UTC()}
+	link := identity.ProfilePassportLink{ProfileID: profile.ID, PassportID: passport.ID, IsPrimary: true}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO profile_passport_links (profile_id, passport_id, is_primary, linked_at)
 		VALUES ($1, $2, true, $3)
@@ -183,13 +185,13 @@ func (p *Postgres) UpsertPremiumPassportProfile(ctx context.Context, name string
 	`, passport.ID); err != nil {
 		return identity.PassportProfile{}, err
 	}
-	if _, err := tx.Exec(ctx, `
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO profile_passport_links (profile_id, passport_id, is_primary, linked_at)
-		VALUES ($1, $2, true, $3)
-		ON CONFLICT (profile_id) DO UPDATE
-		SET passport_id = EXCLUDED.passport_id,
-			is_primary = true
-	`, link.ProfileID, link.PassportID, link.LinkedAt); err != nil {
+		VALUES ($1, $2, true, now())
+		ON CONFLICT (profile_id, passport_id) DO UPDATE
+		SET is_primary = true
+		RETURNING linked_at
+	`, link.ProfileID, link.PassportID).Scan(&link.LinkedAt); err != nil {
 		return identity.PassportProfile{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -295,12 +297,62 @@ func (p *Postgres) GetPassportForProfile(ctx context.Context, profileID string) 
 		SELECT `+passportSelectColumns+`
 		FROM passports p
 		JOIN profile_passport_links l ON l.passport_id = p.uuid
+		JOIN profiles profile ON profile.uuid = l.profile_id
 		WHERE l.profile_id = $1
+		ORDER BY (p.uuid = profile.created_from_passport_id) DESC, l.linked_at, p.uuid
+		LIMIT 1
 	`, profileID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
 	}
 	return passport, err
+}
+
+func (p *Postgres) GetProfilePassportBinding(ctx context.Context, profileID string, passportID string) (ProfilePassportBinding, error) {
+	var link identity.ProfilePassportLink
+	err := p.pool.QueryRow(ctx, `
+		SELECT profile_id, passport_id, is_primary, linked_at
+		FROM profile_passport_links
+		WHERE profile_id = $1 AND passport_id = $2
+	`, strings.TrimSpace(profileID), strings.TrimSpace(passportID)).Scan(&link.ProfileID, &link.PassportID, &link.IsPrimary, &link.LinkedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ProfilePassportBinding{}, fmt.Errorf("profile link not found: %w", ErrNotFound)
+	}
+	if err != nil {
+		return ProfilePassportBinding{}, err
+	}
+	passport, err := p.GetPassportByID(ctx, link.PassportID)
+	if err != nil {
+		return ProfilePassportBinding{}, err
+	}
+	return ProfilePassportBinding{Passport: passport, Link: link}, nil
+}
+
+func (p *Postgres) ListPassportsForProfile(ctx context.Context, profileID string) []ProfilePassportBinding {
+	rows, err := p.pool.Query(ctx, `
+		SELECT profile_id, passport_id, is_primary, linked_at
+		FROM profile_passport_links
+		WHERE profile_id = $1
+		ORDER BY linked_at, passport_id
+	`, strings.TrimSpace(profileID))
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	links := make([]identity.ProfilePassportLink, 0)
+	for rows.Next() {
+		var link identity.ProfilePassportLink
+		if err := rows.Scan(&link.ProfileID, &link.PassportID, &link.IsPrimary, &link.LinkedAt); err == nil {
+			links = append(links, link)
+		}
+	}
+	out := make([]ProfilePassportBinding, 0, len(links))
+	for _, link := range links {
+		if passport, err := p.GetPassportByID(ctx, link.PassportID); err == nil {
+			out = append(out, ProfilePassportBinding{Passport: passport, Link: link})
+		}
+	}
+	return out
 }
 
 func (p *Postgres) GetPrimaryProfileForPassport(ctx context.Context, passportID string) (identity.Profile, error) {
@@ -731,7 +783,7 @@ func identityProfileWhere(query IdentityListQuery) (string, []any) {
 	}
 	if query.Search != "" {
 		needle := "%" + query.Search + "%"
-		where = append(where, "(uuid ILIKE "+next(needle)+" OR replace(uuid, '-', '') ILIKE "+next(needle)+" OR protocol_name ILIKE "+next(needle)+" OR normalized_name ILIKE "+next(needle)+" OR display_name ILIKE "+next(needle)+")")
+		where = append(where, "(uuid ILIKE "+next(needle)+" OR replace(uuid, '-', '') ILIKE "+next(needle)+" OR protocol_name ILIKE "+next(needle)+" OR normalized_name ILIKE "+next(needle)+" OR display_name ILIKE "+next(needle)+" OR EXISTS (SELECT 1 FROM profile_passport_links l JOIN passports p ON p.uuid = l.passport_id WHERE l.profile_id = profiles.uuid AND p.username ILIKE "+next(needle)+"))")
 	}
 	if len(where) == 0 {
 		return "", args
@@ -799,7 +851,7 @@ func profileOrderBy(sortKey string, dir string) string {
 	case "uuid":
 		expr = "uuid"
 	case "passport":
-		expr = "(SELECT lower(p.username) FROM profile_passport_links l JOIN passports p ON p.uuid = l.passport_id WHERE l.profile_id = profiles.uuid LIMIT 1)"
+		expr = "(SELECT min(lower(p.username)) FROM profile_passport_links l JOIN passports p ON p.uuid = l.passport_id WHERE l.profile_id = profiles.uuid)"
 	case "status":
 		expr = "status"
 	case "online":
@@ -849,33 +901,67 @@ func (p *Postgres) CreateProfile(ctx context.Context, profile identity.Profile) 
 }
 
 func (p *Postgres) BindProfileToPassport(ctx context.Context, profileID string, passportID string, primary bool) (identity.PassportProfile, error) {
+	profileID = strings.TrimSpace(profileID)
+	passportID = strings.TrimSpace(passportID)
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return identity.PassportProfile{}, err
 	}
 	defer tx.Rollback(ctx)
-	passport, err := scanPassportRow(tx.QueryRow(ctx, `SELECT `+passportSelectColumns+` FROM passports WHERE uuid = $1`, passportID))
+	profile, err := scanProfileRow(tx.QueryRow(ctx, `SELECT `+profileSelectColumns+` FROM profiles WHERE uuid = $1 FOR UPDATE`, profileID))
 	if err != nil {
 		return identity.PassportProfile{}, err
 	}
-	profile, err := scanProfileRow(tx.QueryRow(ctx, `SELECT `+profileSelectColumns+` FROM profiles WHERE uuid = $1`, profileID))
+	passport, err := scanPassportRow(tx.QueryRow(ctx, `SELECT `+passportSelectColumns+` FROM passports WHERE uuid = $1 FOR UPDATE`, passportID))
 	if err != nil {
 		return identity.PassportProfile{}, err
+	}
+	if passport.Status == identity.PassportStatusDeleted {
+		return identity.PassportProfile{}, fmt.Errorf("passport is deleted")
+	}
+	var duplicate bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM profile_passport_links l
+			JOIN profiles p ON p.uuid = l.profile_id
+			WHERE l.passport_id = $1 AND l.profile_id <> $2 AND p.normalized_name = $3
+		)
+	`, passportID, profileID, profile.NormalizedName).Scan(&duplicate); err != nil {
+		return identity.PassportProfile{}, err
+	}
+	if duplicate {
+		return identity.PassportProfile{}, fmt.Errorf("profile protocol name already exists for passport")
+	}
+	var existingPrimary bool
+	if err := tx.QueryRow(ctx, `
+		SELECT is_primary
+		FROM profile_passport_links
+		WHERE profile_id = $1 AND passport_id = $2
+	`, profileID, passportID).Scan(&existingPrimary); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return identity.PassportProfile{}, err
+	}
+	primary = primary || existingPrimary
+	if !primary {
+		var hasPrimary bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM profile_passport_links WHERE passport_id = $1 AND is_primary = true)`, passportID).Scan(&hasPrimary); err != nil {
+			return identity.PassportProfile{}, err
+		}
+		primary = !hasPrimary
 	}
 	if primary {
 		if _, err := tx.Exec(ctx, `UPDATE profile_passport_links SET is_primary = false WHERE passport_id = $1`, passportID); err != nil {
 			return identity.PassportProfile{}, err
 		}
 	}
-	link := identity.ProfilePassportLink{ProfileID: profileID, PassportID: passportID, IsPrimary: primary, LinkedAt: time.Now().UTC()}
-	if _, err := tx.Exec(ctx, `
+	link := identity.ProfilePassportLink{ProfileID: profileID, PassportID: passportID, IsPrimary: primary}
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO profile_passport_links (profile_id, passport_id, is_primary, linked_at)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (profile_id) DO UPDATE
-		SET passport_id = EXCLUDED.passport_id,
-			is_primary = EXCLUDED.is_primary,
-			linked_at = EXCLUDED.linked_at
-	`, link.ProfileID, link.PassportID, link.IsPrimary, link.LinkedAt); err != nil {
+		VALUES ($1, $2, $3, now())
+		ON CONFLICT (profile_id, passport_id) DO UPDATE
+		SET is_primary = EXCLUDED.is_primary
+		RETURNING linked_at
+	`, link.ProfileID, link.PassportID, link.IsPrimary).Scan(&link.LinkedAt); err != nil {
 		return identity.PassportProfile{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -884,15 +970,92 @@ func (p *Postgres) BindProfileToPassport(ctx context.Context, profileID string, 
 	return identity.PassportProfile{Passport: passport, Profile: profile, Link: link}, nil
 }
 
-func (p *Postgres) UnbindProfile(ctx context.Context, profileID string) error {
-	tag, err := p.pool.Exec(ctx, `DELETE FROM profile_passport_links WHERE profile_id = $1`, profileID)
+func (p *Postgres) UnbindProfileFromPassport(ctx context.Context, profileID string, passportID string) error {
+	profileID = strings.TrimSpace(profileID)
+	passportID = strings.TrimSpace(passportID)
+	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	defer tx.Rollback(ctx)
+	var passportExists bool
+	if err := tx.QueryRow(ctx, `SELECT true FROM passports WHERE uuid = $1 FOR UPDATE`, passportID).Scan(&passportExists); errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("passport not found: %w", ErrNotFound)
+	} else if err != nil {
+		return err
+	}
+	var primary bool
+	if err := tx.QueryRow(ctx, `
+		DELETE FROM profile_passport_links
+		WHERE profile_id = $1 AND passport_id = $2
+		RETURNING is_primary
+	`, profileID, passportID).Scan(&primary); errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("profile link not found: %w", ErrNotFound)
+	} else if err != nil {
+		return err
+	}
+	if primary {
+		if err := promotePrimaryProfileTx(ctx, tx, passportID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (p *Postgres) UnbindProfile(ctx context.Context, profileID string) error {
+	profileID = strings.TrimSpace(profileID)
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `
+		DELETE FROM profile_passport_links
+		WHERE profile_id = $1
+		RETURNING passport_id, is_primary
+	`, profileID)
+	if err != nil {
+		return err
+	}
+	var primaryPassportIDs []string
+	removed := false
+	for rows.Next() {
+		removed = true
+		var passportID string
+		var primary bool
+		if err := rows.Scan(&passportID, &primary); err != nil {
+			rows.Close()
+			return err
+		}
+		if primary {
+			primaryPassportIDs = append(primaryPassportIDs, passportID)
+		}
+	}
+	rows.Close()
+	if !removed {
 		return fmt.Errorf("profile link not found: %w", ErrNotFound)
 	}
-	return nil
+	for _, passportID := range primaryPassportIDs {
+		if err := promotePrimaryProfileTx(ctx, tx, passportID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func promotePrimaryProfileTx(ctx context.Context, tx pgx.Tx, passportID string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE profile_passport_links
+		SET is_primary = true
+		WHERE (profile_id, passport_id) = (
+			SELECT profile_id, passport_id
+			FROM profile_passport_links
+			WHERE passport_id = $1
+			ORDER BY linked_at, profile_id
+			LIMIT 1
+		)
+	`, passportID)
+	return err
 }
 
 func (p *Postgres) SetPassportStatus(ctx context.Context, id string, status identity.PassportStatus) (identity.Passport, error) {
@@ -951,7 +1114,59 @@ func (p *Postgres) UpdateProfileIdentity(ctx context.Context, id string, protoco
 	if err != nil {
 		return identity.Profile{}, err
 	}
-	profile, err := scanProfileRow(p.pool.QueryRow(ctx, `
+	profileID := strings.TrimSpace(id)
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	defer tx.Rollback(ctx)
+	var profileExists bool
+	if err := tx.QueryRow(ctx, `SELECT true FROM profiles WHERE uuid = $1 FOR UPDATE`, profileID).Scan(&profileExists); errors.Is(err, pgx.ErrNoRows) {
+		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
+	} else if err != nil {
+		return identity.Profile{}, err
+	}
+	passportRows, err := tx.Query(ctx, `
+		SELECT p.uuid
+		FROM passports p
+		JOIN profile_passport_links l ON l.passport_id = p.uuid
+		WHERE l.profile_id = $1
+		ORDER BY p.uuid
+		FOR UPDATE OF p
+	`, profileID)
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	for passportRows.Next() {
+		var passportID string
+		if err := passportRows.Scan(&passportID); err != nil {
+			passportRows.Close()
+			return identity.Profile{}, err
+		}
+	}
+	if err := passportRows.Err(); err != nil {
+		passportRows.Close()
+		return identity.Profile{}, err
+	}
+	passportRows.Close()
+	var duplicate bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM profile_passport_links target
+			JOIN profile_passport_links candidate ON candidate.passport_id = target.passport_id
+			JOIN profiles p ON p.uuid = candidate.profile_id
+			WHERE target.profile_id = $1
+				AND candidate.profile_id <> $1
+				AND p.normalized_name = $2
+		)
+	`, profileID, name.Normalized).Scan(&duplicate); err != nil {
+		return identity.Profile{}, err
+	}
+	if duplicate {
+		return identity.Profile{}, fmt.Errorf("profile protocol name already exists for a bound passport")
+	}
+	profile, err := scanProfileRow(tx.QueryRow(ctx, `
 		UPDATE profiles
 		SET protocol_name = $2,
 			normalized_name = $3,
@@ -959,11 +1174,17 @@ func (p *Postgres) UpdateProfileIdentity(ctx context.Context, id string, protoco
 			updated_at = now()
 		WHERE uuid = $1
 		RETURNING `+profileSelectColumns+`
-	`, strings.TrimSpace(id), name.Protocol, name.Normalized))
+	`, profileID, name.Protocol, name.Normalized))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
 	}
-	return profile, err
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return identity.Profile{}, err
+	}
+	return profile, nil
 }
 
 func (p *Postgres) DeletePassport(ctx context.Context, id string) (identity.Passport, error) {
@@ -980,15 +1201,24 @@ func (p *Postgres) DeletePassport(ctx context.Context, id string) (identity.Pass
 	if err != nil {
 		return identity.Passport{}, err
 	}
-	profileIDs, err := collectTextColumn(ctx, tx, `SELECT profile_id FROM profile_passport_links WHERE passport_id = $1`, passportID)
+	orphanProfileIDs, err := collectTextColumn(ctx, tx, `
+		SELECT link.profile_id
+		FROM profile_passport_links link
+		WHERE link.passport_id = $1
+			AND NOT EXISTS (
+				SELECT 1
+				FROM profile_passport_links other
+				WHERE other.profile_id = link.profile_id AND other.passport_id <> $1
+			)
+	`, passportID)
 	if err != nil {
 		return identity.Passport{}, err
 	}
-	if err := deletePassportDependentsTx(ctx, tx, passportID, profileIDs); err != nil {
+	if err := deletePassportDependentsTx(ctx, tx, passportID, orphanProfileIDs); err != nil {
 		return identity.Passport{}, err
 	}
-	if len(profileIDs) > 0 {
-		if _, err := tx.Exec(ctx, `DELETE FROM profiles WHERE uuid = ANY($1)`, profileIDs); err != nil {
+	if len(orphanProfileIDs) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM profiles WHERE uuid = ANY($1)`, orphanProfileIDs); err != nil {
 			return identity.Passport{}, err
 		}
 	}
@@ -1019,16 +1249,23 @@ func (p *Postgres) DeleteProfile(ctx context.Context, id string) (identity.Profi
 	if err != nil {
 		return identity.Profile{}, err
 	}
-	var passportID string
-	var primary bool
-	hadLink := false
-	if err := tx.QueryRow(ctx, `SELECT passport_id, is_primary FROM profile_passport_links WHERE profile_id = $1`, profileID).Scan(&passportID, &primary); err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
+	rows, err := tx.Query(ctx, `SELECT passport_id, is_primary FROM profile_passport_links WHERE profile_id = $1`, profileID)
+	if err != nil {
+		return identity.Profile{}, err
+	}
+	var primaryPassportIDs []string
+	for rows.Next() {
+		var passportID string
+		var primary bool
+		if err := rows.Scan(&passportID, &primary); err != nil {
+			rows.Close()
 			return identity.Profile{}, err
 		}
-	} else {
-		hadLink = true
+		if primary {
+			primaryPassportIDs = append(primaryPassportIDs, passportID)
+		}
 	}
+	rows.Close()
 	if err := deleteProfileDependentsTx(ctx, tx, profileID); err != nil {
 		return identity.Profile{}, err
 	}
@@ -1039,18 +1276,8 @@ func (p *Postgres) DeleteProfile(ctx context.Context, id string) (identity.Profi
 	if tag.RowsAffected() == 0 {
 		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
 	}
-	if hadLink && primary {
-		if _, err := tx.Exec(ctx, `
-			UPDATE profile_passport_links
-			SET is_primary = true
-			WHERE profile_id = (
-				SELECT profile_id
-				FROM profile_passport_links
-				WHERE passport_id = $1
-				ORDER BY linked_at, profile_id
-				LIMIT 1
-			)
-		`, passportID); err != nil {
+	for _, passportID := range primaryPassportIDs {
+		if err := promotePrimaryProfileTx(ctx, tx, passportID); err != nil {
 			return identity.Profile{}, err
 		}
 	}
@@ -1079,14 +1306,14 @@ func collectTextColumn(ctx context.Context, tx pgx.Tx, query string, args ...any
 
 func deletePassportDependentsTx(ctx context.Context, tx pgx.Tx, passportID string, profileIDs []string) error {
 	if len(profileIDs) > 0 {
-		if _, err := tx.Exec(ctx, `DELETE FROM node_actions WHERE passport_id = $1 OR profile_id = ANY($2) OR uuid = ANY($2)`, passportID, profileIDs); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM node_actions WHERE passport_id = $1 OR presence_id IN (SELECT id FROM player_presences WHERE passport_id = $1) OR profile_id = ANY($2) OR uuid = ANY($2)`, passportID, profileIDs); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM player_bans WHERE (scope = 'passport' AND target_id = $1) OR (scope = 'profile' AND target_id = ANY($2))`, passportID, profileIDs); err != nil {
 			return err
 		}
 	} else {
-		if _, err := tx.Exec(ctx, `DELETE FROM node_actions WHERE passport_id = $1`, passportID); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM node_actions WHERE passport_id = $1 OR presence_id IN (SELECT id FROM player_presences WHERE passport_id = $1)`, passportID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM player_bans WHERE scope = 'passport' AND target_id = $1`, passportID); err != nil {
@@ -1231,8 +1458,8 @@ func (p *Postgres) RecordPlayerSeen(ctx context.Context, passportID string, prof
 		return err
 	}
 	if passportID == "" && profileID != "" {
-		if passport, err := p.GetPassportForProfile(ctx, profileID); err == nil {
-			passportID = passport.ID
+		if bindings := p.ListPassportsForProfile(ctx, profileID); len(bindings) == 1 {
+			passportID = bindings[0].Passport.ID
 		}
 	}
 	now = now.UTC()
@@ -1356,8 +1583,8 @@ func (p *Postgres) resolvePassportIDForCredential(ctx context.Context, id string
 	if _, err := p.GetPassportByID(ctx, id); err == nil {
 		return id
 	}
-	if passport, err := p.GetPassportForProfile(ctx, id); err == nil {
-		return passport.ID
+	if bindings := p.ListPassportsForProfile(ctx, id); len(bindings) == 1 {
+		return bindings[0].Passport.ID
 	}
 	return id
 }
@@ -1505,11 +1732,11 @@ func (p *Postgres) SetPlayerLocked(ctx context.Context, id string, locked bool) 
 
 func (p *Postgres) UpdateOfflinePassword(ctx context.Context, id string, passwordHash string, encryptedPassword string, keyFingerprint string) error {
 	if _, err := p.GetPassportByID(ctx, id); err != nil {
-		passport, profileErr := p.GetPassportForProfile(ctx, id)
-		if profileErr != nil {
+		bindings := p.ListPassportsForProfile(ctx, id)
+		if len(bindings) != 1 {
 			return fmt.Errorf("offline credential not found")
 		}
-		id = passport.ID
+		id = bindings[0].Passport.ID
 	}
 	return p.UpdatePassportPassword(ctx, id, passwordHash, encryptedPassword, keyFingerprint)
 }
@@ -1959,7 +2186,7 @@ func (p *Postgres) Rotate(ctx context.Context, id string, now time.Time) (node.N
 	return n, token, nil
 }
 
-func (p *Postgres) Heartbeat(ctx context.Context, token string, now time.Time) (node.Node, error) {
+func (p *Postgres) Heartbeat(ctx context.Context, token string, metadata node.HeartbeatMetadata, now time.Time) (node.Node, error) {
 	n, err := p.Authenticate(ctx, token)
 	if err != nil {
 		return node.Node{}, err
@@ -1967,10 +2194,17 @@ func (p *Postgres) Heartbeat(ctx context.Context, token string, now time.Time) (
 	now = now.UTC()
 	n, err = scanNodeRow(p.pool.QueryRow(ctx, `
 		UPDATE velocity_nodes
-		SET last_heartbeat_at = $2, updated_at = now()
+		SET instance_fingerprint = CASE
+				WHEN instance_fingerprint = '' AND trim($3) <> '' THEN trim($3)
+				ELSE instance_fingerprint
+			END,
+			plugin_version = COALESCE(NULLIF(trim($4), ''), plugin_version),
+			velocity_version = COALESCE(NULLIF(trim($5), ''), velocity_version),
+			last_heartbeat_at = $2,
+			updated_at = now()
 		WHERE id = $1
 		RETURNING `+nodeSelectColumns+`
-	`, n.ID, now))
+	`, n.ID, now, metadata.InstanceFingerprint, metadata.PluginVersion, metadata.VelocityVersion))
 	return n, err
 }
 
@@ -2986,11 +3220,124 @@ func (p *Postgres) UpsertLimboProtocolStatus(ctx context.Context, status LimboPr
 	))
 }
 
+func (p *Postgres) ListVelocityRuntimeReleases(ctx context.Context) []VelocityRuntimeRelease {
+	rows, err := p.pool.Query(ctx, `SELECT `+velocityRuntimeReleaseSelectColumns+` FROM velocity_runtime_releases ORDER BY created_at DESC`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := make([]VelocityRuntimeRelease, 0)
+	for rows.Next() {
+		release, scanErr := scanVelocityRuntimeReleaseRow(rows)
+		if scanErr == nil {
+			out = append(out, release)
+		}
+	}
+	return out
+}
+
+func (p *Postgres) GetVelocityRuntimeRelease(ctx context.Context, id string) (VelocityRuntimeRelease, error) {
+	release, err := scanVelocityRuntimeReleaseRow(p.pool.QueryRow(ctx, `SELECT `+velocityRuntimeReleaseSelectColumns+` FROM velocity_runtime_releases WHERE id = $1`, strings.TrimSpace(id)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return VelocityRuntimeRelease{}, fmt.Errorf("velocity runtime release not found: %w", ErrNotFound)
+	}
+	return release, err
+}
+
+func (p *Postgres) UpsertVelocityRuntimeRelease(ctx context.Context, release VelocityRuntimeRelease) (VelocityRuntimeRelease, error) {
+	release.ID = strings.TrimSpace(release.ID)
+	if release.ID == "" {
+		return VelocityRuntimeRelease{}, fmt.Errorf("velocity runtime release id is required")
+	}
+	return scanVelocityRuntimeReleaseRow(p.pool.QueryRow(ctx, `
+		INSERT INTO velocity_runtime_releases (
+			id, version, api_version, entrypoint, filename, content_type, size_bytes, sha256, artifact, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+		ON CONFLICT (id) DO UPDATE
+		SET version = EXCLUDED.version,
+			api_version = EXCLUDED.api_version,
+			entrypoint = EXCLUDED.entrypoint,
+			filename = EXCLUDED.filename,
+			content_type = EXCLUDED.content_type,
+			size_bytes = EXCLUDED.size_bytes,
+			sha256 = EXCLUDED.sha256,
+			artifact = EXCLUDED.artifact,
+			updated_at = now()
+		RETURNING `+velocityRuntimeReleaseSelectColumns,
+		release.ID,
+		strings.TrimSpace(release.Version),
+		release.APIVersion,
+		strings.TrimSpace(release.Entrypoint),
+		strings.TrimSpace(release.Filename),
+		strings.TrimSpace(release.ContentType),
+		release.SizeBytes,
+		strings.TrimSpace(release.SHA256),
+		release.Artifact,
+	))
+}
+
+func (p *Postgres) DeleteVelocityRuntimeRelease(ctx context.Context, id string) error {
+	tag, err := p.pool.Exec(ctx, `DELETE FROM velocity_runtime_releases WHERE id = $1`, strings.TrimSpace(id))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("velocity runtime release not found: %w", ErrNotFound)
+	}
+	return nil
+}
+
+func (p *Postgres) GetVelocityRuntimeStatus(ctx context.Context, nodeID string) (VelocityRuntimeStatus, error) {
+	status, err := scanVelocityRuntimeStatusRow(p.pool.QueryRow(ctx, `SELECT `+velocityRuntimeStatusSelectColumns+` FROM velocity_runtime_status WHERE node_id = $1`, strings.TrimSpace(nodeID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return VelocityRuntimeStatus{}, fmt.Errorf("velocity runtime status not found: %w", ErrNotFound)
+	}
+	return status, err
+}
+
+func (p *Postgres) UpsertVelocityRuntimeStatus(ctx context.Context, status VelocityRuntimeStatus) (VelocityRuntimeStatus, error) {
+	status.NodeID = strings.TrimSpace(status.NodeID)
+	if status.NodeID == "" {
+		return VelocityRuntimeStatus{}, fmt.Errorf("velocity runtime status node id is required")
+	}
+	if status.ReportedAt.IsZero() {
+		status.ReportedAt = time.Now().UTC()
+	}
+	return scanVelocityRuntimeStatusRow(p.pool.QueryRow(ctx, `
+		INSERT INTO velocity_runtime_status (
+			node_id, state, api_version, version, sha256, target_version, target_sha256, last_error, reported_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+		ON CONFLICT (node_id) DO UPDATE
+		SET state = EXCLUDED.state,
+			api_version = EXCLUDED.api_version,
+			version = EXCLUDED.version,
+			sha256 = EXCLUDED.sha256,
+			target_version = EXCLUDED.target_version,
+			target_sha256 = EXCLUDED.target_sha256,
+			last_error = EXCLUDED.last_error,
+			reported_at = EXCLUDED.reported_at,
+			updated_at = now()
+		RETURNING `+velocityRuntimeStatusSelectColumns,
+		status.NodeID,
+		strings.TrimSpace(status.State),
+		status.APIVersion,
+		strings.TrimSpace(status.Version),
+		strings.TrimSpace(status.SHA256),
+		strings.TrimSpace(status.TargetVersion),
+		strings.TrimSpace(status.TargetSHA256),
+		strings.TrimSpace(status.LastError),
+		status.ReportedAt.UTC(),
+	))
+}
+
 func (p *Postgres) SaveTransferGrant(ctx context.Context, grant auth.TransferGrant) error {
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO transfer_grants (
 			id,
 			player_id,
+			passport_id,
 			server_id,
 			portal_node_id,
 			portal_source,
@@ -3005,14 +3352,14 @@ func (p *Postgres) SaveTransferGrant(ctx context.Context, grant auth.TransferGra
 			expires_at,
 			consumed_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-	`, grant.ID, grant.PlayerID, grant.ServerID, grant.PortalNodeID, grant.PortalSource, grant.RemoteIP, grant.GateNodeID, grant.TokenHash, grant.UUID, grant.ProtocolName, grant.TargetHost, grant.TargetPort, grant.CreatedAt, grant.ExpiresAt, grant.ConsumedAt)
+		VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+	`, grant.ID, grant.PlayerID, grant.PassportID, grant.ServerID, grant.PortalNodeID, grant.PortalSource, grant.RemoteIP, grant.GateNodeID, grant.TokenHash, grant.UUID, grant.ProtocolName, grant.TargetHost, grant.TargetPort, grant.CreatedAt, grant.ExpiresAt, grant.ConsumedAt)
 	return err
 }
 
 func (p *Postgres) GetPendingTransferGrantByProtocolName(ctx context.Context, serverID string, protocolName string, now time.Time) (auth.TransferGrant, error) {
 	grant, err := scanTransferGrantRow(p.pool.QueryRow(ctx, `
-		SELECT id, player_id, server_id, portal_node_id, portal_source, remote_ip, gate_node_id, token_hash, uuid, protocol_name, target_host, target_port, created_at, expires_at, consumed_at
+		SELECT id, player_id, COALESCE(passport_id, ''), server_id, portal_node_id, portal_source, remote_ip, gate_node_id, token_hash, uuid, protocol_name, target_host, target_port, created_at, expires_at, consumed_at
 		FROM transfer_grants
 		WHERE server_id = $1
 			AND lower(protocol_name) = lower($2)
@@ -3035,7 +3382,7 @@ func (p *Postgres) ConsumeTransferGrant(ctx context.Context, tokenHash string, s
 	defer tx.Rollback(ctx)
 
 	grant, err := scanTransferGrantRow(tx.QueryRow(ctx, `
-		SELECT id, player_id, server_id, portal_node_id, portal_source, remote_ip, gate_node_id, token_hash, uuid, protocol_name, target_host, target_port, created_at, expires_at, consumed_at
+		SELECT id, player_id, COALESCE(passport_id, ''), server_id, portal_node_id, portal_source, remote_ip, gate_node_id, token_hash, uuid, protocol_name, target_host, target_port, created_at, expires_at, consumed_at
 		FROM transfer_grants
 		WHERE token_hash = $1
 		FOR UPDATE
@@ -3072,7 +3419,7 @@ func (p *Postgres) ConsumeTransferGrant(ctx context.Context, tokenHash string, s
 		SET consumed_at = $2,
 			gate_node_id = $3
 		WHERE token_hash = $1
-		RETURNING id, player_id, server_id, portal_node_id, portal_source, remote_ip, gate_node_id, token_hash, uuid, protocol_name, target_host, target_port, created_at, expires_at, consumed_at
+		RETURNING id, player_id, COALESCE(passport_id, ''), server_id, portal_node_id, portal_source, remote_ip, gate_node_id, token_hash, uuid, protocol_name, target_host, target_port, created_at, expires_at, consumed_at
 	`, tokenHash, consumedAt, gateNodeID), &grant)
 	if err != nil {
 		return auth.TransferGrant{}, err
@@ -4070,6 +4417,7 @@ func scanTransferGrantRowInto(row playerScanner, grant *auth.TransferGrant) erro
 	return row.Scan(
 		&grant.ID,
 		&grant.PlayerID,
+		&grant.PassportID,
 		&grant.ServerID,
 		&grant.PortalNodeID,
 		&grant.PortalSource,
@@ -4398,6 +4746,44 @@ func scanLimboProtocolStatusRow(row playerScanner) (LimboProtocolStatus, error) 
 	return cloneLimboProtocolStatus(status), nil
 }
 
+func scanVelocityRuntimeReleaseRow(row playerScanner) (VelocityRuntimeRelease, error) {
+	var release VelocityRuntimeRelease
+	err := row.Scan(
+		&release.ID,
+		&release.Version,
+		&release.APIVersion,
+		&release.Entrypoint,
+		&release.Filename,
+		&release.ContentType,
+		&release.SizeBytes,
+		&release.SHA256,
+		&release.Artifact,
+		&release.CreatedAt,
+		&release.UpdatedAt,
+	)
+	if err != nil {
+		return VelocityRuntimeRelease{}, err
+	}
+	return cloneVelocityRuntimeRelease(release), nil
+}
+
+func scanVelocityRuntimeStatusRow(row playerScanner) (VelocityRuntimeStatus, error) {
+	var status VelocityRuntimeStatus
+	err := row.Scan(
+		&status.NodeID,
+		&status.State,
+		&status.APIVersion,
+		&status.Version,
+		&status.SHA256,
+		&status.TargetVersion,
+		&status.TargetSHA256,
+		&status.LastError,
+		&status.ReportedAt,
+		&status.UpdatedAt,
+	)
+	return status, err
+}
+
 func scanExtensionPlayerDataRow(row playerScanner) (ExtensionPlayerData, error) {
 	var data ExtensionPlayerData
 	var schemaRaw []byte
@@ -4608,11 +4994,30 @@ CREATE TABLE IF NOT EXISTS profiles (
 );
 
 CREATE TABLE IF NOT EXISTS profile_passport_links (
-	profile_id text PRIMARY KEY REFERENCES profiles(uuid) ON DELETE CASCADE,
+	profile_id text NOT NULL REFERENCES profiles(uuid) ON DELETE CASCADE,
 	passport_id text NOT NULL REFERENCES passports(uuid) ON DELETE CASCADE,
 	is_primary boolean NOT NULL DEFAULT false,
-	linked_at timestamptz NOT NULL DEFAULT now()
+	linked_at timestamptz NOT NULL DEFAULT now(),
+	PRIMARY KEY (profile_id, passport_id)
 );
+
+DO $$
+DECLARE
+	primary_constraint text;
+	primary_definition text;
+BEGIN
+	SELECT conname, pg_get_constraintdef(oid)
+	INTO primary_constraint, primary_definition
+	FROM pg_constraint
+	WHERE conrelid = 'profile_passport_links'::regclass AND contype = 'p';
+	IF primary_definition IS DISTINCT FROM 'PRIMARY KEY (profile_id, passport_id)' THEN
+		IF primary_constraint IS NOT NULL THEN
+			EXECUTE format('ALTER TABLE profile_passport_links DROP CONSTRAINT %I', primary_constraint);
+		END IF;
+		ALTER TABLE profile_passport_links
+			ADD CONSTRAINT profile_passport_links_pkey PRIMARY KEY (profile_id, passport_id);
+	END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS profile_passport_links_passport_idx ON profile_passport_links (passport_id);
 CREATE UNIQUE INDEX IF NOT EXISTS profile_passport_links_primary_unique
@@ -4944,6 +5349,33 @@ CREATE TABLE IF NOT EXISTS limbo_protocol_status (
 	updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS velocity_runtime_releases (
+	id text PRIMARY KEY,
+	version text NOT NULL,
+	api_version integer NOT NULL CHECK (api_version > 0),
+	entrypoint text NOT NULL,
+	filename text NOT NULL DEFAULT 'authman-runtime.jar',
+	content_type text NOT NULL DEFAULT 'application/java-archive',
+	size_bytes bigint NOT NULL CHECK (size_bytes > 0),
+	sha256 text NOT NULL UNIQUE,
+	artifact bytea NOT NULL,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS velocity_runtime_status (
+	node_id text PRIMARY KEY REFERENCES velocity_nodes(id) ON DELETE CASCADE,
+	state text NOT NULL DEFAULT 'not_loaded',
+	api_version integer NOT NULL DEFAULT 0,
+	version text NOT NULL DEFAULT '',
+	sha256 text NOT NULL DEFAULT '',
+	target_version text NOT NULL DEFAULT '',
+	target_sha256 text NOT NULL DEFAULT '',
+	last_error text NOT NULL DEFAULT '',
+	reported_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS mojang_routes (
 	id text PRIMARY KEY,
 	kind text NOT NULL CHECK (kind IN ('http', 'socks5')),
@@ -5117,6 +5549,7 @@ CREATE INDEX IF NOT EXISTS downstream_server_privileged_passports_passport_idx
 CREATE TABLE IF NOT EXISTS transfer_grants (
 	id text PRIMARY KEY,
 	player_id text NOT NULL REFERENCES profiles(uuid) ON DELETE CASCADE,
+	passport_id text REFERENCES passports(uuid) ON DELETE CASCADE,
 	server_id text NOT NULL REFERENCES downstream_servers(id) ON DELETE CASCADE,
 	portal_node_id text NOT NULL DEFAULT '',
 	portal_source text NOT NULL DEFAULT '',
@@ -5137,6 +5570,8 @@ CREATE INDEX IF NOT EXISTS transfer_grants_expires_at_idx ON transfer_grants (ex
 CREATE INDEX IF NOT EXISTS transfer_grants_server_player_idx ON transfer_grants (server_id, player_id);
 ALTER TABLE transfer_grants ADD COLUMN IF NOT EXISTS portal_source text NOT NULL DEFAULT '';
 ALTER TABLE transfer_grants ADD COLUMN IF NOT EXISTS remote_ip text NOT NULL DEFAULT '';
+ALTER TABLE transfer_grants ADD COLUMN IF NOT EXISTS passport_id text REFERENCES passports(uuid) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS transfer_grants_passport_idx ON transfer_grants (passport_id);
 
 CREATE TABLE IF NOT EXISTS extension_player_data (
 	id text PRIMARY KEY,

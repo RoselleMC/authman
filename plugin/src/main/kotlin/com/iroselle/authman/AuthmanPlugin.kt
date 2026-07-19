@@ -1,134 +1,117 @@
 package com.iroselle.authman
 
-import com.google.inject.Inject
-import com.velocitypowered.api.event.Subscribe
-import com.velocitypowered.api.event.proxy.ProxyInitializeEvent
-import com.velocitypowered.api.event.proxy.ProxyShutdownEvent
-import com.velocitypowered.api.plugin.Plugin
-import com.velocitypowered.api.proxy.ProxyServer
 import com.iroselle.authman.api.AuthmanClient
+import com.iroselle.authman.api.handleRuntimeNodeMessage
+import com.iroselle.authman.api.parseRuntimeSync
 import com.iroselle.authman.command.AuthmanCommand
 import com.iroselle.authman.config.AuthmanConfig
-import com.iroselle.authman.config.InstanceFingerprint
 import com.iroselle.authman.listener.DownstreamAuthListener
 import com.iroselle.authman.message.AuthmanMessages
 import com.iroselle.authman.model.DownstreamServerOption
-import com.iroselle.authman.model.DownstreamStatusReport
 import com.iroselle.authman.model.NodeAction
 import com.iroselle.authman.model.NodeActionAck
 import com.iroselle.authman.model.PortalLinkResult
+import com.iroselle.authman.spi.AuthmanRuntimeContext
+import com.iroselle.authman.spi.AuthmanRuntimeModule
+import com.iroselle.authman.spi.AuthmanRuntimeStatus
+import com.iroselle.authman.spi.AuthmanCommandRegistration
+import com.velocitypowered.api.proxy.ProxyServer
+import com.velocitypowered.api.scheduler.ScheduledTask
+import com.velocitypowered.api.scheduler.TaskStatus
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.slf4j.Logger
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
-import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-import kotlin.math.min
+import java.util.function.Consumer
 
-@Plugin(
-    id = "authman",
-    name = "authman",
-    version = AuthmanPlugin.VERSION,
-    description = "Authman Velocity integration plugin",
-    authors = ["Score2"],
-)
-class AuthmanPlugin @Inject constructor(
-    private val server: ProxyServer,
-    private val logger: Logger,
-    @com.velocitypowered.api.plugin.annotation.DataDirectory private val dataDirectory: Path,
-) {
+class AuthmanPlugin : AuthmanRuntimeModule {
+    private lateinit var context: AuthmanRuntimeContext
+    private lateinit var server: ProxyServer
+    private lateinit var logger: Logger
     private lateinit var config: AuthmanConfig
-    private lateinit var instanceFingerprint: String
     private lateinit var client: AuthmanClient
     private lateinit var messages: AuthmanMessages
     @Volatile
-    private var coreAccessRevoked: Boolean = false
-    @Volatile
     private var downstreamTransferTargets: List<DownstreamServerOption> = emptyList()
-    @Volatile
-    private var eventLoopRunning: Boolean = false
-    @Volatile
-    private var heartbeatLoopRunning: Boolean = false
     private lateinit var downstreamListener: DownstreamAuthListener
+    private var commandRegistration: AuthmanCommandRegistration? = null
+    private var listenerRegistered = false
+    private val scheduledTasks = ConcurrentHashMap.newKeySet<ScheduledTask>()
+    @Volatile
+    private var started = false
 
-    @Subscribe
-    fun onProxyInitialize(event: ProxyInitializeEvent) {
-        config = AuthmanConfig.load(dataDirectory)
-        instanceFingerprint = InstanceFingerprint.load(dataDirectory)
-        client = AuthmanClient(config, instanceFingerprint)
+    override fun start(context: AuthmanRuntimeContext, previousState: ByteArray?) {
+        check(!started) { "Authman runtime is already started" }
+        this.context = context
+        server = context.server
+        logger = context.logger
+        config = AuthmanConfig()
+        client = AuthmanClient(context.transport)
         messages = AuthmanMessages()
 
         downstreamListener = DownstreamAuthListener(this, server, logger, config, client, messages)
-        server.eventManager.register(this, downstreamListener)
-        val command = AuthmanCommand(this, logger)
-        val meta = server.commandManager.metaBuilder("authman")
-            .aliases("am")
-            .plugin(this)
-            .build()
-        server.commandManager.register(meta, command)
-
-        logger.info(
-            "Authman downstream plugin enabled for {} with API {} instance={}",
-            server.version.name,
-            config.apiBase,
-            instanceFingerprint,
-        )
-        sendHeartbeat()
-        startHeartbeatLoop()
-        startEventLoop()
-    }
-
-    @Subscribe
-    fun onProxyShutdown(event: ProxyShutdownEvent) {
-        eventLoopRunning = false
-        heartbeatLoopRunning = false
-    }
-
-    fun reconnectNow(): Boolean = sendHeartbeat()
-
-    fun reloadConfigAndReconnect(): Boolean {
-        val next = AuthmanConfig.load(dataDirectory)
-        config.replaceLocal(next)
-        return sendHeartbeat()
-    }
-
-    fun client(): AuthmanClient = client
-
-    private fun sendHeartbeat(): Boolean {
+        downstreamListener.importState(previousState)
+        started = true
         try {
-            val response = client.heartbeat(
-                pluginVersion = VERSION,
-                velocityVersion = server.version.version,
-                status = currentStatusReport(),
-            )
-            if (!response.ok) {
-                logger.warn("Authman heartbeat failed with HTTP {}: {}", response.statusCode, response.body)
-                if (response.accessRevoked) {
-                    lockFromCore("Core revoked or rejected this node token")
-                }
-                return false
-            }
-            applySync(response, "heartbeat")
-            return true
-        } catch (ex: Exception) {
-            logger.warn("Authman heartbeat failed", ex)
-            return false
+            server.eventManager.register(context.pluginOwner, downstreamListener)
+            listenerRegistered = true
+            commandRegistration = context.commands.install(AuthmanCommand(this, logger))
+        } catch (ex: Throwable) {
+            stop()
+            throw ex
         }
+        logger.info("Authman downstream runtime {} started", VERSION)
     }
 
-    private fun currentStatusReport(): DownstreamStatusReport =
-        DownstreamStatusReport(
-            onlinePlayers = if (::downstreamListener.isInitialized) {
-                downstreamListener.onlinePresenceCount()
-            } else {
-                server.allPlayers.count { it.isActive }
-            },
+    override fun applySync(payload: String) {
+        check(started) { "Authman runtime is not started" }
+        applySync(parseRuntimeSync(payload))
+    }
+
+    override fun handleNodeMessage(payload: String): String? {
+        check(started) { "Authman runtime is not started" }
+        return handleRuntimeNodeMessage(payload) { downstreamListener.checkPresenceOverWebSocket(it) }
+    }
+
+    override fun status(): AuthmanRuntimeStatus =
+        AuthmanRuntimeStatus(
+            onlinePlayers = downstreamListener.onlinePresenceCount(),
             maxPlayers = server.configuration.showMaxPlayers,
         )
 
-    private fun applySync(response: com.iroselle.authman.api.HeartbeatResult, source: String) {
+    override fun snapshot(): ByteArray? = if (::downstreamListener.isInitialized) downstreamListener.exportState() else null
+
+    override fun stop() {
+        if (!started) {
+            return
+        }
+        started = false
+        commandRegistration?.let { registration ->
+            runCatching { registration.close() }
+                .onFailure { logger.warn("Failed to unregister Authman runtime command capabilities", it) }
+        }
+        commandRegistration = null
+        scheduledTasks.forEach { runCatching { it.cancel() } }
+        scheduledTasks.clear()
+        if (listenerRegistered && ::downstreamListener.isInitialized) {
+            runCatching { server.eventManager.unregisterListener(context.pluginOwner, downstreamListener) }
+                .onFailure { logger.warn("Failed to unregister Authman downstream runtime listener", it) }
+            listenerRegistered = false
+        }
+        logger.info("Authman downstream runtime {} stopped", VERSION)
+    }
+
+    fun reconnectNow(): Boolean = context.control.reconnectNow()
+
+    fun reloadConfigAndReconnect(): Boolean = context.control.reloadBootstrapConfigAndReconnect()
+
+    fun client(): AuthmanClient = client
+
+    private fun applySync(response: com.iroselle.authman.api.HeartbeatResult) {
         response.runtime?.let {
             config.applyRuntime(it)
         }
@@ -142,77 +125,37 @@ class AuthmanPlugin @Inject constructor(
                 logger.warn("Failed to ACK Authman node actions {}", acked, ex)
             }
         }
-        if (coreAccessRevoked) {
-            logger.info("Authman Core access restored through {}", source)
-        }
-        coreAccessRevoked = false
     }
 
-    private fun startHeartbeatLoop() {
-        if (heartbeatLoopRunning) {
+    fun isCoreAccessRevoked(): Boolean = context.control.isCoreAccessRevoked()
+
+    fun schedule(task: Runnable, delay: Long = 0, unit: TimeUnit = TimeUnit.MILLISECONDS) {
+        if (!started) {
             return
         }
-        heartbeatLoopRunning = true
-        val thread = Thread {
-            while (heartbeatLoopRunning) {
-                sleepQuietly(config.heartbeatIntervalSeconds)
-                if (heartbeatLoopRunning) {
-                    sendHeartbeat()
-                }
+        val scheduled = server.scheduler.buildTask(context.pluginOwner, Consumer<ScheduledTask> { current ->
+            scheduledTasks.remove(current)
+            if (started) {
+                task.run()
             }
-        }
-        thread.name = "authman-heartbeat"
-        thread.isDaemon = true
-        thread.start()
-    }
-
-    private fun startEventLoop() {
-        if (eventLoopRunning) {
-            return
-        }
-        eventLoopRunning = true
-        val thread = Thread {
-            var delaySeconds = config.websocketReconnectMinSeconds
-            while (eventLoopRunning) {
-                if (!config.websocketEnabled) {
-                    sleepQuietly(config.heartbeatIntervalSeconds)
-                    delaySeconds = config.websocketReconnectMinSeconds
-                    continue
-                }
-                try {
-                    logger.info("Connecting Authman node event stream")
-                    client.connectEvents(
-                        onSync = { applySync(it, "websocket") },
-                        onRevoked = { lockFromCore("Core revoked this node token") },
-                        onPresenceCheck = { downstreamListener.checkPresenceOverWebSocket(it) },
-                    ).join()
-                    delaySeconds = config.websocketReconnectMinSeconds
-                } catch (ex: Exception) {
-                    if (eventLoopRunning && config.websocketEnabled) {
-                        logger.warn("Authman node event stream disconnected; REST heartbeat remains active", ex)
-                    }
-                }
-                sleepQuietly(delaySeconds)
-                delaySeconds = min(config.websocketReconnectMaxSeconds, (delaySeconds * 2).coerceAtLeast(config.websocketReconnectMinSeconds))
-            }
-        }
-        thread.name = "authman-node-events"
-        thread.isDaemon = true
-        thread.start()
-    }
-
-    private fun sleepQuietly(seconds: Long) {
-        try {
-            Thread.sleep(seconds.coerceAtLeast(1) * 1000L)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
+        }).delay(delay.coerceAtLeast(0), unit).schedule()
+        scheduledTasks.add(scheduled)
+        if (scheduled.status() != TaskStatus.SCHEDULED) {
+            scheduledTasks.remove(scheduled)
         }
     }
-
-    fun isCoreAccessRevoked(): Boolean = coreAccessRevoked
 
     fun onlinePlayerNames(): List<String> =
         server.allPlayers.map { it.username }.sortedWith(String.CASE_INSENSITIVE_ORDER)
+
+    fun commandStatus(): RuntimeCommandStatusView = RuntimeCommandStatusView(
+        runtimeVersion = VERSION,
+        nodeName = config.nodeName,
+        serverId = config.serverId,
+        onlinePlayers = downstreamListener.onlinePresenceCount(),
+        maxPlayers = server.configuration.showMaxPlayers,
+        transferTargets = downstreamTransferTargets.size,
+    )
 
     fun downstreamTransferSuggestions(prefix: String): List<String> {
         val clean = prefix.trim()
@@ -228,7 +171,7 @@ class AuthmanPlugin @Inject constructor(
     }
 
     fun transferPlayer(playerName: String, targetRef: String): String {
-        if (coreAccessRevoked) {
+        if (isCoreAccessRevoked()) {
             throw IllegalStateException("Authman Core connection is revoked")
         }
         val player = server.getPlayer(playerName).orElse(null)
@@ -261,7 +204,7 @@ class AuthmanPlugin @Inject constructor(
         } catch (ex: IllegalArgumentException) {
             throw IllegalStateException("client does not support transfer cookies; Minecraft 1.20.5+ is required", ex)
         }
-        server.scheduler.buildTask(this, Runnable {
+        schedule(Runnable {
             if (!player.isActive) {
                 return@Runnable
             }
@@ -271,13 +214,13 @@ class AuthmanPlugin @Inject constructor(
                 logger.warn("Failed to transfer {} to {}:{} after storing Authman grant", player.username, host, port, ex)
                 player.sendMessage(Component.text("Authman transfer failed: Minecraft 1.20.5+ is required.", NamedTextColor.RED))
             }
-        }).delay(200, TimeUnit.MILLISECONDS).schedule()
+        }, 200, TimeUnit.MILLISECONDS)
         val label = target?.displayName?.takeIf { it.isNotBlank() } ?: result.target.serverId.ifBlank { targetID }
         return "Transferring ${player.username} to $label ($host:$port)."
     }
 
     fun renameCurrentProfile(playerName: String, protocolName: String): String {
-        if (coreAccessRevoked) {
+        if (isCoreAccessRevoked()) {
             throw IllegalStateException("Authman Core connection is revoked")
         }
         val player = server.getPlayer(playerName).orElse(null)
@@ -295,7 +238,7 @@ class AuthmanPlugin @Inject constructor(
     }
 
     fun createPortalLink(playerName: String): PortalLinkResult {
-        if (coreAccessRevoked) {
+        if (isCoreAccessRevoked()) {
             throw IllegalStateException("Authman Core connection is revoked")
         }
         val player = server.getPlayer(playerName).orElse(null)
@@ -323,10 +266,10 @@ class AuthmanPlugin @Inject constructor(
     }
 
     fun lockFromCore(reason: String) {
-        if (!coreAccessRevoked) {
+        if (!isCoreAccessRevoked()) {
             logger.warn("Locking Authman Velocity node: {}", reason)
         }
-        coreAccessRevoked = true
+        context.control.lockCoreAccess(reason)
         server.allPlayers.forEach { player ->
             if (player.isActive) {
                 player.disconnect(messages.temporaryUnavailable())
@@ -375,6 +318,15 @@ class AuthmanPlugin @Inject constructor(
     }
 
     companion object {
-        const val VERSION = "0.1.0-dev"
+        const val VERSION = "0.3.0-dev"
     }
 }
+
+data class RuntimeCommandStatusView(
+    val runtimeVersion: String,
+    val nodeName: String,
+    val serverId: String,
+    val onlinePlayers: Int,
+    val maxPlayers: Int,
+    val transferTargets: Int,
+)

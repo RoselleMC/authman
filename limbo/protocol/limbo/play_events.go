@@ -908,7 +908,11 @@ func writeOptionalResourcePackPromptJSON(data *bytes.Buffer, adapter playAdapter
 }
 
 func writeStoreCookie(conn net.Conn, adapter playAdapter, key string, value []byte) error {
-	id, ok := adapter.packetID(packetid.StatePlay, packetid.ToClient, "store_cookie")
+	return writeStoreCookieState(conn, adapter, packetid.StatePlay, key, value)
+}
+
+func writeStoreCookieState(conn net.Conn, adapter playAdapter, state packetid.State, key string, value []byte) error {
+	id, ok := adapter.packetID(state, packetid.ToClient, "store_cookie")
 	if !ok {
 		return fmt.Errorf("%w: store_cookie protocol %d", limbgo.ErrUnsupportedCapability, adapter.protocol)
 	}
@@ -929,7 +933,11 @@ func writeStoreCookie(conn net.Conn, adapter playAdapter, key string, value []by
 }
 
 func writeTransfer(conn net.Conn, adapter playAdapter, host string, port int) error {
-	id, ok := adapter.packetID(packetid.StatePlay, packetid.ToClient, "transfer")
+	return writeTransferState(conn, adapter, packetid.StatePlay, host, port)
+}
+
+func writeTransferState(conn net.Conn, adapter playAdapter, state packetid.State, host string, port int) error {
+	id, ok := adapter.packetID(state, packetid.ToClient, "transfer")
 	if !ok {
 		return fmt.Errorf("%w: transfer protocol %d", limbgo.ErrUnsupportedCapability, adapter.protocol)
 	}

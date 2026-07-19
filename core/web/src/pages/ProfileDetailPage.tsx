@@ -24,7 +24,7 @@ import {
   useToast,
   useBackTarget,
 } from "@authman/shared";
-import { bindProfile, createProfileBan, deleteProfile, deleteProfileSkin, extendBan, fetchPassports, fetchProfile, kickPresence, revokeBan, unbindProfile, updateProfileName, updateProfileSkinSource, updateProfileStatus, uploadProfileSkin, type PlayerBan, type ProfileRow } from "../api/admin";
+import { bindProfile, createProfileBan, deleteProfile, deleteProfileSkin, extendBan, fetchPassports, fetchProfile, kickPresence, revokeBan, unbindProfilePassport, updateProfileName, updateProfileSkinSource, updateProfileStatus, uploadProfileSkin, type PassportRow, type PlayerBan, type ProfilePassportBinding, type ProfileRow } from "../api/admin";
 import { AuditEventList } from "../components/AuditEventList";
 import { ErrorBlock } from "../components/ErrorBlock";
 import { MinecraftSkinPreview } from "../components/MinecraftSkinPreview";
@@ -36,6 +36,15 @@ type DurationUnit = "s" | "min" | "h" | "d" | "w" | "m" | "y";
 
 const DEFAULT_BAN_VALUE = "1";
 const DEFAULT_BAN_UNIT: DurationUnit = "d";
+
+async function fetchAllPassports(signal: AbortSignal): Promise<PassportRow[]> {
+  const passports = new Map<string, PassportRow>();
+  for (let page = 1; ; page += 1) {
+    const result = await fetchPassports({ page, page_size: 100 }, signal);
+    result.rows.forEach((passport) => passports.set(passport.id, passport));
+    if (result.rows.length === 0 || passports.size >= result.meta.total) return [...passports.values()];
+  }
+}
 
 export function ProfileDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
@@ -50,6 +59,7 @@ export function ProfileDetailPage() {
   const [status, setStatus] = useState<ProfileRow["status"]>("active");
   const [protocolName, setProtocolName] = useState("");
   const [passportID, setPassportID] = useState("");
+  const [unbindTarget, setUnbindTarget] = useState<ProfilePassportBinding | null>(null);
   const [tab, setTab] = useState<DetailTab>("overview");
   const [banReason, setBanReason] = useState("");
   const [banDurationValue, setBanDurationValue] = useState(DEFAULT_BAN_VALUE);
@@ -65,7 +75,7 @@ export function ProfileDetailPage() {
   const previewElytraURL = useObjectURL(elytraFile);
   const passportsQ = useQuery({
     queryKey: ["admin.passports.bind-options"],
-    queryFn: ({ signal }) => fetchPassports({ page: 1, page_size: 200 }, signal),
+    queryFn: ({ signal }) => fetchAllPassports(signal),
     enabled: dialog === "bind",
   });
   const statusMut = useMutation({
@@ -101,21 +111,36 @@ export function ProfileDetailPage() {
     onError: () => toast.danger(t("common.unknown")),
   });
   const bindMut = useMutation({
-    mutationFn: () => bindProfile(id, passportID, true),
+    mutationFn: () => bindProfile(id, passportID, false),
     onSuccess: () => {
       toast.push({ tone: "success", title: t("admin.profiles.bound") });
       setDialog(null);
       setPassportID("");
       void qc.invalidateQueries({ queryKey: ["admin.profile", id] });
+      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
+      void qc.invalidateQueries({ queryKey: ["admin.passports"] });
+    },
+    onError: () => toast.danger(t("common.unknown")),
+  });
+  const primaryMut = useMutation({
+    mutationFn: (targetPassportID: string) => bindProfile(id, targetPassportID, true),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: t("admin.profiles.primaryUpdated") });
+      void qc.invalidateQueries({ queryKey: ["admin.profile", id] });
+      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
+      void qc.invalidateQueries({ queryKey: ["admin.passports"] });
     },
     onError: () => toast.danger(t("common.unknown")),
   });
   const unbindMut = useMutation({
-    mutationFn: () => unbindProfile(id),
+    mutationFn: () => unbindProfilePassport(id, unbindTarget?.id ?? ""),
     onSuccess: () => {
       toast.push({ tone: "success", title: t("admin.profiles.unbound") });
       setDialog(null);
+      setUnbindTarget(null);
       void qc.invalidateQueries({ queryKey: ["admin.profile", id] });
+      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
+      void qc.invalidateQueries({ queryKey: ["admin.passports"] });
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -217,9 +242,10 @@ export function ProfileDetailPage() {
   const hasSkinChanges = !usingPassportSkin && Boolean(skinFile || capeFile || elytraFile || (p.skin.has_custom_skin && skinModel !== persistedSkinModel));
   const activeBan = firstActiveBan(p.bans);
   const banDurationValid = isValidDuration(banDurationValue);
-  const relatedAuditIDs = [p.id, p.uuid, p.passport?.id].filter(Boolean).join(",");
-  const passportOptions = (passportsQ.data?.rows ?? [])
-    .filter((passport) => passport.status !== "deleted")
+  const bindings = p.passports ?? [];
+  const relatedAuditIDs = [p.id, p.uuid, ...bindings.map((binding) => binding.id)].filter(Boolean).join(",");
+  const passportOptions = (passportsQ.data ?? [])
+    .filter((passport) => passport.status !== "deleted" && !bindings.some((binding) => binding.id === passport.id))
     .map((passport) => ({ value: passport.id, label: `${passport.username} · ${passport.uuid}` }));
 
   return (
@@ -250,7 +276,6 @@ export function ProfileDetailPage() {
           >
             <DetailIdentifier label="UUID" value={p.uuid} />
             <DetailIdentifier label={t("admin.profiles.detail.profileId")} value={p.id} />
-            {p.passport ? <DetailIdentifier label={t("admin.profiles.col.passport")} value={p.passport.id} /> : null}
           </DetailSummary>
           <DetailActions title={t("admin.player.actions")}>
             {activeBan ? (
@@ -271,8 +296,6 @@ export function ProfileDetailPage() {
                 <Button variant="secondary" icon="box" block onClick={() => { setStatus("archived"); setDialog("status"); }}>{t("admin.profiles.archive")}</Button>
               </>
             )}
-            <Button variant="secondary" icon="link" block onClick={() => { setPassportID(""); setDialog("bind"); }}>{t("admin.profiles.bind")}</Button>
-            {p.passport ? <Button variant="danger" icon="link" block onClick={() => setDialog("unbind")}>{t("admin.profiles.unbind")}</Button> : null}
             <Button variant="secondary" icon="settings" block onClick={() => { setProtocolName(p.protocol_name); setDialog("rename"); }}>{t("admin.profiles.rename")}</Button>
             <Button variant="danger" icon="trash" block onClick={() => setDeleteOpen(true)}>{t("common.delete")}</Button>
           </DetailActions>
@@ -290,14 +313,30 @@ export function ProfileDetailPage() {
                   <DefRow k={t("admin.players.col.lastSeenIp")}><RefreshableIPLocation ip={p.last_seen_ip} geo={p.last_seen_geo} /></DefRow>
                 </DefList>
               </Card>
-              <Card title={t("admin.profiles.passport")}>
-                {p.passport ? (
-                  <DefList>
-                    <DefRow k="UUID"><Link to={`/passports/${p.passport.id}`} state={{ backTo: `${location.pathname}${location.search}${location.hash}` }}>{p.passport.id}</Link></DefRow>
-                    <DefRow k={t("common.username")}>{p.passport.username}</DefRow>
-                    <DefRow k={t("admin.players.col.type")}><TypeBadge kind={p.passport.kind} /></DefRow>
-                    <DefRow k={t("admin.players.col.status")}><StatusBadge status={p.passport.status} /></DefRow>
-                  </DefList>
+              <Card
+                title={t("admin.profiles.passport")}
+                actions={<Button size="sm" variant="secondary" icon="plus" onClick={() => { setPassportID(""); setDialog("bind"); }}>{t("admin.profiles.bind")}</Button>}
+              >
+                {bindings.length ? (
+                  <div className="profile-passport-list">
+                    {bindings.map((binding) => (
+                      <div key={binding.id} className="profile-passport-row">
+                        <Link className="profile-passport-row__identity" to={`/passports/${binding.id}`} state={{ backTo: `${location.pathname}${location.search}${location.hash}` }}>
+                          <span className={binding.avatar_url ? "pa-avatar has-image" : "pa-avatar"}>
+                            {binding.avatar_url ? <img src={binding.avatar_url} alt="" aria-hidden="true" /> : (binding.username || "?")[0]}
+                          </span>
+                          <span className="profile-passport-row__main">
+                            <strong>{binding.username}</strong>
+                            <span className="profile-passport-row__meta"><TypeBadge kind={binding.kind} /><StatusBadge status={binding.status} />{binding.is_primary ? <span className="type-pill">{t("admin.profiles.primary")}</span> : null}</span>
+                          </span>
+                        </Link>
+                        <div className="profile-passport-row__actions">
+                          {!binding.is_primary ? <Button size="sm" variant="secondary" icon="check" loading={primaryMut.isPending && primaryMut.variables === binding.id} onClick={() => primaryMut.mutate(binding.id)}>{t("admin.profiles.setPrimary")}</Button> : null}
+                          <Button size="sm" variant="danger-soft" icon="close" onClick={() => { setUnbindTarget(binding); setDialog("unbind"); }}>{t("admin.profiles.unbind")}</Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 ) : (
                   <p className="muted-cell">{t("admin.profiles.unboundState")}</p>
                 )}
@@ -386,7 +425,7 @@ export function ProfileDetailPage() {
                   <DefRow k={t("common.updated")}>{formatAbsTime(p.skin.updated_at)}</DefRow>
                 </DefList>
               </Card>
-              {p.passport ? (
+              {bindings.length > 0 ? (
                 <Card title={t("admin.skins.sourceSettings")}>
                   <label className="toggle-row skin-inherit-toggle">
                     <input
@@ -484,12 +523,12 @@ export function ProfileDetailPage() {
       </Dialog>
       <Dialog
         open={dialog === "unbind"}
-        onClose={() => !unbindMut.isPending && setDialog(null)}
+        onClose={() => { if (!unbindMut.isPending) { setDialog(null); setUnbindTarget(null); } }}
         title={t("admin.profiles.unbind")}
         icon="link"
-        footer={<><Button variant="ghost" onClick={() => setDialog(null)}>{t("common.cancel")}</Button><Button variant="danger" loading={unbindMut.isPending} onClick={() => unbindMut.mutate()}>{t("common.confirm")}</Button></>}
+        footer={<><Button variant="ghost" onClick={() => { setDialog(null); setUnbindTarget(null); }}>{t("common.cancel")}</Button><Button variant="danger" loading={unbindMut.isPending} onClick={() => unbindMut.mutate()}>{t("common.confirm")}</Button></>}
       >
-        <p>{t("admin.profiles.unbindBody")}</p>
+        <p>{t("admin.profiles.unbindBody").replace("{passport}", unbindTarget?.username ?? "")}</p>
       </Dialog>
       <Dialog
         open={dialog === "ban"}

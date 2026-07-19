@@ -1,14 +1,8 @@
 {
   "id": "authman",
   "name": "authman",
-  "version": "0.1.0-dev",
-  "main": "com.iroselle.authman.AuthmanPlugin",
-  "description": "Authman Velocity integration plugin",
-  "authors": ["Score2"],
-  "dependencies": [
-    {
-      "id": "packetevents",
-      "optional": false
-    }
-  ]
+  "version": "1.0.0",
+  "main": "com.iroselle.authman.bootstrap.AuthmanBootstrapPlugin",
+  "description": "Stable Authman Velocity runtime bootstrap",
+  "authors": ["Score2"]
 }

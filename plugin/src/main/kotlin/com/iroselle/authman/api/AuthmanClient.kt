@@ -3,13 +3,10 @@ package com.iroselle.authman.api
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
-import com.velocitypowered.api.util.GameProfile
-import com.iroselle.authman.config.AuthmanConfig
 import com.iroselle.authman.config.RuntimeConfig
 import com.iroselle.authman.model.DownstreamConsumeResult
 import com.iroselle.authman.model.DownstreamResourcePack
 import com.iroselle.authman.model.DownstreamServerOption
-import com.iroselle.authman.model.DownstreamStatusReport
 import com.iroselle.authman.model.DownstreamTarget
 import com.iroselle.authman.model.DownstreamTransferResult
 import com.iroselle.authman.model.NodeAction
@@ -18,22 +15,14 @@ import com.iroselle.authman.model.NodePresenceCheckRequest
 import com.iroselle.authman.model.NodePresenceCheckResult
 import com.iroselle.authman.model.PortalLinkResult
 import com.iroselle.authman.model.ResolvedPlayer
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.net.http.WebSocket
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionStage
+import com.iroselle.authman.spi.RuntimeTransport
+import com.velocitypowered.api.util.GameProfile
 import java.util.UUID
 
 class AuthmanClient(
-    private val config: AuthmanConfig,
-    private val instanceFingerprint: String,
+    private val transport: RuntimeTransport,
 ) {
     private val gson = Gson()
-    private val httpClient: HttpClient = HttpClient.newBuilder()
-        .connectTimeout(config.requestTimeout)
-        .build()
 
     fun resolvePlayer(username: String): ResolvedPlayer {
         val response = post("/api/node/players/resolve", mapOf("username" to username))
@@ -180,102 +169,6 @@ class AuthmanClient(
         )
     }
 
-    fun heartbeat(pluginVersion: String, velocityVersion: String, status: DownstreamStatusReport): HeartbeatResult {
-        val response = post(
-            "/api/node/heartbeat",
-            mapOf(
-                "kind" to "downstream_velocity",
-                "name" to config.nodeName,
-                "server_id" to config.serverId,
-                "instance_fingerprint" to instanceFingerprint,
-                "plugin_version" to pluginVersion,
-                "velocity_version" to velocityVersion,
-                "status" to mapOf(
-                    "online_players" to status.onlinePlayers,
-                    "max_players" to status.maxPlayers,
-                ),
-            ),
-            includeInstanceHeader = false,
-        )
-        if (!response.ok) {
-            return HeartbeatResult(
-                ok = false,
-                statusCode = response.statusCode,
-                body = response.body,
-                runtime = null,
-                accessRevoked = response.isAccessRevoked(),
-            )
-        }
-        val data = response.jsonData()
-        return HeartbeatResult(
-            ok = true,
-            statusCode = response.statusCode,
-            body = response.body,
-            runtime = parseRuntime(data.obj("runtime_config")),
-            actions = parseNodeActions(data["actions"]),
-            downstreamServers = parseDownstreamServers(data["downstream_servers"]),
-            playerMessages = parsePlayerMessages(data["player_messages"]),
-            accessRevoked = false,
-        )
-    }
-
-    fun connectEvents(
-        onSync: (HeartbeatResult) -> Unit,
-        onRevoked: () -> Unit,
-        onPresenceCheck: (NodePresenceCheckRequest) -> NodePresenceCheckResult,
-    ): CompletableFuture<Void> {
-        val done = CompletableFuture<Void>()
-        val buffer = StringBuilder()
-        httpClient.newWebSocketBuilder()
-            .header("Authorization", "Bearer ${config.nodeToken}")
-            .header("X-Authman-Instance", instanceFingerprint)
-            .buildAsync(resolveCoreWebSocketPath("/api/node/events"), object : WebSocket.Listener {
-                override fun onText(webSocket: WebSocket, data: CharSequence, last: Boolean): CompletionStage<*> {
-                    buffer.append(data)
-                    if (last) {
-                        val message = buffer.toString()
-                        buffer.setLength(0)
-                        try {
-                            val root = gson.fromJson(message, JsonObject::class.java)
-                            when (root.stringOr("type", "")) {
-                                "sync" -> onSync(parseSync(root.obj("data")))
-                                "presence_check" -> {
-                                    val result = onPresenceCheck(parsePresenceCheckRequest(root))
-                                    webSocket.sendText(gson.toJson(presenceCheckResponse(result)), true)
-                                }
-                                "revoked" -> {
-                                    onRevoked()
-                                    done.completeExceptionally(IllegalStateException("Authman node token was revoked"))
-                                }
-                                "error" -> done.completeExceptionally(IllegalStateException(root.obj("error").stringOr("message", "Authman node event stream failed")))
-                            }
-                        } catch (ex: Exception) {
-                            done.completeExceptionally(ex)
-                        }
-                    }
-                    webSocket.request(1)
-                    return CompletableFuture.completedFuture(null)
-                }
-
-                override fun onError(webSocket: WebSocket, error: Throwable) {
-                    done.completeExceptionally(error)
-                }
-
-                override fun onClose(webSocket: WebSocket, statusCode: Int, reason: String): CompletionStage<*> {
-                    done.complete(null)
-                    return CompletableFuture.completedFuture(null)
-                }
-            })
-            .whenComplete { webSocket, error ->
-                if (error != null) {
-                    done.completeExceptionally(error)
-                } else {
-                    webSocket.request(1)
-                }
-            }
-        return done
-    }
-
     fun ackActions(acks: List<NodeActionAck>) {
         val clean = acks.filter { it.id.isNotBlank() }
         if (clean.isEmpty()) {
@@ -307,33 +200,9 @@ class AuthmanClient(
         }
     }
 
-    private fun post(path: String, body: Map<String, Any?>, includeInstanceHeader: Boolean = true): AuthmanResponse {
-        val builder = HttpRequest.newBuilder()
-            .uri(resolveCorePath(path))
-            .timeout(config.requestTimeout)
-            .header("Authorization", "Bearer ${config.nodeToken}")
-            .header("Content-Type", "application/json")
-            .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(body)))
-        if (includeInstanceHeader) {
-            builder.header("X-Authman-Instance", instanceFingerprint)
-        }
-        val response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString())
-        return AuthmanResponse(response.statusCode(), response.body(), gson)
-    }
-
-    private fun resolveCorePath(path: String) =
-        java.net.URI.create("${config.apiBase.toString().trimEnd('/')}/${path.trimStart('/')}")
-
-    private fun resolveCoreWebSocketPath(path: String): java.net.URI {
-        val base = config.apiBase.toString().trimEnd('/')
-        val uri = java.net.URI.create("$base/${path.trimStart('/')}")
-        val scheme = when (uri.scheme.lowercase()) {
-            "https" -> "wss"
-            "http" -> "ws"
-            "wss", "ws" -> uri.scheme
-            else -> "ws"
-        }
-        return java.net.URI(scheme, uri.userInfo, uri.host, uri.port, uri.path, uri.query, uri.fragment)
+    private fun post(path: String, body: Map<String, Any?>): AuthmanResponse {
+        val response = transport.post(path, gson.toJson(body))
+        return AuthmanResponse(response.statusCode, response.body, gson)
     }
 
     private fun createBan(path: String, username: String, durationSeconds: Long, reason: String) {
@@ -352,15 +221,27 @@ class AuthmanClient(
 }
 
 data class HeartbeatResult(
-    val ok: Boolean,
-    val statusCode: Int,
-    val body: String,
     val runtime: RuntimeConfig?,
     val actions: List<NodeAction> = emptyList(),
     val downstreamServers: List<DownstreamServerOption> = emptyList(),
     val playerMessages: Map<String, String> = emptyMap(),
-    val accessRevoked: Boolean,
 )
+
+private val wireGson = Gson()
+
+fun parseRuntimeSync(payload: String): HeartbeatResult =
+    parseSync(wireGson.fromJson(payload, JsonObject::class.java))
+
+fun handleRuntimeNodeMessage(
+    payload: String,
+    onPresenceCheck: (NodePresenceCheckRequest) -> NodePresenceCheckResult,
+): String? {
+    val root = wireGson.fromJson(payload, JsonObject::class.java)
+    if (root.stringOr("type", "") != "presence_check") {
+        return null
+    }
+    return wireGson.toJson(presenceCheckResponse(onPresenceCheck(parsePresenceCheckRequest(root))))
+}
 
 private fun parsePlayerMessages(element: JsonElement?): Map<String, String> {
     if (element == null || element.isJsonNull || !element.isJsonObject) {
@@ -397,14 +278,10 @@ private fun parseRuntime(obj: JsonObject): RuntimeConfig {
 
 private fun parseSync(data: JsonObject): HeartbeatResult {
     return HeartbeatResult(
-        ok = true,
-        statusCode = 200,
-        body = "",
         runtime = parseRuntime(data.obj("runtime_config")),
         actions = parseNodeActions(data["actions"]),
         downstreamServers = parseDownstreamServers(data["downstream_servers"]),
         playerMessages = parsePlayerMessages(data["player_messages"]),
-        accessRevoked = false,
     )
 }
 

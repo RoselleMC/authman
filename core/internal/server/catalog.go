@@ -139,8 +139,46 @@ func profileRowData(profile identity.Profile, passport *identity.Passport, prese
 	return data
 }
 
-func profileDetailData(profile identity.Profile, passport *identity.Passport, presences []store.PlayerPresence, bans []store.PlayerBan, events []map[string]any) map[string]any {
-	data := profileRowData(profile, passport, presences)
+func profileRowDataWithBindings(profile identity.Profile, bindings []store.ProfilePassportBinding, presences []store.PlayerPresence) map[string]any {
+	reference := referencePassportForProfile(profile, bindings)
+	data := profileRowData(profile, reference, presences)
+	rows := make([]map[string]any, 0, len(bindings))
+	avatarVersionTimes := []time.Time{profile.UpdatedAt}
+	for _, binding := range bindings {
+		passport := binding.Passport
+		avatarVersionTimes = append(avatarVersionTimes, passport.UpdatedAt)
+		rows = append(rows, map[string]any{
+			"id":           passport.ID,
+			"uuid":         passport.UUID.String(),
+			"kind":         passport.Kind,
+			"username":     passport.Username,
+			"status":       passport.Status,
+			"is_primary":   binding.Link.IsPrimary,
+			"linked_at":    binding.Link.LinkedAt,
+			"created_from": passport.ID == profile.CreatedFromPassport,
+			"avatar_url":   cacheBustedAssetURL("/api/assets/passports/"+passport.ID+"/avatar.png", passport.UpdatedAt),
+		})
+	}
+	data["avatar_url"] = cacheBustedAssetURL("/api/assets/profiles/"+profile.ID+"/avatar.png", avatarVersionTimes...)
+	data["passports"] = rows
+	data["passport_count"] = len(rows)
+	return data
+}
+
+func referencePassportForProfile(profile identity.Profile, bindings []store.ProfilePassportBinding) *identity.Passport {
+	if len(bindings) == 0 {
+		return nil
+	}
+	for i := range bindings {
+		if bindings[i].Passport.ID == profile.CreatedFromPassport {
+			return &bindings[i].Passport
+		}
+	}
+	return &bindings[0].Passport
+}
+
+func profileDetailDataWithBindings(profile identity.Profile, bindings []store.ProfilePassportBinding, presences []store.PlayerPresence, bans []store.PlayerBan, events []map[string]any) map[string]any {
+	data := profileRowDataWithBindings(profile, bindings, presences)
 	data["properties"] = profilePropertiesData(profile.ProfileProperties)
 	data["presences"] = presenceRows(presences)
 	data["bans"] = banRows(bans)

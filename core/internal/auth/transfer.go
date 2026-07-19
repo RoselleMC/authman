@@ -5,6 +5,7 @@ import "time"
 type TransferGrant struct {
 	ID           string
 	PlayerID     string
+	PassportID   string
 	ServerID     string
 	PortalNodeID string
 	PortalSource string
@@ -20,7 +21,7 @@ type TransferGrant struct {
 	ConsumedAt   *time.Time
 }
 
-func NewTransferGrant(playerID string, serverID string, portalNodeID string, portalSource string, remoteIP string, uuid string, protocolName string, targetHost string, targetPort int, ttl time.Duration, now time.Time) (TransferGrant, string, error) {
+func NewTransferGrant(playerID string, passportID string, serverID string, portalNodeID string, portalSource string, remoteIP string, uuid string, protocolName string, targetHost string, targetPort int, ttl time.Duration, now time.Time) (TransferGrant, string, error) {
 	token, err := NewOpaqueToken(32)
 	if err != nil {
 		return TransferGrant{}, "", err
@@ -28,6 +29,7 @@ func NewTransferGrant(playerID string, serverID string, portalNodeID string, por
 	grant := TransferGrant{
 		ID:           HashToken("transfer-grant-id", token),
 		PlayerID:     playerID,
+		PassportID:   passportID,
 		ServerID:     serverID,
 		PortalNodeID: portalNodeID,
 		PortalSource: portalSource,

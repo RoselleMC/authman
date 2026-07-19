@@ -92,13 +92,30 @@ type PlayerEventHandler interface {
 	HandleDialogClick(ctx context.Context, session PlayerSession, event *DialogClickEvent) error
 }
 
+// ConfigurationEventHandler is an optional fast-path hook invoked after the
+// client acknowledges login but before registry, world, or chunk data is sent.
+// A handler may store a cookie and transfer or disconnect the player. If it
+// does neither, the normal configuration and limbo join sequence continues.
+type ConfigurationEventHandler interface {
+	HandleConfiguration(ctx context.Context, session PlayerSession, event *ConfigurationEvent) error
+}
+
 // PlayerEventHandlerFuncs adapts functions to PlayerEventHandler.
 type PlayerEventHandlerFuncs struct {
+	Configuration        func(context.Context, PlayerSession, *ConfigurationEvent) error
 	Join                 func(context.Context, PlayerSession, *JoinEvent) error
 	Chat                 func(context.Context, PlayerSession, *ChatEvent) error
 	Command              func(context.Context, PlayerSession, *CommandEvent) error
 	DialogClick          func(context.Context, PlayerSession, *DialogClickEvent) error
 	ResourcePackResponse func(context.Context, PlayerSession, *ResourcePackResponseEvent) error
+}
+
+// HandleConfiguration implements ConfigurationEventHandler.
+func (h PlayerEventHandlerFuncs) HandleConfiguration(ctx context.Context, session PlayerSession, event *ConfigurationEvent) error {
+	if h.Configuration == nil {
+		return nil
+	}
+	return h.Configuration(ctx, session, event)
 }
 
 // HandleJoin implements PlayerEventHandler.
@@ -150,6 +167,14 @@ func (h PlayerEventHandlerFuncs) HandleResourcePackResponse(ctx context.Context,
 // JoinEvent is emitted after the initial limbo join and spawn chunk have been
 // sent. Session methods are safe to call from this callback.
 type JoinEvent struct {
+	Player   Player
+	Protocol int
+}
+
+// ConfigurationEvent is emitted before the server commits the client to a
+// world. Only capabilities reported by the session are available in this
+// phase; currently that is limited to cookie storage, transfer, and disconnect.
+type ConfigurationEvent struct {
 	Player   Player
 	Protocol int
 }

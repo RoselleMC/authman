@@ -553,13 +553,10 @@ func (s *Server) handleAdminProfiles(w http.ResponseWriter, r *http.Request) {
 	resolvedGeos := s.lookupIPGeoBatch(r.Context(), missingGeoIPs)
 	now := time.Now()
 	for _, profile := range profiles {
-		var passport *identity.Passport
-		if p, err := s.store.GetPassportForProfile(r.Context(), profile.ID); err == nil {
-			passport = &p
-		}
-		row := profileRowData(profile, passport, s.store.ListProfilePresences(r.Context(), profile.ID))
+		bindings := s.store.ListPassportsForProfile(r.Context(), profile.ID)
+		row := profileRowDataWithBindings(profile, bindings, s.store.ListProfilePresences(r.Context(), profile.ID))
 		enrichResolvedIPGeo(row, profile.LastSeenIP, profile.LastSeenGeo, resolvedGeos)
-		s.enrichProfileRow(r.Context(), row, profile, passport, now)
+		s.enrichProfileRow(r.Context(), row, profile, now)
 		data = append(data, row)
 	}
 	api.WriteJSON(w, http.StatusOK, data, listMeta(len(data), total, params))
@@ -598,17 +595,16 @@ func (s *Server) handleAdminCreateProfile(w http.ResponseWriter, r *http.Request
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.create_failed", err.Error()))
 		return
 	}
-	var passport *identity.Passport
 	if passportID != "" {
-		pp, err := s.store.BindProfileToPassport(r.Context(), profile.ID, passportID, false)
+		_, err := s.store.BindProfileToPassport(r.Context(), profile.ID, passportID, false)
 		if err != nil {
+			_, _ = s.store.DeleteProfile(r.Context(), profile.ID)
 			api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.bind_failed", err.Error()))
 			return
 		}
-		passport = &pp.Passport
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, profile.ID, "profile.create", map[string]any{"protocol_name": profile.ProtocolName})
-	api.WriteJSON(w, http.StatusCreated, profileRowData(profile, passport, s.store.ListProfilePresences(r.Context(), profile.ID)), nil)
+	api.WriteJSON(w, http.StatusCreated, profileRowDataWithBindings(profile, s.store.ListPassportsForProfile(r.Context(), profile.ID), s.store.ListProfilePresences(r.Context(), profile.ID)), nil)
 }
 
 func profileNameTakenForPassport(profiles []identity.Profile, excludeProfileID string, normalizedName string) bool {
@@ -634,18 +630,16 @@ func (s *Server) handleAdminProfileDetail(w http.ResponseWriter, r *http.Request
 		api.WriteError(w, api.NewError(http.StatusNotFound, "profile.not_found", "profile not found"))
 		return
 	}
-	var passport *identity.Passport
-	if p, err := s.store.GetPassportForProfile(r.Context(), profile.ID); err == nil {
-		passport = &p
-	}
+	bindings := s.store.ListPassportsForProfile(r.Context(), profile.ID)
+	passport := referencePassportForProfile(profile, bindings)
 	relatedIDs := []string{profile.ID}
-	if passport != nil {
-		relatedIDs = append(relatedIDs, passport.ID)
+	for _, binding := range bindings {
+		relatedIDs = append(relatedIDs, binding.Passport.ID)
 	}
 	eventData := s.relatedAuditSummaries(r.Context(), 20, relatedIDs...)
 	presences := s.store.ListProfilePresences(r.Context(), profile.ID)
 	bans := s.store.ListBans(r.Context(), store.BanScopeProfile, profile.ID, true, time.Now())
-	data := profileDetailData(profile, passport, presences, bans, eventData)
+	data := profileDetailDataWithBindings(profile, bindings, presences, bans, eventData)
 	s.enrichMissingIPGeo(r.Context(), data, profile.LastSeenIP, profile.LastSeenGeo)
 	data["skin"] = s.profileSkinData(r.Context(), profile, passport)
 	api.WriteJSON(w, http.StatusOK, data, nil)
@@ -678,8 +672,8 @@ func (s *Server) handleAdminUpdateProfile(w http.ResponseWriter, r *http.Request
 			api.WriteError(w, api.NewError(http.StatusBadRequest, "profile.invalid_name", err.Error()))
 			return
 		}
-		if passport, err := s.store.GetPassportForProfile(r.Context(), profile.ID); err == nil {
-			if profileNameTakenForPassport(s.store.ListProfilesForPassport(r.Context(), passport.ID), profile.ID, name.Normalized) {
+		for _, binding := range s.store.ListPassportsForProfile(r.Context(), profile.ID) {
+			if profileNameTakenForPassport(s.store.ListProfilesForPassport(r.Context(), binding.Passport.ID), profile.ID, name.Normalized) {
 				api.WriteError(w, api.NewError(http.StatusConflict, "profile.name_taken", "protocol name is already taken for this passport"))
 				return
 			}
@@ -687,7 +681,7 @@ func (s *Server) handleAdminUpdateProfile(w http.ResponseWriter, r *http.Request
 		oldName := profile.ProtocolName
 		profile, err = s.store.UpdateProfileIdentity(r.Context(), profile.ID, name.Protocol)
 		if err != nil {
-			api.WriteError(w, api.NewError(http.StatusNotFound, "profile.not_found", "profile not found"))
+			api.WriteError(w, api.NewError(http.StatusConflict, "profile.name_taken", err.Error()))
 			return
 		}
 		s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, profile.ID, "profile.identity.update", map[string]any{
@@ -704,11 +698,7 @@ func (s *Server) handleAdminUpdateProfile(w http.ResponseWriter, r *http.Request
 		}
 		s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, profile.ID, "profile.status.update", map[string]any{"status": status})
 	}
-	var passport *identity.Passport
-	if p, err := s.store.GetPassportForProfile(r.Context(), profile.ID); err == nil {
-		passport = &p
-	}
-	api.WriteJSON(w, http.StatusOK, profileRowData(profile, passport, s.store.ListProfilePresences(r.Context(), profile.ID)), nil)
+	api.WriteJSON(w, http.StatusOK, profileRowDataWithBindings(profile, s.store.ListPassportsForProfile(r.Context(), profile.ID), s.store.ListProfilePresences(r.Context(), profile.ID)), nil)
 }
 
 func (s *Server) handleAdminDeleteProfile(w http.ResponseWriter, r *http.Request) {
@@ -753,7 +743,36 @@ func (s *Server) handleAdminBindProfile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, pp.Profile.ID, "profile.bind", map[string]any{"passport_id": pp.Passport.ID})
-	api.WriteJSON(w, http.StatusOK, profileRowData(pp.Profile, &pp.Passport, s.store.ListProfilePresences(r.Context(), pp.Profile.ID)), nil)
+	api.WriteJSON(w, http.StatusOK, profileRowDataWithBindings(pp.Profile, s.store.ListPassportsForProfile(r.Context(), pp.Profile.ID), s.store.ListProfilePresences(r.Context(), pp.Profile.ID)), nil)
+}
+
+func (s *Server) handleAdminUnbindProfilePassport(w http.ResponseWriter, r *http.Request) {
+	session, authErr := s.requireAdmin(r, true)
+	if authErr != nil {
+		api.WriteError(w, authErr)
+		return
+	}
+	profileID := strings.TrimSpace(r.PathValue("id"))
+	passportID := strings.TrimSpace(r.PathValue("passportID"))
+	binding, err := s.store.GetProfilePassportBinding(r.Context(), profileID, passportID)
+	if err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "profile.binding_not_found", "profile passport binding not found"))
+		return
+	}
+	if err := s.store.UnbindProfileFromPassport(r.Context(), profileID, passportID); err != nil {
+		api.WriteError(w, api.NewError(http.StatusNotFound, "profile.binding_not_found", "profile passport binding not found"))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetPlayer, profileID, "profile.unbind", map[string]any{
+		"passport_id": passportID,
+		"was_primary": binding.Link.IsPrimary,
+	})
+	profile, err := s.store.GetProfileByID(r.Context(), profileID)
+	if err != nil {
+		api.WriteJSON(w, http.StatusOK, map[string]any{"ok": true}, nil)
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, profileRowDataWithBindings(profile, s.store.ListPassportsForProfile(r.Context(), profileID), s.store.ListProfilePresences(r.Context(), profileID)), nil)
 }
 
 func (s *Server) handleAdminUnbindProfile(w http.ResponseWriter, r *http.Request) {
@@ -1095,7 +1114,16 @@ func (s *Server) handleAdminResetOfflinePassword(w http.ResponseWriter, r *http.
 	if err != nil {
 		player, playerErr := s.store.GetPlayerByID(r.Context(), targetID)
 		if playerErr == nil {
-			passport, err = s.store.GetPassportForProfile(r.Context(), player.ID)
+			var offlineBindings []store.ProfilePassportBinding
+			for _, binding := range s.store.ListPassportsForProfile(r.Context(), player.ID) {
+				if binding.Passport.Kind == identity.PassportKindOffline {
+					offlineBindings = append(offlineBindings, binding)
+				}
+			}
+			if len(offlineBindings) == 1 {
+				passport = offlineBindings[0].Passport
+				err = nil
+			}
 		}
 		if err != nil || playerErr != nil {
 			api.WriteError(w, api.NewError(http.StatusNotFound, "passport.not_found", "passport not found"))
@@ -3287,16 +3315,7 @@ func (s *Server) enrichPassportRow(ctx context.Context, row map[string]any, pass
 	}
 }
 
-func (s *Server) enrichProfileRow(ctx context.Context, row map[string]any, profile identity.Profile, passport *identity.Passport, now time.Time) {
-	if passport != nil {
-		if lockedUntil := s.passportLockedUntil(ctx, *passport); lockedUntil != nil {
-			row["locked_until"] = lockedUntil
-		}
-		if ban, ok := firstActiveBan(s.store.ListBans(ctx, store.BanScopePassport, passport.ID, false, now), now); ok {
-			row["active_ban"] = banRows([]store.PlayerBan{ban})[0]
-			row["ban_expires_at"] = ban.ExpiresAt
-		}
-	}
+func (s *Server) enrichProfileRow(ctx context.Context, row map[string]any, profile identity.Profile, now time.Time) {
 	if ban, ok := firstActiveBan(s.store.ListBans(ctx, store.BanScopeProfile, profile.ID, false, now), now); ok {
 		row["active_ban"] = banRows([]store.PlayerBan{ban})[0]
 		row["ban_expires_at"] = ban.ExpiresAt

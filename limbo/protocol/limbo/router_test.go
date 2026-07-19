@@ -433,6 +433,84 @@ func TestProtocol766LoginConfigurationAndChunk(t *testing.T) {
 	testModernLoginConfigurationAndChunk(t, protocol766)
 }
 
+func TestConfigurationTransferSkipsWorldJoin(t *testing.T) {
+	for _, protocol := range []int32{
+		protocol766,
+		protocol767,
+		protocol768,
+		protocol769,
+		protocol770,
+		protocol771,
+		protocol772,
+		protocol773,
+		protocol774,
+		protocol775,
+	} {
+		t.Run(fmt.Sprintf("protocol_%d", protocol), func(t *testing.T) {
+			testConfigurationTransferSkipsWorldJoin(t, protocol)
+		})
+	}
+}
+
+func testConfigurationTransferSkipsWorldJoin(t *testing.T, protocol int32) {
+	t.Helper()
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	registrySource := &countingRegistrySource{}
+
+	gotEvent := make(chan limbgo.ConfigurationEvent, 1)
+	joinCalled := make(chan struct{}, 1)
+	services := testServices{
+		events: limbgo.PlayerEventHandlerFuncs{
+			Configuration: func(ctx context.Context, session limbgo.PlayerSession, event *limbgo.ConfigurationEvent) error {
+				gotEvent <- *event
+				caps := session.Capabilities()
+				if !caps.StoreCookie || !caps.Transfer || !caps.Disconnect || caps.Dialog || caps.SystemMessage || caps.Title {
+					return fmt.Errorf("unexpected configuration capabilities: %+v", caps)
+				}
+				if err := session.StoreCookie(ctx, "authman:transfer", []byte("configuration-grant")); err != nil {
+					return err
+				}
+				return session.Transfer(ctx, "velocity.internal", 25566)
+			},
+			Join: func(context.Context, limbgo.PlayerSession, *limbgo.JoinEvent) error {
+				joinCalled <- struct{}{}
+				return errors.New("join must not run after configuration transfer")
+			},
+		},
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Router{Description: "limbgo test", RegistryDataSource: registrySource}.ServeConn(context.Background(), serverConn, services)
+	}()
+
+	loginProtocol(t, clientConn, protocol, false)
+	reader := bufio.NewReader(clientConn)
+	assertPacketID(t, reader, protocol, packetid.StateLogin, "success")
+	writeServerboundNamedPacket(t, clientConn, protocol, packetid.StateLogin, "login_acknowledged", nil)
+	cookiePacket := assertPacketID(t, reader, protocol, packetid.StateConfiguration, "store_cookie")
+	assertStoreCookiePacket(t, cookiePacket.Data, "authman:transfer", []byte("configuration-grant"))
+	transferPacket := assertPacketID(t, reader, protocol, packetid.StateConfiguration, "transfer")
+	assertTransferPacket(t, transferPacket.Data, "velocity.internal", 25566)
+
+	event := <-gotEvent
+	if event.Protocol != int(protocol) || event.Player.Name != "TestPlayer" {
+		t.Fatalf("configuration event = %+v", event)
+	}
+	select {
+	case <-joinCalled:
+		t.Fatal("join handler ran after configuration transfer")
+	default:
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("router error: %v", err)
+	}
+	if registrySource.calls != 0 {
+		t.Fatalf("registry data source calls = %d, want 0 for configuration transfer", registrySource.calls)
+	}
+}
+
 func TestProtocol767LoginConfigurationAndChunk(t *testing.T) {
 	testModernLoginConfigurationAndChunk(t, protocol767)
 }

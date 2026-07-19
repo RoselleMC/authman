@@ -32,7 +32,6 @@ import {
 import { AuditEventList } from "../components/AuditEventList";
 import { RefreshableIPLocation } from "../components/RefreshableIPLocation";
 import {
-  bindProfile,
   createPassportPortalLink,
   createPassportBan,
   createProfile,
@@ -40,11 +39,9 @@ import {
   deletePassportSkin,
   extendBan,
   fetchPassport,
-  fetchProfiles,
   resetPassportPassword,
   revokePortalLink,
   revokeBan,
-  unbindProfile,
   updatePassportSkinSource,
   updatePassportStatus,
   uploadPassportSkin,
@@ -58,7 +55,7 @@ import { ErrorBlock } from "../components/ErrorBlock";
 import { BanStateCell, LockUntilCell } from "../components/PlayerStateCells";
 import { MinecraftSkinPreview } from "../components/MinecraftSkinPreview";
 
-type DialogState = null | "status" | "bind" | "create" | "ban" | "extendBan" | "revokeBan" | "portalLink" | "portalLinkSecret" | "resetPassword" | "resetPasswordSecret";
+type DialogState = null | "status" | "create" | "ban" | "extendBan" | "revokeBan" | "portalLink" | "portalLinkSecret" | "resetPassword" | "resetPasswordSecret";
 type DetailTab = "overview" | "skin" | "audit";
 type DurationUnit = "s" | "min" | "h" | "d" | "w" | "m" | "y";
 
@@ -77,7 +74,6 @@ export function PassportDetailPage() {
   const [nextStatus, setNextStatus] = useState<PassportRow["status"] | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [dialog, setDialog] = useState<DialogState>(null);
-  const [selectedProfileID, setSelectedProfileID] = useState("");
   const [protocolName, setProtocolName] = useState("");
   const [tab, setTab] = useState<DetailTab>("overview");
   const [banReason, setBanReason] = useState("");
@@ -97,11 +93,6 @@ export function PassportDetailPage() {
   const previewSkinURL = useObjectURL(skinFile);
   const previewCapeURL = useObjectURL(capeFile);
   const previewElytraURL = useObjectURL(elytraFile);
-  const unboundQ = useQuery({
-    queryKey: ["admin.profiles.unbound"],
-    queryFn: ({ signal }) => fetchProfiles({ binding: "unbound", page: 1, page_size: 200 }, signal),
-    enabled: dialog === "bind",
-  });
   const statusMut = useMutation({
     mutationFn: (status: PassportRow["status"]) => updatePassportStatus(id, status),
     onSuccess: () => {
@@ -155,18 +146,6 @@ export function PassportDetailPage() {
     },
     onError: () => toast.danger(t("common.unknown")),
   });
-  const bindMut = useMutation({
-    mutationFn: () => bindProfile(selectedProfileID, id, false),
-    onSuccess: () => {
-      toast.push({ tone: "success", title: t("admin.profiles.bound") });
-      setDialog(null);
-      setSelectedProfileID("");
-      void qc.invalidateQueries({ queryKey: ["admin.passport", id] });
-      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
-      void qc.invalidateQueries({ queryKey: ["admin.profiles.unbound"] });
-    },
-    onError: () => toast.danger(t("common.unknown")),
-  });
   const createMut = useMutation({
     mutationFn: () => createProfile({
       protocol_name: protocolName,
@@ -178,17 +157,6 @@ export function PassportDetailPage() {
       setProtocolName("");
       void qc.invalidateQueries({ queryKey: ["admin.passport", id] });
       void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
-      void qc.invalidateQueries({ queryKey: ["admin.profiles.unbound"] });
-    },
-    onError: () => toast.danger(t("common.unknown")),
-  });
-  const unbindMut = useMutation({
-    mutationFn: (profileID: string) => unbindProfile(profileID),
-    onSuccess: () => {
-      toast.push({ tone: "success", title: t("admin.profiles.unbound") });
-      void qc.invalidateQueries({ queryKey: ["admin.passport", id] });
-      void qc.invalidateQueries({ queryKey: ["admin.profiles"] });
-      void qc.invalidateQueries({ queryKey: ["admin.profiles.unbound"] });
     },
     onError: () => toast.danger(t("common.unknown")),
   });
@@ -283,11 +251,6 @@ export function PassportDetailPage() {
   const relatedAuditIDs = [p.id, p.uuid, ...p.profiles.flatMap((profile) => [profile.id, profile.uuid])]
     .filter(Boolean)
     .join(",");
-  const unboundProfiles = unboundQ.data?.rows ?? [];
-  const profileOptions = unboundProfiles.map((profile) => ({
-    value: profile.id,
-    label: `${profile.protocol_name} · ${profile.uuid}`,
-  }));
   const boundProfileColumns: ListColumn<ProfileSummary>[] = [
     {
       key: "protocol",
@@ -301,29 +264,6 @@ export function PassportDetailPage() {
     { key: "online", header: t("admin.presences.onlineState"), minWidth: "120px", sortable: true, sortValue: (profile) => profile.online, render: (profile) => <StatusBadge status={profile.online ? "online" : "offline_status"} /> },
     { key: "ban", header: t("admin.bans.heading"), minWidth: "180px", sortable: true, sortValue: (profile) => profile.ban_expires_at ?? "", render: (profile) => <BanStateCell ban={profile.active_ban} /> },
     { key: "lockedUntil", header: t("admin.player.lockedUntil"), minWidth: "180px", defaultVisible: false, sortable: true, sortValue: (profile) => profile.locked_until ?? "", render: (profile) => <LockUntilCell lockedUntil={profile.locked_until} /> },
-    {
-      key: "actions",
-      header: "",
-      mandatory: true,
-      width: "112px",
-      minWidth: "112px",
-      align: "right",
-      sticky: "right",
-      render: (profile) => (
-        <Button
-          size="sm"
-          variant="danger-soft"
-          icon="link"
-          loading={unbindMut.isPending && unbindMut.variables === profile.id}
-          onClick={(e) => {
-            e.stopPropagation();
-            unbindMut.mutate(profile.id);
-          }}
-        >
-          {t("admin.profiles.unbind")}
-        </Button>
-      ),
-    },
   ];
 
   return (
@@ -442,12 +382,7 @@ export function PassportDetailPage() {
                     state={profileList.state}
                     onStateChange={profileList.setState}
                     pageSizeOptions={[5, 10, 25]}
-                    primaryActions={
-                      <>
-                        <Button size="sm" variant="secondary" icon="link" onClick={() => { setSelectedProfileID(""); setDialog("bind"); }}>{t("admin.profiles.bind")}</Button>
-                        <Button size="sm" variant="primary" icon="plus" onClick={() => { setProtocolName(""); setDialog("create"); }}>{t("admin.profiles.create")}</Button>
-                      </>
-                    }
+                    primaryActions={<Button size="sm" variant="primary" icon="plus" onClick={() => { setProtocolName(""); setDialog("create"); }}>{t("admin.profiles.create")}</Button>}
                     onRowClick={(profile) => navigateWithBack(navigate, `/profiles/${profile.id}`, location)}
                     testId="passport-bound-profiles"
                   />
@@ -461,7 +396,6 @@ export function PassportDetailPage() {
                       </div>
                       <div className="adv-list-toolbar__right">
                         <div className="adv-list-primary-actions">
-                          <Button size="sm" variant="secondary" icon="link" onClick={() => { setSelectedProfileID(""); setDialog("bind"); }}>{t("admin.profiles.bind")}</Button>
                           <Button size="sm" variant="primary" icon="plus" onClick={() => { setProtocolName(""); setDialog("create"); }}>{t("admin.profiles.create")}</Button>
                         </div>
                       </div>
@@ -650,29 +584,6 @@ export function PassportDetailPage() {
         onCancel={() => setDeleteOpen(false)}
         onConfirm={() => deleteMut.mutate()}
       />
-      <Dialog
-        open={dialog === "bind"}
-        onClose={() => !bindMut.isPending && setDialog(null)}
-        icon="link"
-        title={t("admin.passports.bindProfile")}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setDialog(null)}>{t("common.cancel")}</Button>
-            <Button variant="primary" loading={bindMut.isPending} disabled={!selectedProfileID} onClick={() => bindMut.mutate()}>{t("common.confirm")}</Button>
-          </>
-        }
-      >
-        <Field label={t("admin.passports.unboundProfiles")}>
-          <Select
-            value={selectedProfileID}
-            options={profileOptions}
-            onChange={setSelectedProfileID}
-            placeholder={unboundQ.isLoading ? t("common.loading") : t("admin.passports.selectProfile")}
-            disabled={unboundQ.isLoading || profileOptions.length === 0}
-          />
-        </Field>
-        {!unboundQ.isLoading && profileOptions.length === 0 ? <p className="muted-cell">{t("admin.passports.noUnboundProfiles")}</p> : null}
-      </Dialog>
       <Dialog
         open={dialog === "create"}
         onClose={() => !createMut.isPending && setDialog(null)}

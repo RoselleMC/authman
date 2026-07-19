@@ -29,11 +29,16 @@ import (
 )
 
 const (
-	maxIPGeoDatabaseBytes       = 256 * 1024 * 1024
-	maxIPGeoExpandedBytes       = 512 * 1024 * 1024
-	ipGeoBackgroundPollInterval = 15 * time.Minute
-	ipGeoRefreshAttempts        = 3
-	ipGeoRefreshStaleAfter      = 10 * time.Minute
+	maxIPGeoDatabaseBytes        = 256 * 1024 * 1024
+	maxIPGeoExpandedBytes        = 512 * 1024 * 1024
+	ipGeoDatabaseDownloadTimeout = 4 * time.Hour
+	ipGeoDownloadIdleTimeout     = 90 * time.Second
+	ipGeoDownloadProgressWindow  = 2 * time.Minute
+	ipGeoDownloadMinProgress     = 128 * 1024
+	ipGeoDownloadResumeAttempts  = 12
+	ipGeoDownloadConnectAttempts = 2
+	ipGeoBackgroundPollInterval  = 15 * time.Minute
+	ipGeoRefreshAttempts         = 3
 )
 
 type ipGeoSourceRequest struct {
@@ -54,6 +59,12 @@ type ipGeoSourceRequest struct {
 type ipGeoLookupRequest struct {
 	IP      string `json:"ip"`
 	Refresh bool   `json:"refresh"`
+}
+
+type ipGeoRefreshJob struct {
+	SourceID       string
+	Force          bool
+	RepeatIfActive bool
 }
 
 type ipGeoCatalogEntry struct {
@@ -172,23 +183,18 @@ func (s *Server) handleAdminCreateIPGeoSource(w http.ResponseWriter, r *http.Req
 		return
 	}
 	source.ID = uuid.NewString()
-	source.CreatedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	source.CreatedAt = now
 	source.Status = store.IPGeoSourcePending
+	source.NextCheckAt = &now
 	source, err = s.store.UpsertIPGeoSource(r.Context(), source)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "ip_geo.source_save_failed", "failed to save IP database source"))
 		return
 	}
 	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, source.ID, "ip_geo.source.create", map[string]any{"name": source.Name, "type": source.Type})
-	refreshed, refreshErr := s.refreshIPGeoSource(r.Context(), source.ID, true)
-	if refreshErr != nil {
-		// The source configuration is valid and persisted. Surface the download
-		// failure as source state so the scheduled retry can recover it without
-		// encouraging the administrator to create a duplicate source.
-		api.WriteJSON(w, http.StatusCreated, ipGeoSourceData(refreshed), nil)
-		return
-	}
-	api.WriteJSON(w, http.StatusCreated, ipGeoSourceData(refreshed), nil)
+	s.queueIPGeoRefresh(ipGeoRefreshJob{SourceID: source.ID, Force: true})
+	api.WriteJSON(w, http.StatusCreated, ipGeoSourceData(source), nil)
 }
 
 func (s *Server) handleAdminUpdateIPGeoSource(w http.ResponseWriter, r *http.Request) {
@@ -214,17 +220,24 @@ func (s *Server) handleAdminUpdateIPGeoSource(w http.ResponseWriter, r *http.Req
 	}
 	changedRemote := updated.Type != existing.Type || updated.SourceURL != existing.SourceURL ||
 		updated.GitHubRepository != existing.GitHubRepository || updated.AssetPattern != existing.AssetPattern || updated.Format != existing.Format
+	if changedRemote && updated.Type != store.IPGeoSourceUpload {
+		now := time.Now().UTC()
+		updated.LastError = ""
+		updated.NextCheckAt = &now
+		if updated.StorageFilename == "" {
+			updated.Status = store.IPGeoSourcePending
+		} else {
+			updated.Status = store.IPGeoSourceReady
+		}
+	}
 	updated, err = s.store.UpsertIPGeoSource(r.Context(), updated)
 	if err != nil {
 		api.WriteError(w, api.NewError(http.StatusInternalServerError, "ip_geo.source_save_failed", "failed to save IP database source"))
 		return
 	}
 	if changedRemote && updated.Type != store.IPGeoSourceUpload {
-		updated, err = s.refreshIPGeoSource(r.Context(), updated.ID, true)
-		if err != nil {
-			api.WriteError(w, api.NewError(http.StatusBadGateway, "ip_geo.source_refresh_failed", err.Error()))
-			return
-		}
+		s.reloadIPGeoSources(r.Context())
+		s.queueIPGeoRefresh(ipGeoRefreshJob{SourceID: updated.ID, Force: true, RepeatIfActive: true})
 	} else {
 		s.reloadIPGeoSources(r.Context())
 	}
@@ -270,13 +283,21 @@ func (s *Server) handleAdminRefreshIPGeoSource(w http.ResponseWriter, r *http.Re
 		api.WriteError(w, api.NewError(http.StatusBadRequest, "ip_geo.source_not_refreshable", "uploaded databases cannot be refreshed from a remote source"))
 		return
 	}
-	source, err = s.refreshIPGeoSource(r.Context(), source.ID, true)
+	now := time.Now().UTC()
+	source.Status = store.IPGeoSourceUpdating
+	source.LastError = ""
+	source.NextCheckAt = &now
+	source, err = s.store.UpsertIPGeoSource(r.Context(), source)
 	if err != nil {
-		api.WriteError(w, api.NewError(http.StatusBadGateway, "ip_geo.source_refresh_failed", err.Error()))
+		api.WriteError(w, api.NewError(http.StatusInternalServerError, "ip_geo.source_save_failed", "failed to queue IP database refresh"))
 		return
 	}
-	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, source.ID, "ip_geo.source.refresh", map[string]any{"version": source.Version, "sha256": source.SHA256})
-	api.WriteJSON(w, http.StatusOK, ipGeoSourceData(source), nil)
+	if !s.queueIPGeoRefresh(ipGeoRefreshJob{SourceID: source.ID, Force: true}) {
+		api.WriteError(w, api.NewError(http.StatusServiceUnavailable, "ip_geo.refresh_queue_full", "IP database refresh queue is full"))
+		return
+	}
+	s.audit(r, audit.ActorAdmin, session.SubjectID, audit.TargetSystem, source.ID, "ip_geo.source.refresh", map[string]any{"queued": true})
+	api.WriteJSON(w, http.StatusAccepted, ipGeoSourceData(source), nil)
 }
 
 func (s *Server) handleAdminUploadIPGeoSource(w http.ResponseWriter, r *http.Request) {
@@ -507,12 +528,21 @@ func (s *Server) refreshIPGeoSource(ctx context.Context, id string, force bool) 
 	if source.Type == store.IPGeoSourceUpload {
 		return source, fmt.Errorf("uploaded databases do not have a remote update source")
 	}
+	downloadSource := source
 	source.Status = store.IPGeoSourceUpdating
 	source.LastError = ""
 	_, _ = s.store.UpsertIPGeoSource(ctx, source)
 	now := time.Now().UTC()
 	download, err := s.downloadIPGeoSourceWithRetry(ctx, source, force)
 	if err != nil {
+		current, currentErr := s.store.GetIPGeoSource(ctx, id)
+		if currentErr != nil {
+			return source, currentErr
+		}
+		if !sameIPGeoRemoteSource(downloadSource, current) {
+			return current, nil
+		}
+		source = current
 		source.LastCheckedAt = &now
 		source.LastError = truncateText(err.Error(), 1000)
 		if source.StorageFilename != "" {
@@ -529,6 +559,14 @@ func (s *Server) refreshIPGeoSource(ctx context.Context, id string, force bool) 
 			_ = os.Remove(download.Path)
 		}
 	}()
+	current, err := s.store.GetIPGeoSource(ctx, id)
+	if err != nil {
+		return source, err
+	}
+	if !sameIPGeoRemoteSource(downloadSource, current) {
+		return current, nil
+	}
+	source = current
 	if download.Unchanged {
 		source.Status = store.IPGeoSourceReady
 		source.LastError = ""
@@ -562,6 +600,14 @@ func (s *Server) refreshIPGeoSource(ctx context.Context, id string, force bool) 
 	}
 	s.reloadIPGeoSources(ctx)
 	return installed, nil
+}
+
+func sameIPGeoRemoteSource(left, right store.IPGeoSource) bool {
+	return left.Type == right.Type &&
+		left.Format == right.Format &&
+		left.SourceURL == right.SourceURL &&
+		left.GitHubRepository == right.GitHubRepository &&
+		left.AssetPattern == right.AssetPattern
 }
 
 type ipGeoDownload struct {
@@ -633,47 +679,269 @@ func downloadIPGeoURL(ctx context.Context, rawURL string, headers map[string]str
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
-	client := &http.Client{Timeout: 5 * time.Minute, Transport: transport}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return ipGeoDownload{}, err
+	client := &http.Client{Timeout: ipGeoDatabaseDownloadTimeout, Transport: transport}
+	result := ipGeoDownload{}
+	var offset int64
+	var expectedTotal int64 = -1
+	var lastErr error
+	defer func() {
+		if lastErr != nil && result.Path != "" {
+			_ = os.Remove(result.Path)
+		}
+	}()
+	for attempt := 1; attempt <= ipGeoDownloadResumeAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return ipGeoDownload{}, err
+		}
+		req.Header.Set("Accept", "application/octet-stream, application/json;q=0.8")
+		req.Header.Set("Accept-Encoding", "identity")
+		req.Header.Set("User-Agent", "Authman-IPGeo/1")
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+		if offset > 0 {
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+			if validator := firstNonEmpty(result.ETag, result.LastModified); validator != "" {
+				req.Header.Set("If-Range", validator)
+			}
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			if !shouldRetryIPGeoDownload(ctx, attempt, offset) {
+				return ipGeoDownload{}, lastErr
+			}
+			continue
+		}
+		if value := resp.Header.Get("ETag"); value != "" {
+			result.ETag = value
+		}
+		if value := resp.Header.Get("Last-Modified"); value != "" {
+			result.LastModified = value
+		}
+		if resp.StatusCode == http.StatusNotModified {
+			_ = resp.Body.Close()
+			result.Unchanged = true
+			return result, nil
+		}
+		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable && offset > 0 {
+			total, ok := parseIPGeoUnsatisfiedRange(resp.Header.Get("Content-Range"))
+			_ = resp.Body.Close()
+			if ok && total == offset {
+				lastErr = nil
+				return result, nil
+			}
+			lastErr = fmt.Errorf("download rejected byte range at offset %d", offset)
+			return ipGeoDownload{}, lastErr
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			_ = resp.Body.Close()
+			lastErr = fmt.Errorf("download returned HTTP %d", resp.StatusCode)
+			return ipGeoDownload{}, lastErr
+		}
+
+		appendResponse := offset > 0 && resp.StatusCode == http.StatusPartialContent
+		if appendResponse {
+			start, total, ok := parseIPGeoContentRange(resp.Header.Get("Content-Range"))
+			if !ok || start != offset {
+				_ = resp.Body.Close()
+				lastErr = fmt.Errorf("download returned an invalid Content-Range for offset %d", offset)
+				return ipGeoDownload{}, lastErr
+			}
+			expectedTotal = total
+		} else if offset > 0 {
+			// The server ignored Range. Restart this attempt from the beginning so
+			// the partial prefix is never combined with a different response body.
+			offset = 0
+			expectedTotal = resp.ContentLength
+		} else {
+			expectedTotal = resp.ContentLength
+		}
+		if expectedTotal > maxIPGeoDatabaseBytes {
+			_ = resp.Body.Close()
+			lastErr = fmt.Errorf("downloaded database exceeds %d MiB", maxIPGeoDatabaseBytes/(1024*1024))
+			return ipGeoDownload{}, lastErr
+		}
+		if result.Path == "" {
+			result.OriginalFilename = responseFilename(resp, rawURL)
+			ext := archiveSuffix(result.OriginalFilename)
+			temp, createErr := os.CreateTemp(dataDir, ".download-*"+ext)
+			if createErr != nil {
+				_ = resp.Body.Close()
+				return ipGeoDownload{}, createErr
+			}
+			result.Path = temp.Name()
+			if closeErr := temp.Close(); closeErr != nil {
+				_ = resp.Body.Close()
+				_ = os.Remove(result.Path)
+				return ipGeoDownload{}, closeErr
+			}
+		}
+		flags := os.O_WRONLY
+		if appendResponse {
+			flags |= os.O_APPEND
+		} else {
+			flags |= os.O_TRUNC
+		}
+		file, openErr := os.OpenFile(result.Path, flags, 0o600)
+		if openErr != nil {
+			_ = resp.Body.Close()
+			lastErr = openErr
+			return ipGeoDownload{}, openErr
+		}
+		written, copyErr := copyIPGeoResponse(file, resp.Body, maxIPGeoDatabaseBytes+1-offset, resp.ContentLength,
+			ipGeoDownloadIdleTimeout, ipGeoDownloadProgressWindow, ipGeoDownloadMinProgress)
+		closeErr := firstError(file.Close(), resp.Body.Close())
+		offset += written
+		if copyErr == nil && closeErr == nil && expectedTotal > 0 && offset != expectedTotal {
+			copyErr = fmt.Errorf("download ended at %d bytes, expected %d", offset, expectedTotal)
+		}
+		if copyErr == nil && closeErr == nil {
+			if offset == 0 || offset > maxIPGeoDatabaseBytes {
+				lastErr = fmt.Errorf("downloaded database is empty or exceeds %d MiB", maxIPGeoDatabaseBytes/(1024*1024))
+				return ipGeoDownload{}, lastErr
+			}
+			lastErr = nil
+			return result, nil
+		}
+		lastErr = firstError(copyErr, closeErr)
+		if !shouldRetryIPGeoDownload(ctx, attempt, offset) {
+			return ipGeoDownload{}, lastErr
+		}
 	}
-	req.Header.Set("Accept", "application/octet-stream, application/json;q=0.8")
-	req.Header.Set("User-Agent", "Authman-IPGeo/1")
-	for key, value := range headers {
-		req.Header.Set(key, value)
+	return ipGeoDownload{}, lastErr
+}
+
+func shouldRetryIPGeoDownload(ctx context.Context, attempt int, offset int64) bool {
+	maxAttempts := ipGeoDownloadConnectAttempts
+	if offset > 0 {
+		maxAttempts = ipGeoDownloadResumeAttempts
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return ipGeoDownload{}, err
+	if attempt >= maxAttempts || ctx.Err() != nil {
+		return false
 	}
-	defer resp.Body.Close()
-	result := ipGeoDownload{ETag: resp.Header.Get("ETag"), LastModified: resp.Header.Get("Last-Modified")}
-	if resp.StatusCode == http.StatusNotModified {
-		result.Unchanged = true
-		return result, nil
+	delay := time.Duration(min(attempt, 5)) * time.Second
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return result, fmt.Errorf("download returned HTTP %d", resp.StatusCode)
+}
+
+func parseIPGeoContentRange(value string) (int64, int64, bool) {
+	var start, end, total int64
+	if _, err := fmt.Sscanf(strings.TrimSpace(value), "bytes %d-%d/%d", &start, &end, &total); err != nil {
+		return 0, 0, false
 	}
-	result.OriginalFilename = responseFilename(resp, rawURL)
-	ext := archiveSuffix(result.OriginalFilename)
-	temp, err := os.CreateTemp(dataDir, ".download-*"+ext)
-	if err != nil {
-		return result, err
+	return start, total, start >= 0 && end >= start && total > end
+}
+
+func parseIPGeoUnsatisfiedRange(value string) (int64, bool) {
+	var total int64
+	if _, err := fmt.Sscanf(strings.TrimSpace(value), "bytes */%d", &total); err != nil {
+		return 0, false
 	}
-	result.Path = temp.Name()
-	written, copyErr := io.Copy(temp, io.LimitReader(resp.Body, maxIPGeoDatabaseBytes+1))
-	closeErr := temp.Close()
-	if copyErr != nil || closeErr != nil {
-		_ = os.Remove(result.Path)
-		return ipGeoDownload{}, firstError(copyErr, closeErr)
+	return total, total >= 0
+}
+
+type ipGeoReadResult struct {
+	data []byte
+	err  error
+}
+
+func copyIPGeoResponse(dst io.Writer, src io.ReadCloser, maxBytes int64, expectedBytes int64, idleTimeout time.Duration, progressWindow time.Duration, minProgressBytes int64) (int64, error) {
+	if idleTimeout <= 0 || progressWindow <= 0 || minProgressBytes <= 0 {
+		return 0, fmt.Errorf("invalid IP database download progress limits")
 	}
-	if written == 0 || written > maxIPGeoDatabaseBytes {
-		_ = os.Remove(result.Path)
-		return ipGeoDownload{}, fmt.Errorf("downloaded database is empty or exceeds %d MiB", maxIPGeoDatabaseBytes/(1024*1024))
+	progressThreshold := minProgressBytes
+	if expectedBytes > 0 && expectedBytes < progressThreshold*4 {
+		progressThreshold = max(int64(1), expectedBytes/4)
 	}
-	return result, nil
+
+	results := make(chan ipGeoReadResult, 1)
+	acknowledge := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		buffer := make([]byte, 256*1024)
+		for {
+			n, err := src.Read(buffer)
+			select {
+			case results <- ipGeoReadResult{data: buffer[:n], err: err}:
+			case <-done:
+				return
+			}
+			if err != nil {
+				return
+			}
+			select {
+			case <-acknowledge:
+			case <-done:
+				return
+			}
+		}
+	}()
+	defer close(done)
+
+	idleTimer := time.NewTimer(idleTimeout)
+	progressTimer := time.NewTimer(progressWindow)
+	defer idleTimer.Stop()
+	defer progressTimer.Stop()
+	var written int64
+	var windowStart int64
+	for {
+		select {
+		case result := <-results:
+			if len(result.data) > 0 {
+				if written+int64(len(result.data)) > maxBytes {
+					_ = src.Close()
+					return written, fmt.Errorf("downloaded database exceeds the size limit")
+				}
+				n, err := dst.Write(result.data)
+				written += int64(n)
+				if err != nil {
+					_ = src.Close()
+					return written, err
+				}
+				if n != len(result.data) {
+					_ = src.Close()
+					return written, io.ErrShortWrite
+				}
+				resetTimer(idleTimer, idleTimeout)
+			}
+			if result.err != nil {
+				if errors.Is(result.err, io.EOF) {
+					return written, nil
+				}
+				return written, result.err
+			}
+			acknowledge <- struct{}{}
+		case <-idleTimer.C:
+			_ = src.Close()
+			return written, fmt.Errorf("IP database download made no progress for %s", idleTimeout)
+		case <-progressTimer.C:
+			windowProgress := written - windowStart
+			if windowProgress < progressThreshold {
+				_ = src.Close()
+				return written, fmt.Errorf("IP database download is too slow: received %d bytes in %s, need at least %d", windowProgress, progressWindow, progressThreshold)
+			}
+			windowStart = written
+			progressTimer.Reset(progressWindow)
+		}
+	}
+}
+
+func resetTimer(timer *time.Timer, duration time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(duration)
 }
 
 func downloadGitHubReleaseAsset(ctx context.Context, source store.IPGeoSource, force bool, dataDir string) (ipGeoDownload, error) {
@@ -743,12 +1011,24 @@ func downloadGitHubReleaseAsset(ctx context.Context, source store.IPGeoSource, f
 	}
 	download, err := downloadIPGeoURL(ctx, asset.BrowserDownloadURL, nil, dataDir)
 	if err != nil {
-		return result, err
+		assetAPIURL := githubReleaseAssetAPIURL(source.GitHubRepository, asset.ID)
+		var fallbackErr error
+		download, fallbackErr = downloadIPGeoURL(ctx, assetAPIURL, map[string]string{
+			"Accept":               "application/octet-stream",
+			"X-GitHub-Api-Version": "2022-11-28",
+		}, dataDir)
+		if fallbackErr != nil {
+			return result, fmt.Errorf("release asset download failed via browser URL (%v) and GitHub Assets API (%w)", err, fallbackErr)
+		}
 	}
 	download.OriginalFilename = asset.Name
 	download.Version = version
 	download.ETag = result.ETag
 	return download, nil
+}
+
+func githubReleaseAssetAPIURL(repository string, assetID int64) string {
+	return fmt.Sprintf("https://api.github.com/repos/%s/releases/assets/%d", strings.TrimSpace(repository), assetID)
 }
 
 func (s *Server) installIPGeoDatabase(source store.IPGeoSource, downloadedPath string, originalFilename string, version string) (store.IPGeoSource, error) {
@@ -933,15 +1213,72 @@ func (s *Server) startIPGeoUpdateLoop(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
+			case sourceID := <-s.ipGeoRefreshQ:
+				job, ok := s.beginIPGeoRefresh(sourceID)
+				if !ok {
+					continue
+				}
+				if _, err := s.refreshIPGeoSource(ctx, job.SourceID, job.Force); err != nil && ctx.Err() == nil {
+					s.logger.Warn("IP geolocation database refresh failed", "source_id", job.SourceID, "error", err)
+				}
+				s.finishIPGeoRefresh(job.SourceID)
 			case <-timer.C:
-				s.refreshDueIPGeoSources(ctx)
+				s.queueDueIPGeoSources(ctx)
 				timer.Reset(ipGeoBackgroundPollInterval)
 			}
 		}
 	}()
 }
 
-func (s *Server) refreshDueIPGeoSources(ctx context.Context) {
+func (s *Server) queueIPGeoRefresh(job ipGeoRefreshJob) bool {
+	job.SourceID = strings.TrimSpace(job.SourceID)
+	if job.SourceID == "" {
+		return false
+	}
+	s.ipGeoQueueMu.Lock()
+	if pending, ok := s.ipGeoPending[job.SourceID]; ok {
+		pending.Force = pending.Force || job.Force
+		pending.RepeatIfActive = pending.RepeatIfActive || job.RepeatIfActive
+		s.ipGeoPending[job.SourceID] = pending
+		s.ipGeoQueueMu.Unlock()
+		return true
+	}
+	if s.ipGeoActive[job.SourceID] && !job.RepeatIfActive {
+		s.ipGeoQueueMu.Unlock()
+		return true
+	}
+	s.ipGeoPending[job.SourceID] = job
+	select {
+	case s.ipGeoRefreshQ <- job.SourceID:
+		s.ipGeoQueueMu.Unlock()
+		return true
+	default:
+		delete(s.ipGeoPending, job.SourceID)
+		s.ipGeoQueueMu.Unlock()
+		s.logger.Warn("IP geolocation refresh queue is full", "source_id", job.SourceID)
+		return false
+	}
+}
+
+func (s *Server) beginIPGeoRefresh(sourceID string) (ipGeoRefreshJob, bool) {
+	s.ipGeoQueueMu.Lock()
+	defer s.ipGeoQueueMu.Unlock()
+	job, ok := s.ipGeoPending[sourceID]
+	if !ok {
+		return ipGeoRefreshJob{}, false
+	}
+	delete(s.ipGeoPending, sourceID)
+	s.ipGeoActive[sourceID] = true
+	return job, true
+}
+
+func (s *Server) finishIPGeoRefresh(sourceID string) {
+	s.ipGeoQueueMu.Lock()
+	delete(s.ipGeoActive, sourceID)
+	s.ipGeoQueueMu.Unlock()
+}
+
+func (s *Server) queueDueIPGeoSources(ctx context.Context) {
 	now := time.Now().UTC()
 	for _, source := range s.store.ListIPGeoSources(ctx) {
 		if ctx.Err() != nil {
@@ -950,15 +1287,10 @@ func (s *Server) refreshDueIPGeoSources(ctx context.Context) {
 		if source.Type == store.IPGeoSourceUpload || !source.AutoUpdate {
 			continue
 		}
-		if source.Status == store.IPGeoSourceUpdating && source.UpdatedAt.After(now.Add(-ipGeoRefreshStaleAfter)) {
-			continue
-		}
 		if source.NextCheckAt != nil && source.NextCheckAt.After(now) {
 			continue
 		}
-		if _, err := s.refreshIPGeoSource(ctx, source.ID, false); err != nil {
-			s.logger.Warn("IP geolocation database refresh failed", "source_id", source.ID, "source_name", source.Name, "error", err)
-		}
+		s.queueIPGeoRefresh(ipGeoRefreshJob{SourceID: source.ID})
 	}
 }
 

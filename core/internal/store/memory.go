@@ -18,88 +18,92 @@ import (
 )
 
 type Memory struct {
-	mu                   sync.RWMutex
-	nextID               int
-	nextAuditID          int
-	passportsByID        map[string]identity.Passport
-	profilesByID         map[string]identity.Profile
-	passportByUsername   map[string]string
-	profileLinks         map[string]identity.ProfilePassportLink
-	profilesByPassport   map[string]map[string]struct{}
-	playersByID          map[string]identity.Player
-	offlineByNormalized  map[string]string
-	credentialsByPlayer  map[string]OfflineCredential
-	portalAuthCache      map[string]PortalAuthCache
-	sessionsByID         map[string]auth.Session
-	portalLinksByToken   map[string]auth.PortalLink
-	auditEvents          []audit.Event
-	mojangRoutes         map[string]mojang.Route
-	ipGeoSources         map[string]IPGeoSource
-	systemSettings       map[string]map[string]any
-	presencesByID        map[string]PlayerPresence
-	bansByID             map[string]PlayerBan
-	nodeActionsByID      map[string]NodeAction
-	downstreamServers    map[string]DownstreamServer
-	downstreamStatus     map[string]DownstreamServerStatus
-	downstreamPrivileges map[string]map[string]DownstreamServerPrivilegedPassport
-	limboBlueprints      map[string]LimboBlueprint
-	limboProtocolBundles map[string]LimboProtocolBundle
-	limboProtocolStatus  map[string]LimboProtocolStatus
-	profileSkins         map[string]ProfileSkin
-	premiumTextures      map[string][]identity.ProfileProperty
-	passportSkins        map[string]PassportSkin
-	transferGrants       map[string]auth.TransferGrant
-	extensionData        map[string]ExtensionPlayerData
-	adminRoles           map[string]rbac.Role
-	adminUsers           map[string]AdminUser
-	adminProfiles        map[string]AdminProfile
-	adminSecurity        map[string]AdminSecurity
-	adminPasskeys        map[string]AdminPasskey
-	pendingAdminMFAs     map[string]PendingAdminMFA
-	adminTrustedDevices  map[string]AdminTrustedDevice
-	adminPasswordResets  map[string]AdminPasswordReset
-	externalAPITokens    map[string]ExternalAPIToken
+	mu                      sync.RWMutex
+	nextID                  int
+	nextAuditID             int
+	passportsByID           map[string]identity.Passport
+	profilesByID            map[string]identity.Profile
+	passportByUsername      map[string]string
+	profileLinks            map[string]map[string]identity.ProfilePassportLink
+	profilesByPassport      map[string]map[string]struct{}
+	playersByID             map[string]identity.Player
+	offlineByNormalized     map[string]string
+	credentialsByPlayer     map[string]OfflineCredential
+	portalAuthCache         map[string]PortalAuthCache
+	sessionsByID            map[string]auth.Session
+	portalLinksByToken      map[string]auth.PortalLink
+	auditEvents             []audit.Event
+	mojangRoutes            map[string]mojang.Route
+	ipGeoSources            map[string]IPGeoSource
+	systemSettings          map[string]map[string]any
+	presencesByID           map[string]PlayerPresence
+	bansByID                map[string]PlayerBan
+	nodeActionsByID         map[string]NodeAction
+	downstreamServers       map[string]DownstreamServer
+	downstreamStatus        map[string]DownstreamServerStatus
+	downstreamPrivileges    map[string]map[string]DownstreamServerPrivilegedPassport
+	limboBlueprints         map[string]LimboBlueprint
+	limboProtocolBundles    map[string]LimboProtocolBundle
+	limboProtocolStatus     map[string]LimboProtocolStatus
+	velocityRuntimeReleases map[string]VelocityRuntimeRelease
+	velocityRuntimeStatus   map[string]VelocityRuntimeStatus
+	profileSkins            map[string]ProfileSkin
+	premiumTextures         map[string][]identity.ProfileProperty
+	passportSkins           map[string]PassportSkin
+	transferGrants          map[string]auth.TransferGrant
+	extensionData           map[string]ExtensionPlayerData
+	adminRoles              map[string]rbac.Role
+	adminUsers              map[string]AdminUser
+	adminProfiles           map[string]AdminProfile
+	adminSecurity           map[string]AdminSecurity
+	adminPasskeys           map[string]AdminPasskey
+	pendingAdminMFAs        map[string]PendingAdminMFA
+	adminTrustedDevices     map[string]AdminTrustedDevice
+	adminPasswordResets     map[string]AdminPasswordReset
+	externalAPITokens       map[string]ExternalAPIToken
 }
 
 func NewMemory() *Memory {
 	m := &Memory{
-		passportsByID:        make(map[string]identity.Passport),
-		profilesByID:         make(map[string]identity.Profile),
-		passportByUsername:   make(map[string]string),
-		profileLinks:         make(map[string]identity.ProfilePassportLink),
-		profilesByPassport:   make(map[string]map[string]struct{}),
-		playersByID:          make(map[string]identity.Player),
-		offlineByNormalized:  make(map[string]string),
-		credentialsByPlayer:  make(map[string]OfflineCredential),
-		portalAuthCache:      make(map[string]PortalAuthCache),
-		sessionsByID:         make(map[string]auth.Session),
-		portalLinksByToken:   make(map[string]auth.PortalLink),
-		mojangRoutes:         make(map[string]mojang.Route),
-		ipGeoSources:         make(map[string]IPGeoSource),
-		systemSettings:       make(map[string]map[string]any),
-		presencesByID:        make(map[string]PlayerPresence),
-		bansByID:             make(map[string]PlayerBan),
-		nodeActionsByID:      make(map[string]NodeAction),
-		downstreamServers:    make(map[string]DownstreamServer),
-		downstreamStatus:     make(map[string]DownstreamServerStatus),
-		downstreamPrivileges: make(map[string]map[string]DownstreamServerPrivilegedPassport),
-		limboBlueprints:      make(map[string]LimboBlueprint),
-		limboProtocolBundles: make(map[string]LimboProtocolBundle),
-		limboProtocolStatus:  make(map[string]LimboProtocolStatus),
-		profileSkins:         make(map[string]ProfileSkin),
-		premiumTextures:      make(map[string][]identity.ProfileProperty),
-		passportSkins:        make(map[string]PassportSkin),
-		transferGrants:       make(map[string]auth.TransferGrant),
-		extensionData:        make(map[string]ExtensionPlayerData),
-		adminRoles:           make(map[string]rbac.Role),
-		adminUsers:           make(map[string]AdminUser),
-		adminProfiles:        make(map[string]AdminProfile),
-		adminSecurity:        make(map[string]AdminSecurity),
-		adminPasskeys:        make(map[string]AdminPasskey),
-		pendingAdminMFAs:     make(map[string]PendingAdminMFA),
-		adminTrustedDevices:  make(map[string]AdminTrustedDevice),
-		adminPasswordResets:  make(map[string]AdminPasswordReset),
-		externalAPITokens:    make(map[string]ExternalAPIToken),
+		passportsByID:           make(map[string]identity.Passport),
+		profilesByID:            make(map[string]identity.Profile),
+		passportByUsername:      make(map[string]string),
+		profileLinks:            make(map[string]map[string]identity.ProfilePassportLink),
+		profilesByPassport:      make(map[string]map[string]struct{}),
+		playersByID:             make(map[string]identity.Player),
+		offlineByNormalized:     make(map[string]string),
+		credentialsByPlayer:     make(map[string]OfflineCredential),
+		portalAuthCache:         make(map[string]PortalAuthCache),
+		sessionsByID:            make(map[string]auth.Session),
+		portalLinksByToken:      make(map[string]auth.PortalLink),
+		mojangRoutes:            make(map[string]mojang.Route),
+		ipGeoSources:            make(map[string]IPGeoSource),
+		systemSettings:          make(map[string]map[string]any),
+		presencesByID:           make(map[string]PlayerPresence),
+		bansByID:                make(map[string]PlayerBan),
+		nodeActionsByID:         make(map[string]NodeAction),
+		downstreamServers:       make(map[string]DownstreamServer),
+		downstreamStatus:        make(map[string]DownstreamServerStatus),
+		downstreamPrivileges:    make(map[string]map[string]DownstreamServerPrivilegedPassport),
+		limboBlueprints:         make(map[string]LimboBlueprint),
+		limboProtocolBundles:    make(map[string]LimboProtocolBundle),
+		limboProtocolStatus:     make(map[string]LimboProtocolStatus),
+		velocityRuntimeReleases: make(map[string]VelocityRuntimeRelease),
+		velocityRuntimeStatus:   make(map[string]VelocityRuntimeStatus),
+		profileSkins:            make(map[string]ProfileSkin),
+		premiumTextures:         make(map[string][]identity.ProfileProperty),
+		passportSkins:           make(map[string]PassportSkin),
+		transferGrants:          make(map[string]auth.TransferGrant),
+		extensionData:           make(map[string]ExtensionPlayerData),
+		adminRoles:              make(map[string]rbac.Role),
+		adminUsers:              make(map[string]AdminUser),
+		adminProfiles:           make(map[string]AdminProfile),
+		adminSecurity:           make(map[string]AdminSecurity),
+		adminPasskeys:           make(map[string]AdminPasskey),
+		pendingAdminMFAs:        make(map[string]PendingAdminMFA),
+		adminTrustedDevices:     make(map[string]AdminTrustedDevice),
+		adminPasswordResets:     make(map[string]AdminPasswordReset),
+		externalAPITokens:       make(map[string]ExternalAPIToken),
 	}
 	return m
 }
@@ -162,7 +166,7 @@ func (m *Memory) UpsertPremiumPassportProfile(ctx context.Context, name string, 
 			m.profilesByID[profile.ID] = profile
 			player := identity.PlayerFromPassportProfile(passport, profile)
 			m.playersByID[player.ID] = player
-			return identity.PassportProfile{Passport: passport, Profile: profile, Link: m.profileLinks[profile.ID]}, nil
+			return identity.PassportProfile{Passport: passport, Profile: profile, Link: m.profileLinks[profile.ID][passport.ID]}, nil
 		}
 	}
 	passport := identity.NewPremiumPassport("", protocolName, uuid)
@@ -236,7 +240,7 @@ func (m *Memory) GetProfileByProtocolName(ctx context.Context, protocolName stri
 func (m *Memory) GetPassportForProfile(ctx context.Context, profileID string) (identity.Passport, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	link, ok := m.profileLinks[profileID]
+	link, ok := m.referenceProfileLinkLocked(profileID)
 	if !ok {
 		return identity.Passport{}, fmt.Errorf("profile link not found: %w", ErrNotFound)
 	}
@@ -245,6 +249,40 @@ func (m *Memory) GetPassportForProfile(ctx context.Context, profileID string) (i
 		return identity.Passport{}, fmt.Errorf("passport not found: %w", ErrNotFound)
 	}
 	return passport, nil
+}
+
+func (m *Memory) GetProfilePassportBinding(ctx context.Context, profileID string, passportID string) (ProfilePassportBinding, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	links := m.profileLinks[strings.TrimSpace(profileID)]
+	link, ok := links[strings.TrimSpace(passportID)]
+	if !ok {
+		return ProfilePassportBinding{}, fmt.Errorf("profile link not found: %w", ErrNotFound)
+	}
+	passport, ok := m.passportsByID[link.PassportID]
+	if !ok {
+		return ProfilePassportBinding{}, fmt.Errorf("passport not found: %w", ErrNotFound)
+	}
+	return ProfilePassportBinding{Passport: passport, Link: link}, nil
+}
+
+func (m *Memory) ListPassportsForProfile(ctx context.Context, profileID string) []ProfilePassportBinding {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	links := m.profileLinks[strings.TrimSpace(profileID)]
+	out := make([]ProfilePassportBinding, 0, len(links))
+	for passportID, link := range links {
+		if passport, ok := m.passportsByID[passportID]; ok {
+			out = append(out, ProfilePassportBinding{Passport: passport, Link: link})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Link.LinkedAt.Equal(out[j].Link.LinkedAt) {
+			return out[i].Passport.ID < out[j].Passport.ID
+		}
+		return out[i].Link.LinkedAt.Before(out[j].Link.LinkedAt)
+	})
+	return out
 }
 
 func (m *Memory) GetPrimaryProfileForPassport(ctx context.Context, passportID string) (identity.Profile, error) {
@@ -412,8 +450,8 @@ func (m *Memory) ListProfilesForPassport(ctx context.Context, passportID string)
 	// Match Postgres ordering (primary first, then protocol name) so callers
 	// that assume profiles[0] is primary behave identically across stores.
 	sort.Slice(out, func(i, j int) bool {
-		pi := m.profileLinks[out[i].ID].IsPrimary
-		pj := m.profileLinks[out[j].ID].IsPrimary
+		pi := m.profileLinks[out[i].ID][passportID].IsPrimary
+		pj := m.profileLinks[out[j].ID][passportID].IsPrimary
 		if pi != pj {
 			return pi
 		}
@@ -478,20 +516,30 @@ func (m *Memory) ListProfilesPage(ctx context.Context, query IdentityListQuery) 
 		if query.Status != "" && string(profile.Status) != query.Status {
 			continue
 		}
-		_, bound := m.profileLinks[profile.ID]
+		bound := len(m.profileLinks[profile.ID]) > 0
 		if query.Binding == "bound" && !bound {
 			continue
 		}
 		if query.Binding == "unbound" && bound {
 			continue
 		}
-		if search != "" &&
-			!strings.Contains(strings.ToLower(profile.ID), search) &&
-			!strings.Contains(strings.ToLower(profile.ProtocolName), search) &&
-			!strings.Contains(strings.ToLower(profile.NormalizedName), search) &&
-			!strings.Contains(strings.ToLower(profile.UUID.String()), search) &&
-			!strings.Contains(strings.ToLower(profile.UUID.Compact()), search) {
-			continue
+		if search != "" {
+			matches := strings.Contains(strings.ToLower(profile.ID), search) ||
+				strings.Contains(strings.ToLower(profile.ProtocolName), search) ||
+				strings.Contains(strings.ToLower(profile.NormalizedName), search) ||
+				strings.Contains(strings.ToLower(profile.UUID.String()), search) ||
+				strings.Contains(strings.ToLower(profile.UUID.Compact()), search)
+			if !matches {
+				for passportID := range m.profileLinks[profile.ID] {
+					if strings.Contains(strings.ToLower(m.passportsByID[passportID].Username), search) {
+						matches = true
+						break
+					}
+				}
+			}
+			if !matches {
+				continue
+			}
 		}
 		filtered = append(filtered, profile)
 	}
@@ -642,23 +690,42 @@ func (m *Memory) BindProfileToPassport(ctx context.Context, profileID string, pa
 	if !ok {
 		return identity.PassportProfile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
 	}
-	if existing, ok := m.profileLinks[profileID]; ok && existing.PassportID != passportID {
-		return identity.PassportProfile{}, fmt.Errorf("profile is already bound")
+	if passport.Status == identity.PassportStatusDeleted {
+		return identity.PassportProfile{}, fmt.Errorf("passport is deleted")
+	}
+	for candidateID := range m.profilesByPassport[passportID] {
+		if candidateID == profileID {
+			continue
+		}
+		if candidate, ok := m.profilesByID[candidateID]; ok && candidate.NormalizedName == profile.NormalizedName {
+			return identity.PassportProfile{}, fmt.Errorf("profile protocol name already exists for passport")
+		}
 	}
 	return m.linkProfileLocked(passport, profile, primary), nil
+}
+
+func (m *Memory) UnbindProfileFromPassport(ctx context.Context, profileID string, passportID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.unlinkProfileLocked(strings.TrimSpace(profileID), strings.TrimSpace(passportID), true)
 }
 
 func (m *Memory) UnbindProfile(ctx context.Context, profileID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	link, ok := m.profileLinks[profileID]
-	if !ok {
+	profileID = strings.TrimSpace(profileID)
+	links := m.profileLinks[profileID]
+	if len(links) == 0 {
 		return fmt.Errorf("profile link not found: %w", ErrNotFound)
 	}
-	delete(m.profileLinks, profileID)
-	delete(m.playersByID, profileID)
-	if ids := m.profilesByPassport[link.PassportID]; ids != nil {
-		delete(ids, profileID)
+	passportIDs := make([]string, 0, len(links))
+	for passportID := range links {
+		passportIDs = append(passportIDs, passportID)
+	}
+	for _, passportID := range passportIDs {
+		if err := m.unlinkProfileLocked(profileID, passportID, true); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -718,12 +785,22 @@ func (m *Memory) UpdateProfileIdentity(ctx context.Context, id string, protocolN
 	if !ok {
 		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
 	}
+	for passportID := range m.profileLinks[profile.ID] {
+		for candidateID := range m.profilesByPassport[passportID] {
+			if candidateID == profile.ID {
+				continue
+			}
+			if candidate, ok := m.profilesByID[candidateID]; ok && candidate.NormalizedName == name.Normalized {
+				return identity.Profile{}, fmt.Errorf("profile protocol name already exists for passport")
+			}
+		}
+	}
 	profile.ProtocolName = name.Protocol
 	profile.NormalizedName = name.Normalized
 	profile.DisplayName = name.Protocol
 	profile.UpdatedAt = time.Now().UTC()
 	m.profilesByID[profile.ID] = profile
-	if _, ok := m.profileLinks[profile.ID]; ok {
+	if len(m.profileLinks[profile.ID]) > 0 {
 		m.refreshProfilePlayerLocked(profile.ID)
 	}
 	return profile, nil
@@ -742,7 +819,13 @@ func (m *Memory) DeletePassport(ctx context.Context, id string) (identity.Passpo
 		profileIDs = append(profileIDs, profileID)
 	}
 	for _, profileID := range profileIDs {
-		m.deleteProfileLocked(profileID, false)
+		if len(m.profileLinks[profileID]) == 1 {
+			if _, err := m.deleteProfileLocked(profileID, false); err != nil {
+				return identity.Passport{}, err
+			}
+		} else if err := m.unlinkProfileLocked(profileID, passportID, false); err != nil {
+			return identity.Passport{}, err
+		}
 	}
 	delete(m.profilesByPassport, passportID)
 	delete(m.passportsByID, passportID)
@@ -765,9 +848,22 @@ func (m *Memory) DeletePassport(ctx context.Context, id string) (identity.Passpo
 			delete(m.bansByID, id)
 		}
 	}
+	deletedPresenceIDs := map[string]struct{}{}
+	for id, presence := range m.presencesByID {
+		if presence.PassportID == passportID {
+			deletedPresenceIDs[id] = struct{}{}
+			delete(m.presencesByID, id)
+		}
+	}
 	for id, action := range m.nodeActionsByID {
-		if action.PassportID == passportID {
+		_, presenceDeleted := deletedPresenceIDs[action.PresenceID]
+		if action.PassportID == passportID || presenceDeleted {
 			delete(m.nodeActionsByID, id)
+		}
+	}
+	for token, grant := range m.transferGrants {
+		if grant.PassportID == passportID {
+			delete(m.transferGrants, token)
 		}
 	}
 	for key, authCache := range m.portalAuthCache {
@@ -874,8 +970,10 @@ func (m *Memory) RecordPlayerSeen(ctx context.Context, passportID string, profil
 	serverID = strings.TrimSpace(serverID)
 	ip = strings.TrimSpace(ip)
 	if passportID == "" && profileID != "" {
-		if link, ok := m.profileLinks[profileID]; ok {
-			passportID = link.PassportID
+		if links := m.profileLinks[profileID]; len(links) == 1 {
+			for linkedPassportID := range links {
+				passportID = linkedPassportID
+			}
 		}
 	}
 	seenAt := now.UTC()
@@ -934,7 +1032,7 @@ func (m *Memory) FactoryResetPlayerData(ctx context.Context) error {
 	m.passportsByID = make(map[string]identity.Passport)
 	m.profilesByID = make(map[string]identity.Profile)
 	m.passportByUsername = make(map[string]string)
-	m.profileLinks = make(map[string]identity.ProfilePassportLink)
+	m.profileLinks = make(map[string]map[string]identity.ProfilePassportLink)
 	m.profilesByPassport = make(map[string]map[string]struct{})
 	m.playersByID = make(map[string]identity.Player)
 	m.offlineByNormalized = make(map[string]string)
@@ -1139,11 +1237,13 @@ func (m *Memory) UpdateOfflinePassword(ctx context.Context, id string, passwordH
 	defer m.mu.Unlock()
 	passportID := id
 	if _, ok := m.passportsByID[passportID]; !ok {
-		link, ok := m.profileLinks[id]
-		if !ok {
+		links := m.profileLinks[id]
+		if len(links) != 1 {
 			return fmt.Errorf("player not found: %w", ErrNotFound)
 		}
-		passportID = link.PassportID
+		for linkedPassportID := range links {
+			passportID = linkedPassportID
+		}
 	}
 	passport := m.passportsByID[passportID]
 	if passport.Kind != identity.PassportKindOffline {
@@ -1213,7 +1313,7 @@ func (m *Memory) deleteProfileLocked(profileID string, promoteReplacement bool) 
 	if !ok {
 		return identity.Profile{}, fmt.Errorf("profile not found: %w", ErrNotFound)
 	}
-	link, hadLink := m.profileLinks[profileID]
+	links := m.profileLinks[profileID]
 	presenceIDs := map[string]struct{}{}
 	for id, presence := range m.presencesByID {
 		if presence.ProfileID == profileID {
@@ -1221,18 +1321,18 @@ func (m *Memory) deleteProfileLocked(profileID string, promoteReplacement bool) 
 			delete(m.presencesByID, id)
 		}
 	}
+	passportIDs := make([]string, 0, len(links))
+	for passportID := range links {
+		passportIDs = append(passportIDs, passportID)
+	}
+	for _, passportID := range passportIDs {
+		if err := m.unlinkProfileLocked(profileID, passportID, promoteReplacement); err != nil {
+			return identity.Profile{}, err
+		}
+	}
 	delete(m.profilesByID, profileID)
 	delete(m.profileSkins, profileID)
 	delete(m.playersByID, profileID)
-	if hadLink {
-		delete(m.profileLinks, profileID)
-		if ids := m.profilesByPassport[link.PassportID]; ids != nil {
-			delete(ids, profileID)
-			if len(ids) == 0 {
-				delete(m.profilesByPassport, link.PassportID)
-			}
-		}
-	}
 	for id, session := range m.sessionsByID {
 		if session.SelectedProfileID == profileID {
 			session.SelectedProfileID = ""
@@ -1260,14 +1360,6 @@ func (m *Memory) deleteProfileLocked(profileID string, promoteReplacement bool) 
 			delete(m.nodeActionsByID, id)
 		}
 	}
-	if promoteReplacement && hadLink && link.IsPrimary {
-		for candidateID := range m.profilesByPassport[link.PassportID] {
-			candidate := m.profileLinks[candidateID]
-			candidate.IsPrimary = true
-			m.profileLinks[candidateID] = candidate
-			break
-		}
-	}
 	return profile, nil
 }
 
@@ -1282,13 +1374,21 @@ func (m *Memory) storePassportProfileLocked(passport identity.Passport, profile 
 }
 
 func (m *Memory) linkProfileLocked(passport identity.Passport, profile identity.Profile, primary bool) identity.PassportProfile {
-	if primary {
-		for profileID, link := range m.profileLinks {
-			if link.PassportID == passport.ID && link.IsPrimary {
-				link.IsPrimary = false
-				m.profileLinks[profileID] = link
-			}
+	links := m.profileLinks[profile.ID]
+	if links == nil {
+		links = make(map[string]identity.ProfilePassportLink)
+		m.profileLinks[profile.ID] = links
+	}
+	existing, alreadyLinked := links[passport.ID]
+	if !primary {
+		primary = alreadyLinked && existing.IsPrimary
+		if !primary {
+			_, err := m.primaryProfileForPassportLocked(passport.ID)
+			primary = err != nil
 		}
+	}
+	if primary {
+		m.clearPrimaryProfileLocked(passport.ID)
 	}
 	link := identity.ProfilePassportLink{
 		ProfileID:  profile.ID,
@@ -1296,23 +1396,86 @@ func (m *Memory) linkProfileLocked(passport identity.Passport, profile identity.
 		IsPrimary:  primary,
 		LinkedAt:   time.Now().UTC(),
 	}
-	m.profileLinks[profile.ID] = link
+	if alreadyLinked {
+		link.LinkedAt = existing.LinkedAt
+	}
+	links[passport.ID] = link
 	if m.profilesByPassport[passport.ID] == nil {
 		m.profilesByPassport[passport.ID] = make(map[string]struct{})
 	}
 	m.profilesByPassport[passport.ID][profile.ID] = struct{}{}
-	player := identity.PlayerFromPassportProfile(passport, profile)
-	m.playersByID[player.ID] = player
-	if passport.Kind == identity.PassportKindOffline {
+	m.refreshProfilePlayerLocked(profile.ID)
+	if passport.Kind == identity.PassportKindOffline && link.IsPrimary {
 		m.offlineByNormalized[passport.UsernameNormalized] = profile.ID
 	}
 	return identity.PassportProfile{Passport: passport, Profile: profile, Link: link}
 }
 
+func (m *Memory) unlinkProfileLocked(profileID string, passportID string, promoteReplacement bool) error {
+	links := m.profileLinks[profileID]
+	link, ok := links[passportID]
+	if !ok {
+		return fmt.Errorf("profile link not found: %w", ErrNotFound)
+	}
+	delete(links, passportID)
+	if len(links) == 0 {
+		delete(m.profileLinks, profileID)
+		delete(m.playersByID, profileID)
+	} else {
+		m.refreshProfilePlayerLocked(profileID)
+	}
+	if ids := m.profilesByPassport[passportID]; ids != nil {
+		delete(ids, profileID)
+		if len(ids) == 0 {
+			delete(m.profilesByPassport, passportID)
+		}
+	}
+	if passport, ok := m.passportsByID[passportID]; ok && passport.Kind == identity.PassportKindOffline {
+		if m.offlineByNormalized[passport.UsernameNormalized] == profileID {
+			delete(m.offlineByNormalized, passport.UsernameNormalized)
+		}
+	}
+	if promoteReplacement && link.IsPrimary {
+		m.promotePrimaryProfileLocked(passportID)
+	}
+	return nil
+}
+
+func (m *Memory) clearPrimaryProfileLocked(passportID string) {
+	for profileID := range m.profilesByPassport[passportID] {
+		if link, ok := m.profileLinks[profileID][passportID]; ok && link.IsPrimary {
+			link.IsPrimary = false
+			m.profileLinks[profileID][passportID] = link
+		}
+	}
+}
+
+func (m *Memory) promotePrimaryProfileLocked(passportID string) {
+	ids := m.profilesByPassport[passportID]
+	var selected identity.ProfilePassportLink
+	for profileID := range ids {
+		link, ok := m.profileLinks[profileID][passportID]
+		if !ok {
+			continue
+		}
+		if selected.ProfileID == "" || link.LinkedAt.Before(selected.LinkedAt) || (link.LinkedAt.Equal(selected.LinkedAt) && link.ProfileID < selected.ProfileID) {
+			selected = link
+		}
+	}
+	if selected.ProfileID == "" {
+		return
+	}
+	selected.IsPrimary = true
+	m.profileLinks[selected.ProfileID][passportID] = selected
+	if passport, ok := m.passportsByID[passportID]; ok && passport.Kind == identity.PassportKindOffline {
+		m.offlineByNormalized[passport.UsernameNormalized] = selected.ProfileID
+	}
+}
+
 func (m *Memory) primaryProfileForPassportLocked(passportID string) (identity.Profile, error) {
 	ids := m.profilesByPassport[passportID]
 	for profileID := range ids {
-		if link, ok := m.profileLinks[profileID]; ok && link.IsPrimary {
+		if link, ok := m.profileLinks[profileID][passportID]; ok && link.IsPrimary {
 			if profile, ok := m.profilesByID[profileID]; ok {
 				return profile, nil
 			}
@@ -1327,32 +1490,51 @@ func (m *Memory) primaryProfileForPassportLocked(passportID string) (identity.Pr
 }
 
 func (m *Memory) refreshPassportPlayersLocked(passportID string) {
-	passport, ok := m.passportsByID[passportID]
-	if !ok {
-		return
-	}
 	for profileID := range m.profilesByPassport[passportID] {
-		if profile, ok := m.profilesByID[profileID]; ok {
-			m.playersByID[profileID] = identity.PlayerFromPassportProfile(passport, profile)
-		}
+		m.refreshProfilePlayerLocked(profileID)
 	}
 }
 
 func (m *Memory) refreshProfilePlayerLocked(profileID string) identity.Player {
 	profile := m.profilesByID[profileID]
-	link := m.profileLinks[profileID]
+	link, ok := m.referenceProfileLinkLocked(profileID)
+	if !ok {
+		delete(m.playersByID, profileID)
+		return identity.Player{}
+	}
 	passport := m.passportsByID[link.PassportID]
 	player := identity.PlayerFromPassportProfile(passport, profile)
 	m.playersByID[player.ID] = player
 	return player
 }
 
+func (m *Memory) referenceProfileLinkLocked(profileID string) (identity.ProfilePassportLink, bool) {
+	links := m.profileLinks[profileID]
+	if len(links) == 0 {
+		return identity.ProfilePassportLink{}, false
+	}
+	if profile, ok := m.profilesByID[profileID]; ok && profile.CreatedFromPassport != "" {
+		if link, ok := links[profile.CreatedFromPassport]; ok {
+			return link, true
+		}
+	}
+	var selected identity.ProfilePassportLink
+	for _, link := range links {
+		if selected.ProfileID == "" || link.LinkedAt.Before(selected.LinkedAt) || (link.LinkedAt.Equal(selected.LinkedAt) && link.PassportID < selected.PassportID) {
+			selected = link
+		}
+	}
+	return selected, true
+}
+
 func (m *Memory) passportIDForCredentialLocked(id string) string {
 	if _, ok := m.credentialsByPlayer[id]; ok {
 		return id
 	}
-	if link, ok := m.profileLinks[id]; ok {
-		return link.PassportID
+	if links := m.profileLinks[id]; len(links) == 1 {
+		for passportID := range links {
+			return passportID
+		}
 	}
 	return id
 }
@@ -2291,6 +2473,82 @@ func (m *Memory) UpsertLimboProtocolStatus(ctx context.Context, status LimboProt
 	}
 	m.limboProtocolStatus[status.NodeID] = cloneLimboProtocolStatus(status)
 	return cloneLimboProtocolStatus(status), nil
+}
+
+func (m *Memory) ListVelocityRuntimeReleases(ctx context.Context) []VelocityRuntimeRelease {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]VelocityRuntimeRelease, 0, len(m.velocityRuntimeReleases))
+	for _, release := range m.velocityRuntimeReleases {
+		out = append(out, cloneVelocityRuntimeRelease(release))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out
+}
+
+func (m *Memory) GetVelocityRuntimeRelease(ctx context.Context, id string) (VelocityRuntimeRelease, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	release, ok := m.velocityRuntimeReleases[strings.TrimSpace(id)]
+	if !ok {
+		return VelocityRuntimeRelease{}, fmt.Errorf("velocity runtime release not found: %w", ErrNotFound)
+	}
+	return cloneVelocityRuntimeRelease(release), nil
+}
+
+func (m *Memory) UpsertVelocityRuntimeRelease(ctx context.Context, release VelocityRuntimeRelease) (VelocityRuntimeRelease, error) {
+	release.ID = strings.TrimSpace(release.ID)
+	if release.ID == "" {
+		return VelocityRuntimeRelease{}, fmt.Errorf("velocity runtime release id is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	if existing, ok := m.velocityRuntimeReleases[release.ID]; ok {
+		release.CreatedAt = existing.CreatedAt
+	}
+	if release.CreatedAt.IsZero() {
+		release.CreatedAt = now
+	}
+	release.UpdatedAt = now
+	m.velocityRuntimeReleases[release.ID] = cloneVelocityRuntimeRelease(release)
+	return cloneVelocityRuntimeRelease(release), nil
+}
+
+func (m *Memory) DeleteVelocityRuntimeRelease(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id = strings.TrimSpace(id)
+	if _, ok := m.velocityRuntimeReleases[id]; !ok {
+		return fmt.Errorf("velocity runtime release not found: %w", ErrNotFound)
+	}
+	delete(m.velocityRuntimeReleases, id)
+	return nil
+}
+
+func (m *Memory) GetVelocityRuntimeStatus(ctx context.Context, nodeID string) (VelocityRuntimeStatus, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	status, ok := m.velocityRuntimeStatus[strings.TrimSpace(nodeID)]
+	if !ok {
+		return VelocityRuntimeStatus{}, fmt.Errorf("velocity runtime status not found: %w", ErrNotFound)
+	}
+	return status, nil
+}
+
+func (m *Memory) UpsertVelocityRuntimeStatus(ctx context.Context, status VelocityRuntimeStatus) (VelocityRuntimeStatus, error) {
+	status.NodeID = strings.TrimSpace(status.NodeID)
+	if status.NodeID == "" {
+		return VelocityRuntimeStatus{}, fmt.Errorf("velocity runtime status node id is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	status.UpdatedAt = time.Now().UTC()
+	if status.ReportedAt.IsZero() {
+		status.ReportedAt = status.UpdatedAt
+	}
+	m.velocityRuntimeStatus[status.NodeID] = status
+	return status, nil
 }
 
 func (m *Memory) SaveTransferGrant(ctx context.Context, grant auth.TransferGrant) error {

@@ -194,14 +194,14 @@ func (r Router) serveLogin(ctx context.Context, conn net.Conn, reader *bufio.Rea
 			return serveCodecProtocol(ctx, conn, services, player, cfg, registryData)
 		}
 		if hasModernConfig {
-			registryData, err := r.registryData()
-			if err != nil {
-				return err
-			}
 			if cfg.preConfiguration {
+				registryData, err := r.registryData()
+				if err != nil {
+					return err
+				}
 				return serveModernPreConfigurationProtocol(ctx, conn, services, player, cfg, registryData)
 			}
-			return serveModernProtocol(ctx, conn, reader, services, player, cfg, registryData)
+			return serveModernProtocol(ctx, conn, reader, services, player, cfg, r.registryData)
 		}
 		return writeLoginDisconnect(conn, info.ProtocolVersion, r.PacketIDs, "limbgo play support currently implements protocols "+r.supportedPlayProtocols())
 	}

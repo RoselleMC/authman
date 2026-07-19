@@ -257,10 +257,24 @@ export interface ProfileRow extends ProfileSummary {
   uuid_compact?: string;
   skin_source: "mojang" | "custom" | "passport" | "offline_custom" | "none";
   passport: { id: string; kind: "premium" | "offline"; username: string; status: string } | null;
+  passports: ProfilePassportBinding[];
+  passport_count: number;
   last_seen_at: string | null;
   last_seen_ip: string | null;
   last_seen_geo: import("@authman/shared").IPGeo | null;
   created_at: string;
+}
+
+export interface ProfilePassportBinding {
+  id: string;
+  uuid: string;
+  kind: "premium" | "offline";
+  username: string;
+  status: string;
+  is_primary: boolean;
+  linked_at: string;
+  created_from: boolean;
+  avatar_url?: string;
 }
 
 export interface ProfileDetail extends ProfileRow {
@@ -460,13 +474,14 @@ export async function extendBan(id: string, input: { expires_in_seconds: number;
   return res.data;
 }
 
-export async function bindProfile(id: string, passport_id: string, primary = true): Promise<ProfileRow> {
-  const res = await apiFetch<ProfileRow>(`/admin/profiles/${encodeURIComponent(id)}/bind`, { method: "POST", body: { passport_id, primary } });
+export async function bindProfile(id: string, passport_id: string, primary = false): Promise<ProfileRow> {
+  const res = await apiFetch<ProfileRow>(`/admin/profiles/${encodeURIComponent(id)}/passports`, { method: "POST", body: { passport_id, primary } });
   return res.data;
 }
 
-export async function unbindProfile(id: string): Promise<void> {
-  await apiFetch<null>(`/admin/profiles/${encodeURIComponent(id)}/unbind`, { method: "POST" });
+export async function unbindProfilePassport(id: string, passportId: string): Promise<ProfileRow> {
+  const res = await apiFetch<ProfileRow>(`/admin/profiles/${encodeURIComponent(id)}/passports/${encodeURIComponent(passportId)}`, { method: "DELETE" });
+  return res.data;
 }
 
 export interface VelocityNode {
@@ -485,6 +500,44 @@ export interface VelocityNode {
   velocity_version: string;
   created_at: string;
   protocol_pack?: LimboProtocolPackState;
+  runtime_module?: VelocityRuntimeNodeState;
+}
+
+export interface VelocityRuntimeRelease {
+  id: string;
+  version: string;
+  api_version: number;
+  entrypoint: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  sha256: string;
+  active?: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface VelocityRuntimeStatus {
+  state: "not_loaded" | "activating" | "ready" | "failed" | "stopping" | string;
+  api_version: number;
+  version: string;
+  sha256: string;
+  target_version: string;
+  target_sha256: string;
+  last_error: string;
+  reported_at: string | null;
+}
+
+export interface VelocityRuntimeNodeState {
+  configured: VelocityRuntimeRelease | null;
+  active: VelocityRuntimeStatus | null;
+  in_sync: boolean;
+  download_path?: string;
+}
+
+export interface VelocityRuntimeCatalog {
+  current_release_id: string;
+  releases: VelocityRuntimeRelease[];
 }
 
 export interface LimboProtocolPackMetadata {
@@ -520,6 +573,27 @@ export async function fetchNodes(kind: "limbo_portal" | "downstream_velocity" | 
 
 export async function fetchNode(id: string): Promise<VelocityNode> {
   const res = await apiFetch<VelocityNode>(`/admin/nodes/${encodeURIComponent(id)}`);
+  return res.data;
+}
+
+export async function fetchVelocityRuntimeCatalog(): Promise<VelocityRuntimeCatalog> {
+  const res = await apiFetch<VelocityRuntimeCatalog>("/admin/velocity/runtime-releases");
+  return res.data;
+}
+
+export async function fetchVelocityNodeRuntime(id: string): Promise<VelocityRuntimeNodeState> {
+  const res = await apiFetch<VelocityRuntimeNodeState>(`/admin/velocity/nodes/${encodeURIComponent(id)}/runtime-module`);
+  return res.data;
+}
+
+export async function uploadVelocityRuntime(file: File): Promise<VelocityRuntimeCatalog> {
+  const form = new FormData();
+  form.set("file", file);
+  return multipartFetch<VelocityRuntimeCatalog>("/admin/velocity/runtime-releases", { method: "POST", body: form });
+}
+
+export async function activateVelocityRuntime(id: string): Promise<VelocityRuntimeCatalog> {
+  const res = await apiFetch<VelocityRuntimeCatalog>(`/admin/velocity/runtime-releases/${encodeURIComponent(id)}/activate`, { method: "POST", body: {} });
   return res.data;
 }
 

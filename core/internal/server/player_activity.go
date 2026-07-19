@@ -116,8 +116,8 @@ func (s *Server) recordPlayerSeen(r *http.Request, player identity.Player, serve
 
 func (s *Server) recordPlayerSeenWithClientIP(r *http.Request, player identity.Player, serverID string, ipOverride string, now time.Time) {
 	passportID := ""
-	if passport, err := s.store.GetPassportForProfile(r.Context(), player.ID); err == nil {
-		passportID = passport.ID
+	if bindings := s.store.ListPassportsForProfile(r.Context(), player.ID); len(bindings) == 1 {
+		passportID = bindings[0].Passport.ID
 	}
 	ip, geo := s.requestIPGeoWithClientIP(r, ipOverride)
 	_ = s.store.RecordPlayerSeen(r.Context(), passportID, player.ID, strings.TrimSpace(serverID), ip, geo, now)

@@ -1,4 +1,4 @@
-package com.iroselle.authman.config
+package com.iroselle.authman.bootstrap
 
 import java.nio.file.Files
 import java.nio.file.Path
@@ -9,10 +9,7 @@ object InstanceFingerprint {
         Files.createDirectories(dataDirectory)
         val path = dataDirectory.resolve("instance.id")
         if (Files.exists(path)) {
-            val existing = Files.readString(path).trim()
-            if (existing.isNotEmpty()) {
-                return existing
-            }
+            Files.readString(path).trim().takeIf { it.isNotEmpty() }?.let { return it }
         }
         val generated = UUID.randomUUID().toString()
         Files.writeString(path, "$generated\n")

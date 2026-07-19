@@ -37,6 +37,12 @@ type Registration struct {
 	VelocityVersion     string
 }
 
+type HeartbeatMetadata struct {
+	InstanceFingerprint string
+	PluginVersion       string
+	VelocityVersion     string
+}
+
 type Registry struct {
 	mu     sync.RWMutex
 	nextID int
@@ -126,7 +132,7 @@ func (r *Registry) Rotate(ctx context.Context, id string, now time.Time) (Node, 
 	return node, token, nil
 }
 
-func (r *Registry) Heartbeat(ctx context.Context, token string, now time.Time) (Node, error) {
+func (r *Registry) Heartbeat(ctx context.Context, token string, metadata HeartbeatMetadata, now time.Time) (Node, error) {
 	node, err := r.Authenticate(ctx, token)
 	if err != nil {
 		return Node{}, err
@@ -134,6 +140,16 @@ func (r *Registry) Heartbeat(ctx context.Context, token string, now time.Time) (
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now = now.UTC()
+	instanceFingerprint := strings.TrimSpace(metadata.InstanceFingerprint)
+	if node.InstanceFingerprint == "" && instanceFingerprint != "" {
+		node.InstanceFingerprint = instanceFingerprint
+	}
+	if pluginVersion := strings.TrimSpace(metadata.PluginVersion); pluginVersion != "" {
+		node.PluginVersion = pluginVersion
+	}
+	if velocityVersion := strings.TrimSpace(metadata.VelocityVersion); velocityVersion != "" {
+		node.VelocityVersion = velocityVersion
+	}
 	node.LastHeartbeatAt = &now
 	r.nodes[node.ID] = node
 	return node, nil

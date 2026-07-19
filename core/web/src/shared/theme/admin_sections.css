@@ -98,6 +98,19 @@
 .presence-row strong, .ban-row strong { font-size: 13.5px; font-weight: 620; color: var(--color-text); }
 .presence-row p, .ban-row p { margin: 3px 0 0; }
 .presence-row__meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 3px; }
+.profile-passport-list { display: flex; flex-direction: column; margin: -4px 0; }
+.profile-passport-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--color-border); }
+.profile-passport-row:last-child { border-bottom: 0; }
+.profile-passport-row__identity { display: flex; align-items: center; min-width: 0; gap: 10px; color: inherit; text-decoration: none; }
+.profile-passport-row__identity:hover strong { color: var(--color-primary); }
+.profile-passport-row__main { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.profile-passport-row__main strong { overflow: hidden; color: var(--color-text); font-size: 13.5px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+.profile-passport-row__meta, .profile-passport-row__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.profile-passport-row__actions { justify-content: flex-end; }
+@media (max-width: 680px) {
+  .profile-passport-row { grid-template-columns: minmax(0, 1fr); }
+  .profile-passport-row__actions { justify-content: flex-start; padding-left: 38px; }
+}
 .portal-link-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .form-grid.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .file-drop {

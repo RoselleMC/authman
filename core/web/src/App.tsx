@@ -70,6 +70,7 @@ export function App() {
         <Route path="/login-portals/messages/scenes/:scene" element={<Navigate to="/nodes" replace />} />
         <Route path="/login-portals/settings" element={<LoginPortalsPage tab="settings" />} />
         <Route path="/login-portals/:id" element={<NodeDetailPage />} />
+        <Route path="/node-instances/:id" element={<NodeDetailPage />} />
         <Route path="/nodes" element={<DownstreamServersPage />} />
         <Route path="/nodes/:id/messages/dialogs/:screen" element={<PlayerDialogEditorPage />} />
         <Route path="/nodes/:id/messages/scenes/:scene" element={<PlayerMessageScenePage />} />
